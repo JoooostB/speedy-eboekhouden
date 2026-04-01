@@ -1,0 +1,37 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    external-dns.alpha.kubernetes.io/target: buskervezel.nl
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+    traefik.ingress.kubernetes.io/router.tls.domains.0.main: speedy-eboekhouden.nl
+  name: speedy-eboekhouden
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: speedy-eboekhouden.nl
+      http:
+        paths:
+          - backend:
+              service:
+                name: backend
+                port:
+                  number: 8080
+            path: /api
+            pathType: Prefix
+          - backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+            path: /app
+            pathType: Prefix
+          - backend:
+              service:
+                name: landing
+                port:
+                  number: 80
+            path: /
+            pathType: Prefix

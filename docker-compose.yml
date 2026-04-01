@@ -1,0 +1,20 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - FRONTEND_ORIGIN=http://localhost:3000
+      - COOKIE_SECURE=false
+
+  frontend:
+    build: ./frontend
+
+  landing:
+    build: ./landing
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+      - frontend
