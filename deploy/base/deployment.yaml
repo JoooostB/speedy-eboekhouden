@@ -13,6 +13,8 @@ spec:
       labels:
         app: backend
     spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
       containers:
         - name: backend
           image: ghcr.io/joooostb/speedy-eboekhouden:latest-backend
