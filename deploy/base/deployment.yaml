@@ -18,6 +18,7 @@ spec:
       containers:
         - name: backend
           image: ghcr.io/joooostb/speedy-eboekhouden:latest-backend
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
           resources:
@@ -57,6 +58,7 @@ spec:
       containers:
         - name: frontend
           image: ghcr.io/joooostb/speedy-eboekhouden:latest-frontend
+          imagePullPolicy: Always
           env:
             - name: BACKEND_HOST
               value: backend
@@ -99,6 +101,7 @@ spec:
       containers:
         - name: landing
           image: ghcr.io/joooostb/speedy-eboekhouden:latest-landing
+          imagePullPolicy: Always
           ports:
             - containerPort: 80
           resources:
