@@ -4,7 +4,7 @@ kind: Deployment
 metadata:
   name: backend
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: backend
@@ -45,7 +45,7 @@ kind: Deployment
 metadata:
   name: frontend
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: frontend
@@ -87,7 +87,7 @@ kind: Deployment
 metadata:
   name: landing
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: landing
