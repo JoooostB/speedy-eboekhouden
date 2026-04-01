@@ -7,11 +7,6 @@ metadata:
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
     traefik.ingress.kubernetes.io/router.tls.domains.0.main: speedy-eboekhouden.nl
-    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
-    traefik.ingress.kubernetes.io/service.sticky.cookie.name: speedy-affinity
-    traefik.ingress.kubernetes.io/service.sticky.cookie.httponly: "true"
-    traefik.ingress.kubernetes.io/service.sticky.cookie.secure: "true"
-    traefik.ingress.kubernetes.io/service.sticky.cookie.samesite: strict
   name: speedy-eboekhouden
 spec:
   ingressClassName: traefik
