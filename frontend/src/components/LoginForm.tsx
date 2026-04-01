@@ -11,6 +11,7 @@ import {
 } from "@mui/material";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import { useAuth } from "../context/AuthContext";
+import { track } from "../analytics";
 
 export function LoginForm() {
   const { login } = useAuth();
@@ -25,8 +26,11 @@ export function LoginForm() {
     setLoading(true);
     try {
       await login(email, password);
+      track("Login");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      const msg = err instanceof Error ? err.message : "Login failed";
+      track("Login Error", { reason: msg.includes("new_ip") ? "new_ip" : "credentials" });
+      setError(msg);
     } finally {
       setLoading(false);
     }

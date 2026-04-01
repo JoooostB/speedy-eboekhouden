@@ -19,6 +19,7 @@ import { ActivitySelector } from "./ActivitySelector";
 import { HoursInput } from "./HoursInput";
 import { MonthCalendar } from "./MonthCalendar";
 import { SubmitResults } from "./SubmitResults";
+import { track } from "../analytics";
 
 export function BulkEntryForm() {
   const { employees, loading: empLoading } = useEmployees();
@@ -67,7 +68,17 @@ export function BulkEntryForm() {
     try {
       const res = await api.submitHours({ entries });
       setResults(res.results);
+      const ok = res.results.filter((r) => r.status === "ok").length;
+      const fail = res.results.filter((r) => r.status === "error").length;
+      track("Hours Submitted", {
+        total: String(res.results.length),
+        succeeded: String(ok),
+        failed: String(fail),
+        employees: String(selectedEmployees.length),
+        days: String(selectedDates.size),
+      });
     } catch (err) {
+      track("Hours Submit Error", { reason: err instanceof Error ? err.message : "unknown" });
       setError(err instanceof Error ? err.message : "Submission failed");
     } finally {
       setSubmitting(false);
