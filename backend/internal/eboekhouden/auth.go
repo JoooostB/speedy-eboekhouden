@@ -74,6 +74,11 @@ func (c *Client) Login(email, password string) error {
 	}
 
 	if c.GetAuthToken() == "" && !c.MFARequired {
+		// e-boekhouden blocks logins from unknown IP addresses and sends a
+		// verification email. Detect this to give the user a clear message.
+		if strings.Contains(bodyStr, "IP") || strings.Contains(bodyStr, "bevestig") || strings.Contains(bodyStr, "e-mail") {
+			return fmt.Errorf("new_ip: e-boekhouden has detected a login from an unknown IP address. Check your email to approve this IP, then try again.")
+		}
 		return fmt.Errorf("login failed: no auth token received")
 	}
 

@@ -50,11 +50,20 @@ export function LoginForm() {
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
             Log in met je e-boekhouden.nl account
           </Typography>
-          {error && (
+          {error && error.includes("new_ip") ? (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              <strong>Nieuw IP-adres gedetecteerd</strong>
+              <br />
+              e-boekhouden.nl heeft een inlogpoging vanaf een onbekend IP-adres
+              gedetecteerd. Je hebt een e-mail ontvangen van e-boekhouden om dit
+              IP-adres goed te keuren. Open de link in de e-mail en probeer
+              daarna opnieuw in te loggen.
+            </Alert>
+          ) : error ? (
             <Alert severity="error" sx={{ mb: 2 }}>
               {error}
             </Alert>
-          )}
+          ) : null}
           <form onSubmit={handleSubmit}>
             <TextField
               fullWidth
