@@ -4,6 +4,10 @@ kind: Service
 metadata:
   name: backend
 spec:
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 1800
   selector:
     app: backend
   ports:
