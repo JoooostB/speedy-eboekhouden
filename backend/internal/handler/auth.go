@@ -72,7 +72,7 @@ func (h *AuthHandler) MFA(c *gin.Context) {
 	}
 
 	if err := sess.Client.SubmitMFA(req.Code); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "MFA failed: " + err.Error()})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
 

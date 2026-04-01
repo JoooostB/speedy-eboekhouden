@@ -8,6 +8,22 @@ import (
 	"strings"
 )
 
+// extractAuthTokenFromJar checks the cookie jar for an auth-token on known domains.
+func (c *Client) extractAuthTokenFromJar() {
+	for _, base := range []string{baseURLSecure, baseURLSecure20} {
+		u, err := url.Parse(base)
+		if err != nil {
+			continue
+		}
+		for _, cookie := range c.httpClient.Jar.Cookies(u) {
+			if cookie.Name == "auth-token" && cookie.Value != "" {
+				c.SetAuthToken(cookie.Value)
+				return
+			}
+		}
+	}
+}
+
 // Login performs the initial login to e-boekhouden.
 // Returns nil on success. Sets MFARequired if MFA is needed.
 func (c *Client) Login(email, password string) error {
@@ -71,6 +87,11 @@ func (c *Client) Login(email, password string) error {
 		c.MFARequired = true
 	} else {
 		c.MFARequired = false
+	}
+
+	// Fallback: check the cookie jar in case the token was set via jar instead of response headers
+	if c.GetAuthToken() == "" {
+		c.extractAuthTokenFromJar()
 	}
 
 	if c.GetAuthToken() == "" && !c.MFARequired {
@@ -137,8 +158,13 @@ func (c *Client) SubmitMFA(code string) error {
 		c.extractAuthToken(resp)
 	}
 
+	// Fallback: check the cookie jar in case the token was set via jar instead of response headers
 	if c.GetAuthToken() == "" {
-		return fmt.Errorf("MFA failed: no auth token received")
+		c.extractAuthTokenFromJar()
+	}
+
+	if c.GetAuthToken() == "" {
+		return fmt.Errorf("no auth token received after MFA")
 	}
 
 	return nil
