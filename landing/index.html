@@ -99,12 +99,17 @@
     }
     </script>
 
-    <!-- Analytics -->
-    <script async src="https://plausible.buskervezel.nl/js/pa-MyMzrcRGSglyBSh9hBHmI.js"></script>
+    <!-- Preload critical assets -->
+    <link rel="preload" href="style.css" as="style">
+    <link rel="preload" href="images/hero-screenshot.webp" as="image" type="image/webp">
+
+    <!-- Analytics (async, non-blocking) -->
+    <script defer src="https://plausible.buskervezel.nl/js/pa-MyMzrcRGSglyBSh9hBHmI.js"></script>
     <script>window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};plausible.init()</script>
 
     <link rel="stylesheet" href="style.css">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+    <meta name="theme-color" content="#1565c0">
 </head>
 <body>
 
@@ -130,7 +135,10 @@
             <div class="hero-image">
                 <!-- Screenshot placeholder -->
                 <div class="screenshot-frame">
-                    <img src="images/hero-screenshot.png" alt="Speedy e-Boekhouden bulk urenregistratie interface" width="600" height="400" loading="eager">
+                    <picture>
+                        <source srcset="images/hero-screenshot.webp" type="image/webp">
+                        <img src="images/hero-screenshot.png" alt="Speedy e-Boekhouden bulk urenregistratie interface" width="800" height="445" loading="eager" fetchpriority="high">
+                    </picture>
                 </div>
             </div>
         </div>
@@ -229,7 +237,10 @@
                     <h3>Inloggen</h3>
                     <p>Log in met je bestaande e-boekhouden.nl account. MFA wordt volledig ondersteund.</p>
                     <div class="step-screenshot">
-                        <img src="images/step-1-login.png" alt="Inlogscherm van Speedy e-Boekhouden" width="500" height="300" loading="lazy">
+                        <picture>
+                            <source srcset="images/step-1-login.webp" type="image/webp">
+                            <img src="images/step-1-login.png" alt="Inlogscherm van Speedy e-Boekhouden" width="800" height="720" loading="lazy">
+                        </picture>
                     </div>
                 </div>
             </div>
@@ -239,7 +250,10 @@
                     <h3>Selecteer medewerkers, project &amp; activiteit</h3>
                     <p>Kies een of meerdere medewerkers. Zoek je project op naam of bedrijf. Selecteer de activiteit.</p>
                     <div class="step-screenshot">
-                        <img src="images/step-2-select.png" alt="Medewerker en project selectie in Speedy e-Boekhouden" width="500" height="300" loading="lazy">
+                        <picture>
+                            <source srcset="images/step-2-select.webp" type="image/webp">
+                            <img src="images/step-2-select.png" alt="Medewerker en project selectie in Speedy e-Boekhouden" width="800" height="390" loading="lazy">
+                        </picture>
                     </div>
                 </div>
             </div>
@@ -249,7 +263,10 @@
                     <h3>Kies de dagen</h3>
                     <p>Klik op dagen in de kalender, of gebruik "Alle werkdagen" om ma-vr in één keer te selecteren. Shift+klik voor een bereik.</p>
                     <div class="step-screenshot">
-                        <img src="images/step-3-calendar.png" alt="Kalender met dagselectie in Speedy e-Boekhouden" width="500" height="300" loading="lazy">
+                        <picture>
+                            <source srcset="images/step-3-calendar.webp" type="image/webp">
+                            <img src="images/step-3-calendar.png" alt="Kalender met dagselectie in Speedy e-Boekhouden" width="800" height="333" loading="lazy">
+                        </picture>
                     </div>
                 </div>
             </div>
@@ -259,7 +276,10 @@
                     <h3>Verzenden</h3>
                     <p>Klik op verzenden en zie direct welke uren succesvol zijn ingevoerd. Klaar!</p>
                     <div class="step-screenshot">
-                        <img src="images/step-4-results.png" alt="Resultaten na het invoeren van uren" width="500" height="300" loading="lazy">
+                        <picture>
+                            <source srcset="images/step-4-results.webp" type="image/webp">
+                            <img src="images/step-4-results.png" alt="Resultaten na het invoeren van uren" width="800" height="110" loading="lazy">
+                        </picture>
                     </div>
                 </div>
             </div>
@@ -346,6 +366,6 @@
 </section>
 
 <footer id="site-footer" class="footer"></footer>
-<script src="shared.js"></script>
+<script defer src="shared.js"></script>
 </body>
 </html>
