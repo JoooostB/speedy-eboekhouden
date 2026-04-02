@@ -144,7 +144,7 @@ Open **http://localhost:3000** — that's it.
   "results": [
     { "employeeId": 12345, "date": "2026-03-02", "status": "ok" },
     { "employeeId": 12345, "date": "2026-03-03", "status": "ok" },
-    { "employeeId": 12345, "date": "2026-03-04", "status": "error", "error": "duplicate entry" }
+    { "employeeId": 12345, "date": "2026-03-04", "status": "ok" }
   ]
 }
 ```
