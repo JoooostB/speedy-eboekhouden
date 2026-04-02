@@ -33,14 +33,14 @@
           "<p>De snelste manier om uren in te voeren in e-boekhouden.nl.</p>" +
         "</div>" +
         '<div class="footer-links">' +
-          "<h4>Product</h4>" +
+          '<p class="footer-heading">Product</p>' +
           '<a href="' + p + 'features">Functies</a>' +
           '<a href="' + p + 'hoe-het-werkt">Hoe het werkt</a>' +
           '<a href="' + p + 'faq">FAQ</a>' +
           '<a href="/app/">Inloggen</a>' +
         "</div>" +
         '<div class="footer-links">' +
-          "<h4>Juridisch</h4>" +
+          '<p class="footer-heading">Juridisch</p>' +
           '<a href="/beveiliging">Beveiliging</a>' +
           '<a href="/disclaimer">Disclaimer</a>' +
           '<a href="mailto:info@speedy-eboekhouden.nl">Contact</a>' +
