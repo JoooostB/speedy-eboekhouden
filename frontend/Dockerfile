@@ -9,7 +9,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.29-alpine
 COPY --from=builder /app/dist /usr/share/nginx/html/app
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 EXPOSE 80
