@@ -1,26 +1,51 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { api } from "../api/client";
+import type { User, Team } from "../api/types";
+
+const KEEPALIVE_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
 interface AuthState {
-  isAuthenticated: boolean;
-  needsMFA: boolean;
+  user: User | null;
+  team: Team | null;
+  eboekhoudenConnected: boolean;
+  avatarUrl: string;
   checking: boolean;
 }
 
 interface AuthContextType extends AuthState {
-  login: (email: string, password: string) => Promise<void>;
-  submitMFA: (code: string) => Promise<void>;
   logout: () => Promise<void>;
+  refreshMe: () => Promise<void>;
+  setEBConnected: (connected: boolean) => void;
+  setAvatarUrl: (url: string) => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({
-    isAuthenticated: false,
-    needsMFA: false,
+    user: null,
+    team: null,
+    eboekhoudenConnected: false,
+    avatarUrl: "",
     checking: true,
   });
+
+  const keepaliveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const refreshMe = useCallback(async () => {
+    try {
+      const data = await api.me();
+      setState({
+        user: data.user,
+        team: data.team,
+        eboekhoudenConnected: data.eboekhoudenConnected,
+        avatarUrl: data.avatarUrl || "",
+        checking: false,
+      });
+    } catch {
+      setState({ user: null, team: null, eboekhoudenConnected: false, avatarUrl: "", checking: false });
+    }
+  }, []);
 
   const logout = useCallback(async () => {
     try {
@@ -28,44 +53,68 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // ignore
     }
-    setState({ isAuthenticated: false, needsMFA: false, checking: false });
+    setState({ user: null, team: null, eboekhoudenConnected: false, avatarUrl: "", checking: false });
   }, []);
 
-  // Check for existing session on mount
-  useEffect(() => {
-    api.checkSession()
-      .then(() => {
-        setState({ isAuthenticated: true, needsMFA: false, checking: false });
-      })
-      .catch(() => {
-        setState({ isAuthenticated: false, needsMFA: false, checking: false });
-      });
+  const setEBConnected = useCallback((connected: boolean) => {
+    setState((prev) => ({ ...prev, eboekhoudenConnected: connected }));
   }, []);
+
+  const setAvatarUrl = useCallback((url: string) => {
+    setState((prev) => ({ ...prev, avatarUrl: url }));
+  }, []);
+
+  useEffect(() => {
+    refreshMe();
+  }, [refreshMe]);
 
   useEffect(() => {
     const handler = () => {
-      setState({ isAuthenticated: false, needsMFA: false, checking: false });
+      setState({ user: null, team: null, eboekhoudenConnected: false, avatarUrl: "", checking: false });
     };
     window.addEventListener("auth:expired", handler);
     return () => window.removeEventListener("auth:expired", handler);
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const res = await api.login(email, password);
-    if (res.status === "mfa_required") {
-      setState({ isAuthenticated: false, needsMFA: true, checking: false });
-    } else {
-      setState({ isAuthenticated: true, needsMFA: false, checking: false });
+  // e-Boekhouden keepalive: ping every 10 minutes while connected.
+  // Pauses when the tab is hidden to avoid background noise.
+  useEffect(() => {
+    // Clear any existing interval
+    if (keepaliveRef.current) {
+      clearInterval(keepaliveRef.current);
+      keepaliveRef.current = null;
     }
-  };
 
-  const submitMFA = async (code: string) => {
-    await api.mfa(code);
-    setState({ isAuthenticated: true, needsMFA: false, checking: false });
-  };
+    if (!state.eboekhoudenConnected || !state.user) {
+      return;
+    }
+
+    const ping = async () => {
+      // Skip if tab is hidden
+      if (document.hidden) return;
+
+      try {
+        const result = await api.ebKeepalive();
+        if (!result.alive) {
+          setState((prev) => ({ ...prev, eboekhoudenConnected: false }));
+        }
+      } catch {
+        // Network error — don't disconnect, just skip this cycle
+      }
+    };
+
+    keepaliveRef.current = setInterval(ping, KEEPALIVE_INTERVAL_MS);
+
+    return () => {
+      if (keepaliveRef.current) {
+        clearInterval(keepaliveRef.current);
+        keepaliveRef.current = null;
+      }
+    };
+  }, [state.eboekhoudenConnected, state.user]);
 
   return (
-    <AuthContext.Provider value={{ ...state, login, submitMFA, logout }}>
+    <AuthContext.Provider value={{ ...state, logout, refreshMe, setEBConnected, setAvatarUrl }}>
       {children}
     </AuthContext.Provider>
   );

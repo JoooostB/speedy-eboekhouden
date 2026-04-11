@@ -24,3 +24,5 @@ frontend/dist/
 
 # Claude Code local config
 .claude/
+secret.yaml
+*.yaml.local

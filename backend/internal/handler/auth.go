@@ -2,30 +2,55 @@ package handler
 
 import (
 	"net/http"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/joooostb/speedy-eboekhouden/internal/config"
+	"github.com/joooostb/speedy-eboekhouden/internal/crypto"
+	"github.com/joooostb/speedy-eboekhouden/internal/database"
 	"github.com/joooostb/speedy-eboekhouden/internal/eboekhouden"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
 )
 
-type AuthHandler struct {
-	store  *session.Store
-	config *config.Config
+// EBoekhoudenAuthHandler handles e-boekhouden login (secondary auth within an existing Speedy session).
+type EBoekhoudenAuthHandler struct {
+	sessions *session.Store
+	db       *database.DB
+	encKey   crypto.AESKey
+
+	// pendingMFA keeps the e-boekhouden Client in memory during the MFA window.
+	// The cookie jar from the login request is needed to complete MFA — it can't
+	// be serialized to Redis. Keyed by Speedy session ID, auto-cleaned after 5 min.
+	pendingMFA sync.Map
 }
 
-func NewAuthHandler(store *session.Store, cfg *config.Config) *AuthHandler {
-	return &AuthHandler{store: store, config: cfg}
+type pendingMFAEntry struct {
+	Client    *eboekhouden.Client
+	ExpiresAt time.Time
 }
 
-type loginRequest struct {
+// NewEBoekhoudenAuthHandler creates a new e-boekhouden auth handler.
+func NewEBoekhoudenAuthHandler(sessions *session.Store, db *database.DB, encKey crypto.AESKey) *EBoekhoudenAuthHandler {
+	h := &EBoekhoudenAuthHandler{sessions: sessions, db: db, encKey: encKey}
+	go h.cleanupPendingMFA()
+	return h
+}
+
+type ebLoginRequest struct {
 	Email    string `json:"email" binding:"required"`
 	Password string `json:"password" binding:"required"`
 }
 
-// Login handles POST /api/v1/login
-func (h *AuthHandler) Login(c *gin.Context) {
-	var req loginRequest
+// Login handles POST /api/v1/eboekhouden/login
+func (h *EBoekhoudenAuthHandler) Login(c *gin.Context) {
+	sess := session.FromContext(c)
+	if sess == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+		return
+	}
+
+	var req ebLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "email and password required"})
 		return
@@ -38,76 +63,171 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	if err := client.Login(req.Email, req.Password); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "login failed: " + err.Error()})
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "new_ip") {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": errMsg})
+		} else {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Inloggen bij e-Boekhouden mislukt. Controleer je gegevens."})
+		}
 		return
 	}
 
-	sess := h.store.Create(client)
-	h.setSessionCookie(c, sess.ID)
-
 	if client.MFARequired {
+		// Keep the full client in memory — the cookie jar is needed for MFA completion.
+		h.pendingMFA.Store(sess.ID, &pendingMFAEntry{
+			Client:    client,
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		})
+
+		sess.MFAPending = true
+		h.sessions.Update(c.Request.Context(), sess)
 		c.JSON(http.StatusOK, gin.H{"status": "mfa_required"})
 		return
 	}
 
+	token := client.GetAuthToken()
+	sess.EBoekhoudenToken = token
+	sess.MFAPending = false
+	h.sessions.Update(c.Request.Context(), sess)
+
+	// Persist encrypted token to PostgreSQL so it survives Speedy logout/login
+	h.persistEBToken(c, sess.UserID, token)
+
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-type mfaRequest struct {
+type ebMFARequest struct {
 	Code string `json:"code" binding:"required"`
 }
 
-// MFA handles POST /api/v1/mfa
-func (h *AuthHandler) MFA(c *gin.Context) {
+// MFA handles POST /api/v1/eboekhouden/mfa
+func (h *EBoekhoudenAuthHandler) MFA(c *gin.Context) {
 	sess := session.FromContext(c)
 	if sess == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no session"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
 		return
 	}
 
-	var req mfaRequest
+	var req ebMFARequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "code required"})
 		return
 	}
 
-	if err := sess.Client.SubmitMFA(req.Code); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+	// Retrieve the original client with its cookie jar from the login request
+	val, ok := h.pendingMFA.LoadAndDelete(sess.ID)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Geen actieve MFA-aanvraag. Log opnieuw in bij e-Boekhouden."})
+		return
+	}
+	entry := val.(*pendingMFAEntry)
+	if time.Now().After(entry.ExpiresAt) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "MFA-aanvraag verlopen. Log opnieuw in bij e-Boekhouden."})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
-
-// Logout handles POST /api/v1/logout
-func (h *AuthHandler) Logout(c *gin.Context) {
-	cookie, err := c.Cookie(session.CookieName)
-	if err == nil && cookie != "" {
-		h.store.Delete(cookie)
+	if err := entry.Client.SubmitMFA(req.Code); err != nil {
+		// Put the client back so user can retry with the correct code
+		h.pendingMFA.Store(sess.ID, entry)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Verificatie mislukt. Controleer de code en probeer het opnieuw."})
+		return
 	}
 
-	c.SetCookie(session.CookieName, "", -1, "/", h.config.CookieDomain, h.config.CookieSecure, true)
+	token := entry.Client.GetAuthToken()
+	sess.EBoekhoudenToken = token
+	sess.MFAPending = false
+	h.sessions.Update(c.Request.Context(), sess)
+
+	// Persist encrypted token to PostgreSQL so it survives Speedy logout/login
+	h.persistEBToken(c, sess.UserID, token)
+
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// Me handles GET /api/v1/me — checks if session is still valid
-func (h *AuthHandler) Me(c *gin.Context) {
+// persistEBToken encrypts and stores the e-boekhouden token in PostgreSQL.
+func (h *EBoekhoudenAuthHandler) persistEBToken(c *gin.Context, userID, token string) {
+	if token == "" {
+		return
+	}
+	encrypted, err := crypto.Encrypt(h.encKey, []byte(token))
+	if err != nil {
+		return // non-fatal — session still works, just won't survive logout
+	}
+	h.db.SetEBToken(c.Request.Context(), userID, encrypted)
+}
+
+// Status handles GET /api/v1/eboekhouden/status
+func (h *EBoekhoudenAuthHandler) Status(c *gin.Context) {
 	sess := session.FromContext(c)
 	if sess == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no session"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
 		return
 	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"connected":  sess.EBoekhoudenToken != "" && !sess.MFAPending,
+		"mfaPending": sess.MFAPending,
+	})
+}
+
+// Keepalive handles GET /api/v1/eboekhouden/keepalive — pings e-boekhouden to prevent session expiry.
+func (h *EBoekhoudenAuthHandler) Keepalive(c *gin.Context) {
+	sess := session.FromContext(c)
+	if sess == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+		return
+	}
+
+	client := session.ClientFromContext(c)
+	if client == nil {
+		c.JSON(http.StatusOK, gin.H{"alive": false, "reason": "not_connected"})
+		return
+	}
+
+	// Make a lightweight API call to keep the e-boekhouden session alive.
+	// The user selectlist is small and fast.
+	_, err := client.GetEmployees()
+	if err != nil {
+		// Session expired on e-boekhouden's side — clear it
+		sess.EBoekhoudenToken = ""
+		sess.MFAPending = false
+		h.sessions.Update(c.Request.Context(), sess)
+		h.db.ClearEBToken(c.Request.Context(), sess.UserID)
+		c.JSON(http.StatusOK, gin.H{"alive": false, "reason": "expired"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"alive": true})
+}
+
+// Disconnect handles POST /api/v1/eboekhouden/disconnect
+func (h *EBoekhoudenAuthHandler) Disconnect(c *gin.Context) {
+	sess := session.FromContext(c)
+	if sess == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+		return
+	}
+
+	sess.EBoekhoudenToken = ""
+	sess.MFAPending = false
+	h.sessions.Update(c.Request.Context(), sess)
+
+	// Also clear from PostgreSQL
+	h.db.ClearEBToken(c.Request.Context(), sess.UserID)
+
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-func (h *AuthHandler) setSessionCookie(c *gin.Context, sessionID string) {
-	c.SetCookie(
-		session.CookieName,
-		sessionID,
-		h.config.SessionMaxAge*60, // seconds
-		"/",
-		h.config.CookieDomain,
-		h.config.CookieSecure,
-		true, // HttpOnly
-	)
+func (h *EBoekhoudenAuthHandler) cleanupPendingMFA() {
+	ticker := time.NewTicker(1 * time.Minute)
+	for range ticker.C {
+		now := time.Now()
+		h.pendingMFA.Range(func(key, value any) bool {
+			entry := value.(*pendingMFAEntry)
+			if now.After(entry.ExpiresAt) {
+				h.pendingMFA.Delete(key)
+			}
+			return true
+		})
+	}
 }

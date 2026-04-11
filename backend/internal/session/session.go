@@ -1,25 +1,13 @@
 package session
 
-import (
-	"time"
+import "time"
 
-	"github.com/joooostb/speedy-eboekhouden/internal/eboekhouden"
-)
-
-// Session holds a user's authenticated e-boekhouden client.
-type Session struct {
-	ID        string
-	Client    *eboekhouden.Client
-	CreatedAt time.Time
-	LastUsed  time.Time
-}
-
-// Touch updates the last used timestamp.
-func (s *Session) Touch() {
-	s.LastUsed = time.Now()
-}
-
-// IsExpired checks if the session has exceeded the max age.
-func (s *Session) IsExpired(maxAgeMinutes int) bool {
-	return time.Since(s.LastUsed) > time.Duration(maxAgeMinutes)*time.Minute
+// SessionData holds serializable session state stored in Redis.
+type SessionData struct {
+	ID               string    `json:"id"`
+	UserID           string    `json:"userId"`
+	TeamID           string    `json:"teamId,omitempty"`
+	EBoekhoudenToken string    `json:"ebToken,omitempty"`
+	MFAPending       bool      `json:"mfaPending,omitempty"`
+	CreatedAt        time.Time `json:"createdAt"`
 }

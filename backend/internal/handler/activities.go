@@ -9,13 +9,13 @@ import (
 
 // GetActivities handles GET /api/v1/activities
 func GetActivities(c *gin.Context) {
-	sess := session.FromContext(c)
-	if sess == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no session"})
+	client := session.ClientFromContext(c)
+	if client == nil {
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
 		return
 	}
 
-	raw, err := sess.Client.GetActivities()
+	raw, err := client.GetActivities()
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

@@ -9,11 +9,11 @@ type Date struct {
 
 // HourEntry is the payload for submitting a single hour entry.
 type HourEntry struct {
-	GebruikerID int    `json:"gebruikerId"`
-	AantalUren  string `json:"aantalUren"`
-	Datum       Date   `json:"datum"`
-	ActiviteitID int   `json:"activiteitId"`
-	ProjectID   int    `json:"projectId"`
+	GebruikerID  int    `json:"gebruikerId"`
+	AantalUren   string `json:"aantalUren"`
+	Datum        Date   `json:"datum"`
+	ActiviteitID int    `json:"activiteitId"`
+	ProjectID    int    `json:"projectId"`
 	Omschrijving string `json:"omschrijving,omitempty"`
 }
 

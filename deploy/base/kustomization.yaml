@@ -3,7 +3,11 @@ kind: Kustomization
 namespace: speedy-eboekhouden
 resources:
   - namespace.yaml
+  - configmap.yaml
+  # secret.yaml is applied manually (contains real credentials)
+  # Apply with: kubectl apply -f deploy/base/secret.yaml -n speedy-eboekhouden
+  - postgres.yaml
+  - redis.yaml
   - deployment.yaml
   - service.yaml
-  - hpa.yaml
   - ingress.yaml

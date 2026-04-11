@@ -9,13 +9,13 @@ import (
 
 // GetEmployees handles GET /api/v1/employees
 func GetEmployees(c *gin.Context) {
-	sess := session.FromContext(c)
-	if sess == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no session"})
+	client := session.ClientFromContext(c)
+	if client == nil {
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
 		return
 	}
 
-	raw, err := sess.Client.GetEmployees()
+	raw, err := client.GetEmployees()
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

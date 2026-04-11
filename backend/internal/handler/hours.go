@@ -34,9 +34,9 @@ type entryResult struct {
 
 // SubmitHours handles POST /api/v1/hours
 func SubmitHours(c *gin.Context) {
-	sess := session.FromContext(c)
-	if sess == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no session"})
+	client := session.ClientFromContext(c)
+	if client == nil {
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
 		return
 	}
 
@@ -89,7 +89,7 @@ func SubmitHours(c *gin.Context) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			err := sess.Client.SubmitHourEntry(j.entry)
+			err := client.SubmitHourEntry(j.entry)
 			if err != nil {
 				results[idx] = entryResult{
 					EmployeeID: j.employeeID,

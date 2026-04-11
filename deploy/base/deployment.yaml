@@ -21,13 +21,24 @@ spec:
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secrets
+          env:
+            - name: FRONTEND_ORIGIN
+              value: "https://speedy-eboekhouden.nl"
+            - name: COOKIE_DOMAIN
+              value: "speedy-eboekhouden.nl"
+            - name: WEBAUTHN_ORIGIN
+              value: "https://speedy-eboekhouden.nl"
           resources:
             requests:
-              cpu: 50m
+              cpu: 10m
               memory: 32Mi
             limits:
-              cpu: 500m
-              memory: 128Mi
+              memory: 256Mi
           livenessProbe:
             httpGet:
               path: /healthz
@@ -46,7 +57,7 @@ kind: Deployment
 metadata:
   name: frontend
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: frontend
@@ -66,11 +77,10 @@ spec:
             - containerPort: 80
           resources:
             requests:
-              cpu: 50m
-              memory: 32Mi
+              cpu: 5m
+              memory: 16Mi
             limits:
-              cpu: 200m
-              memory: 128Mi
+              memory: 64Mi
           livenessProbe:
             httpGet:
               path: /healthz
@@ -89,7 +99,7 @@ kind: Deployment
 metadata:
   name: landing
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: landing
@@ -106,11 +116,10 @@ spec:
             - containerPort: 80
           resources:
             requests:
-              cpu: 25m
-              memory: 16Mi
+              cpu: 5m
+              memory: 8Mi
             limits:
-              cpu: 100m
-              memory: 64Mi
+              memory: 32Mi
           livenessProbe:
             httpGet:
               path: /

@@ -1,9 +1,8 @@
 # Speedy e-Boekhouden
 
-**Bulk hour logging for [e-boekhouden.nl](https://www.e-boekhouden.nl)**
+**Supercharge your [e-boekhouden.nl](https://www.e-boekhouden.nl) bookkeeping with AI**
 
-Enter hours for multiple employees, across multiple days, in a single action.
-No more clicking through 15 form fields per entry.
+Bulk hour logging, AI-powered bank statement processing, invoice OCR with automatic ledger classification — all in one platform.
 
 [![CI](https://github.com/joooostb/speedy-eboekhouden/actions/workflows/ci.yml/badge.svg)](https://github.com/joooostb/speedy-eboekhouden/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -15,34 +14,35 @@ No more clicking through 15 form fields per entry.
 
 ---
 
-## The Problem
-
-Logging hours in e-boekhouden.nl requires **15 clicks per day per employee**: navigate to the form, select a date, pick an employee, find the project, choose an activity, enter hours, save, repeat. For a team of 4 people over a month, that's **1,200+ clicks**.
-
-## The Solution
-
-Select employees, pick a project, choose an activity, click the days on a calendar, submit. **Done in 30 seconds.**
-
-```
-┌─────────────┐         ┌──────────────┐         ┌────────────────────┐
-│   Browser   │──HTTPS──▶  Go Backend  │──HTTPS──▶  e-boekhouden.nl  │
-│  React/MUI  │         │    (Gin)     │         │    (API + Auth)    │
-│  TypeScript │◀─────────│ Session Mgr │◀─────────│                   │
-└─────────────┘         └──────────────┘         └────────────────────┘
-```
-
 ## Features
 
 | Feature | Description |
 |---------|-------------|
-| **Bulk entry** | Select employees, project, activity, pick dates, submit all at once |
-| **Multi-employee** | Log hours for your entire team in one go |
-| **Calendar selection** | Click individual dates, shift+click for ranges, "all weekdays" shortcut |
-| **Concurrent submission** | 3 parallel workers — 60 entries in ~20 seconds |
-| **Per-entry feedback** | See exactly what succeeded and what failed |
-| **Session persistence** | Survives page reloads within the 30-minute session window |
-| **MFA support** | Full two-factor authentication support |
-| **Zero storage** | No database, no credential storage, no tracking |
+| **Bulk hour entry** | Select employees, project, activity, pick dates on a calendar, submit all at once |
+| **Bank statement processing** | View unprocessed lines, get AI-powered booking suggestions, process with one click |
+| **Invoice OCR** | Upload PDF invoices, Claude AI extracts supplier, amounts, VAT, ledger account |
+| **Transaction classification** | AI suggests grootboekrekening and BTW code based on Belastingdienst rules |
+| **Dashboard** | Overview of unprocessed bank statements, quick navigation to all features |
+| **Passkey authentication** | No passwords — login with Face ID, Touch ID, or security key |
+| **Team support** | Multi-tenant: create a team, manage members |
+| **e-Boekhouden proxy** | Full access to ledger accounts, relations, VAT codes, digital archive |
+| **Zero credential storage** | e-Boekhouden passwords are never stored — entered fresh each session |
+
+## Architecture
+
+```
+┌─────────────┐         ┌──────────────┐         ┌────────────────────┐
+│   Browser   │──HTTPS──▶  Go Backend  │──HTTPS──▶  e-boekhouden.nl  │
+│  React/MUI  │         │    (Gin)     │         │   (API + Auth)     │
+│  Passkeys   │         │             ╔╩═══════╗ │                    │
+│             │◀─────────│             ║ Redis  ║ │                    │
+└─────────────┘         │             ╚════════╝ └────────────────────┘
+                        │             ╔════════╗
+                        │             ║Postgres║  ┌────────────────────┐
+                        │             ╚╦═══════╝  │   Claude API       │
+                        │              │──HTTPS──▶│  (Anthropic)       │
+                        └──────────────┘          └────────────────────┘
+```
 
 ## Quick Start
 
@@ -50,6 +50,7 @@ Select employees, pick a project, choose an activity, click the days on a calend
 
 - Docker + Docker Compose
 - An [e-boekhouden.nl](https://www.e-boekhouden.nl) account
+- (Optional) An [Anthropic API key](https://console.anthropic.com/) for AI features
 
 ### Run
 
@@ -59,7 +60,7 @@ cd speedy-eboekhouden
 docker-compose up --build
 ```
 
-Open **http://localhost:3000** — that's it.
+Open **http://localhost:3000** — register with a passkey, connect your e-boekhouden account, and you're ready.
 
 > **Note:** No local Node.js required. All frontend builds happen inside containers.
 
@@ -70,84 +71,101 @@ Open **http://localhost:3000** — that's it.
 ├── backend/                  Go API server
 │   ├── cmd/server/           Entry point + route setup
 │   └── internal/
-│       ├── eboekhouden/      HTTP client for e-boekhouden API
-│       ├── session/          In-memory session store + middleware
+│       ├── auth/             WebAuthn passkey service
+│       ├── claude/           Claude API integration (invoice OCR, classification)
+│       ├── crypto/           AES-256-GCM encryption
+│       ├── database/         PostgreSQL (users, teams, passkeys, settings)
+│       ├── eboekhouden/      HTTP client for e-boekhouden.nl API
 │       ├── handler/          HTTP handlers
-│       ├── middleware/       CORS
+│       ├── middleware/       CORS, security headers, rate limiting
+│       ├── session/          Redis-backed session store
 │       └── config/           Environment-based config
 │
 ├── frontend/                 React SPA
 │   └── src/
 │       ├── api/              API client + TypeScript types
-│       ├── components/       UI components
+│       ├── components/
+│       │   ├── auth/         Passkey login/register
+│       │   ├── onboarding/   First-time setup wizard
+│       │   ├── bankstatements/ Bank statement processing
+│       │   ├── invoices/     Invoice upload + AI extraction
+│       │   ├── settings/     API key + account settings
+│       │   └── shared/       Reusable pickers (ledger, relations, VAT)
 │       ├── hooks/            Data fetching hooks
 │       └── context/          Auth state management
 │
 ├── landing/                  Static landing page + security page
 │
 ├── deploy/                   Kubernetes manifests (Kustomize)
-│   ├── base/                 Base resources
+│   ├── base/
 │   └── overlays/
-│       ├── local/            Local dev overrides
-│       └── production/       Production config
+│       ├── local/
+│       └── production/
 │
-└── docker-compose.yml
+└── docker-compose.yml        Full stack: backend, frontend, landing, postgres, redis
 ```
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Backend | Go 1.26, Gin |
-| Frontend | React 19, TypeScript 6, MUI 7, Vite 8 |
+| Backend | Go 1.26, Gin, pgx, go-redis, go-webauthn, anthropic-sdk-go |
+| Frontend | React 19, TypeScript 6, MUI 7, Vite 8, react-router-dom, @simplewebauthn/browser |
+| Database | PostgreSQL 17 |
+| Cache | Redis 7 |
 | Landing | Static HTML + CSS (no JS framework) |
 | Containers | Docker, nginx 1.27 |
 | Orchestration | Kubernetes, Kustomize, Traefik |
-| CI/CD | GitHub Actions |
+| AI | Claude Sonnet 4.5 (invoices), Claude Haiku 4.5 (classification) |
+| Auth | WebAuthn / Passkeys |
+| Encryption | AES-256-GCM (API keys, session tokens) |
 | TLS | Let's Encrypt (via Traefik) |
 
 ## API
 
+### Authentication
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/api/v1/login` | — | Authenticate with e-boekhouden |
-| `POST` | `/api/v1/mfa` | Session | Submit MFA code |
-| `GET` | `/api/v1/me` | Session | Check session validity |
-| `POST` | `/api/v1/logout` | Session | Destroy session |
-| `GET` | `/api/v1/employees` | Session | List employees |
-| `GET` | `/api/v1/projects` | Session | List active projects |
-| `GET` | `/api/v1/activities` | Session | List active activities |
-| `POST` | `/api/v1/hours` | Session | Bulk submit hour entries |
-| `GET` | `/healthz` | — | Health check |
+| `POST` | `/api/v1/auth/register/begin` | — | Start passkey registration |
+| `POST` | `/api/v1/auth/register/finish` | — | Complete passkey registration |
+| `POST` | `/api/v1/auth/login/begin` | — | Start passkey login |
+| `POST` | `/api/v1/auth/login/finish` | — | Complete passkey login |
+| `GET` | `/api/v1/auth/me` | Session | Current user + team + e-boekhouden status |
+| `POST` | `/api/v1/auth/logout` | Session | Destroy session |
 
-### Example: Bulk Hours Request
+### e-Boekhouden Connection
 
-```json
-{
-  "entries": [
-    {
-      "employeeId": 12345,
-      "projectId": 67890,
-      "activityId": 11111,
-      "hours": "8.00",
-      "dates": ["2026-03-02", "2026-03-03", "2026-03-04"],
-      "description": ""
-    }
-  ]
-}
-```
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/v1/eboekhouden/login` | Session | Connect e-boekhouden account |
+| `POST` | `/api/v1/eboekhouden/mfa` | Session | Complete e-boekhouden MFA |
+| `GET` | `/api/v1/eboekhouden/status` | Session | Check e-boekhouden connection |
 
-### Example: Bulk Hours Response
+### Bookkeeping Features (require e-boekhouden connection)
 
-```json
-{
-  "results": [
-    { "employeeId": 12345, "date": "2026-03-02", "status": "ok" },
-    { "employeeId": 12345, "date": "2026-03-03", "status": "ok" },
-    { "employeeId": 12345, "date": "2026-03-04", "status": "ok" }
-  ]
-}
-```
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/v1/bankstatements` | Session + EB | List unprocessed bank statement lines |
+| `GET` | `/api/v1/bankstatements/count` | Session + EB | Count unprocessed lines |
+| `POST` | `/api/v1/bankstatements/:id/process` | Session + EB | Process a bank statement line |
+| `POST` | `/api/v1/mutations` | Session + EB | Create a mutation |
+| `GET` | `/api/v1/ledger-accounts` | Session + EB | Active ledger accounts |
+| `GET` | `/api/v1/relations?q=` | Session + EB | Search relations |
+| `GET` | `/api/v1/vat-codes` | Session + EB | VAT codes |
+| `POST` | `/api/v1/invoices/analyze` | Session + EB | Upload PDF, Claude extracts data |
+| `POST` | `/api/v1/invoices/submit` | Session + EB | Book an invoice |
+| `POST` | `/api/v1/classify` | Session | AI transaction classification |
+| `GET` | `/api/v1/employees` | Session + EB | List employees |
+| `POST` | `/api/v1/hours` | Session + EB | Bulk submit hour entries |
+
+### Settings
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/v1/settings` | Session | Get user settings |
+| `PUT` | `/api/v1/settings/api-key` | Session | Store encrypted Anthropic API key |
+| `DELETE` | `/api/v1/settings/api-key` | Session | Remove API key |
 
 ## Configuration
 
@@ -157,33 +175,22 @@ Open **http://localhost:3000** — that's it.
 | `FRONTEND_ORIGIN` | `http://localhost:3000` | Allowed CORS origin |
 | `COOKIE_DOMAIN` | *(empty)* | Session cookie domain |
 | `COOKIE_SECURE` | `true` | `false` for local HTTP dev |
-
-## Deployment
-
-### Docker Compose (local)
-
-```bash
-docker-compose up --build
-```
-
-### Kubernetes (production)
-
-```bash
-kubectl apply -k deploy/overlays/production
-```
-
-Deploys to namespace `speedy-eboekhouden` with Traefik ingress, Let's Encrypt TLS, resource limits, and health probes.
+| `POSTGRES_DSN` | `postgres://speedy:dev@localhost:5432/speedy?sslmode=disable` | PostgreSQL DSN |
+| `REDIS_URL` | `redis://localhost:6379` | Redis URL |
+| `ENCRYPTION_KEY` | *(required)* | 64 hex chars for AES-256-GCM |
+| `WEBAUTHN_ORIGIN` | *(FRONTEND_ORIGIN)* | WebAuthn RP origin |
+| `WEBAUTHN_RP_ID` | `localhost` | WebAuthn RP ID |
 
 ## Security
 
-Speedy is designed around a **zero-storage architecture**:
-
-- **No database** — no MySQL, no Postgres, no Redis. Nothing.
-- **No credential storage** — passwords are forwarded to e-boekhouden.nl and immediately discarded.
-- **In-memory sessions only** — expire after 30 minutes, wiped on server restart.
-- **HttpOnly + Secure cookies** — inaccessible to JavaScript, HTTPS-only in production.
-- **HTTPS everywhere** — TLS on both sides (browser to Speedy, Speedy to e-boekhouden).
-- **No tracking** — no analytics, no third-party cookies, no tracking pixels.
+- **Passkey-only auth** — no passwords in the system. Phishing-resistant, device-bound.
+- **e-Boekhouden credentials never stored** — forwarded and discarded within the request handler.
+- **Encrypted storage** — API keys encrypted with AES-256-GCM. Session tokens encrypted in Redis.
+- **HttpOnly + Secure + SameSite=Lax cookies** — inaccessible to JavaScript, HTTPS-only.
+- **Rate limiting** — Redis-based limits on all auth endpoints.
+- **HTTPS everywhere** — TLS on both sides (browser ↔ Speedy, Speedy ↔ e-boekhouden).
+- **No bookkeeping data stored** — all data fetched on-the-fly from e-boekhouden.nl.
+- **Open source** — verify everything yourself.
 
 Read the full security deep-dive at [speedy-eboekhouden.nl/beveiliging](https://speedy-eboekhouden.nl/beveiliging).
 

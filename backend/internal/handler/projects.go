@@ -9,13 +9,13 @@ import (
 
 // GetProjects handles GET /api/v1/projects
 func GetProjects(c *gin.Context) {
-	sess := session.FromContext(c)
-	if sess == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no session"})
+	client := session.ClientFromContext(c)
+	if client == nil {
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
 		return
 	}
 
-	raw, err := sess.Client.GetProjects()
+	raw, err := client.GetProjects()
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

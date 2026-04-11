@@ -7,7 +7,7 @@
     '<div class="container nav-inner">' +
       '<a href="/" class="logo">⚡ Speedy e-Boekhouden</a>' +
       '<div class="nav-links">' +
-        '<a href="' + p + 'features">Functies</a>' +
+        '<a href="' + p + 'functies">Functies</a>' +
         '<a href="' + p + 'hoe-het-werkt">Hoe het werkt</a>' +
         '<a href="' + p + 'faq">FAQ</a>' +
         '<a href="/beveiliging">Beveiliging</a>' +
@@ -30,11 +30,11 @@
       '<div class="footer-content">' +
         '<div class="footer-brand">' +
           '<span class="logo">⚡ Speedy e-Boekhouden</span>' +
-          "<p>De snelste manier om uren in te voeren in e-boekhouden.nl.</p>" +
+          "<p>Supercharge je e-boekhouden.nl administratie met AI.</p>" +
         "</div>" +
         '<div class="footer-links">' +
           '<p class="footer-heading">Product</p>' +
-          '<a href="' + p + 'features">Functies</a>' +
+          '<a href="' + p + 'functies">Functies</a>' +
           '<a href="' + p + 'hoe-het-werkt">Hoe het werkt</a>' +
           '<a href="' + p + 'faq">FAQ</a>' +
           '<a href="/app/">Inloggen</a>' +

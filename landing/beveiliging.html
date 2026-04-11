@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <title>Beveiliging — Speedy e-Boekhouden | Hoe wij je gegevens beschermen</title>
-    <meta name="description" content="Lees hoe Speedy e-Boekhouden je inloggegevens en data beschermt. Geen opslag van wachtwoorden, versleutelde verbindingen, automatische sessieverval en volledige MFA-ondersteuning.">
+    <meta name="description" content="Lees hoe Speedy e-Boekhouden je gegevens beschermt. Passkey-authenticatie, versleutelde opslag, geen wachtwoorden, automatische sessieverval en volledige MFA-ondersteuning.">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://speedy-eboekhouden.nl/beveiliging">
 
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://speedy-eboekhouden.nl/beveiliging">
     <meta property="og:title" content="Beveiliging — Speedy e-Boekhouden">
-    <meta property="og:description" content="Hoe Speedy e-Boekhouden je inloggegevens en data beschermt. Zero-storage architectuur, HTTPS, HttpOnly cookies en meer.">
+    <meta property="og:description" content="Hoe Speedy e-Boekhouden je gegevens beschermt. Passkey-authenticatie, AES-256-versleuteling en meer.">
     <meta property="og:locale" content="nl_NL">
 
     <link rel="preload" href="style.css" as="style">
@@ -40,24 +40,25 @@
             <h1>Jouw gegevens, jouw controle.</h1>
             <p class="hero-subtitle">
                 Speedy e-Boekhouden is ontworpen met een fundamenteel uitgangspunt:
-                <strong>wij hoeven je gegevens niet te hebben om je te helpen</strong>.
+                <strong>wij hoeven je boekhoudgegevens niet te hebben om je te helpen</strong>.
                 Op deze pagina leggen we precies uit hoe dat werkt — technisch, eerlijk en zonder marketingtaal.
             </p>
         </div>
     </div>
 </header>
 
-<!-- Core Principle -->
+<!-- Core Principles -->
 <section class="sec-section">
     <div class="container">
         <div class="sec-principle">
             <div class="sec-principle-icon">🔑</div>
             <div>
-                <h2>Het kernprincipe: Zero-Storage</h2>
+                <h2>Kernprincipes</h2>
                 <p>
-                    Speedy slaat <strong>geen wachtwoorden, geen e-mailadressen, geen MFA-codes en geen boekhoudkundige gegevens op</strong>.
-                    Niet in een database, niet in bestanden, niet in logs. Er is simpelweg geen database.
-                    Je inloggegevens worden doorgestuurd naar e-boekhouden.nl en daarna direct uit het geheugen verwijderd.
+                    Speedy slaat <strong>geen e-boekhouden wachtwoorden en geen boekhoudkundige gegevens op</strong>.
+                    Je e-boekhouden inloggegevens worden direct doorgestuurd en daarna uit het geheugen verwijderd.
+                    Wat wij <em>wel</em> opslaan: je Speedy-account (e-mailadres + passkey) en je optionele API-sleutel (versleuteld).
+                    Hieronder leggen we elke laag uit.
                 </p>
             </div>
         </div>
@@ -72,14 +73,38 @@
 
         <div class="sec-grid">
 
-            <!-- 1. Credentials -->
+            <!-- 1. Passkey Auth -->
             <div class="sec-card">
                 <div class="sec-card-header">
                     <div class="sec-card-icon">🔐</div>
-                    <h3>Inloggegevens</h3>
+                    <h3>Passkey-authenticatie</h3>
                 </div>
                 <div class="sec-card-body">
-                    <p>Wanneer je inlogt, stuurt je browser je e-mailadres en wachtwoord naar onze server. Onze server stuurt deze <strong>onmiddellijk door naar e-boekhouden.nl</strong> via een versleutelde HTTPS-verbinding.</p>
+                    <p>Speedy gebruikt <strong>passkeys</strong> (WebAuthn) voor authenticatie — geen wachtwoorden. Passkeys zijn phishing-bestendig, kunnen niet worden geraden en verlaten nooit je apparaat.</p>
+                    <p>Bij registratie maakt je apparaat een cryptografisch sleutelpaar aan. De privesleutel blijft op je apparaat (beveiligd met Face ID, Touch ID of je schermvergrendeling). Alleen de publieke sleutel wordt naar onze server gestuurd.</p>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span><strong>Geen wachtwoord</strong> — niets om te lekken, te raden of te phishen</span>
+                    </div>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span><strong>Apparaatgebonden</strong> — je sleutel verlaat nooit je telefoon of laptop</span>
+                    </div>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span><strong>Phishing-bestendig</strong> — werkt alleen op het juiste domein</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. e-Boekhouden Credentials -->
+            <div class="sec-card">
+                <div class="sec-card-header">
+                    <div class="sec-card-icon">📋</div>
+                    <h3>e-Boekhouden inloggegevens</h3>
+                </div>
+                <div class="sec-card-body">
+                    <p>Na het inloggen met je passkey verbind je met je e-boekhouden.nl account. Je e-boekhouden wachtwoord wordt <strong>direct doorgestuurd naar e-boekhouden.nl</strong> via HTTPS en daarna uit het geheugen verwijderd.</p>
                     <div class="sec-flow">
                         <div class="sec-flow-step">
                             <span class="sec-flow-label">Jouw browser</span>
@@ -89,14 +114,14 @@
                             <span class="sec-flow-label">e-boekhouden.nl</span>
                         </div>
                     </div>
-                    <p>Na het doorsturen worden je e-mailadres en wachtwoord <strong>nergens bewaard</strong>. Ze bestaan alleen gedurende het fractie-van-een-seconde moment dat ze worden doorgestuurd. Daarna worden ze door het besturingssysteem uit het geheugen verwijderd.</p>
+                    <p>Het resulterende sessie-token van e-boekhouden wordt <strong>versleuteld</strong> (AES-256-GCM) in Redis opgeslagen en verloopt na 30 minuten inactiviteit. Je wachtwoord wordt nergens bewaard.</p>
                     <div class="sec-check">
                         <span class="sec-check-icon">&#10003;</span>
                         <span>Wachtwoord wordt nooit opgeslagen</span>
                     </div>
                     <div class="sec-check">
                         <span class="sec-check-icon">&#10003;</span>
-                        <span>E-mailadres wordt nooit opgeslagen</span>
+                        <span>Sessie-token versleuteld in geheugen (Redis)</span>
                     </div>
                     <div class="sec-check">
                         <span class="sec-check-icon">&#10003;</span>
@@ -105,40 +130,41 @@
                 </div>
             </div>
 
-            <!-- 2. Sessions -->
+            <!-- 3. Data Storage -->
             <div class="sec-card">
                 <div class="sec-card-header">
-                    <div class="sec-card-icon">🍪</div>
-                    <h3>Sessies &amp; cookies</h3>
+                    <div class="sec-card-icon">🗄️</div>
+                    <h3>Wat wij opslaan</h3>
                 </div>
                 <div class="sec-card-body">
-                    <p>Na een succesvolle login maakt e-boekhouden.nl een <em>sessie-token</em> aan (vergelijkbaar met wanneer je zelf inlogt op hun website). Speedy bewaart dit token <strong>tijdelijk in het werkgeheugen</strong> (RAM) van de server — niet op schijf, niet in een database.</p>
-                    <p>Jouw browser ontvangt een eigen sessie-cookie van Speedy om je te herkennen. Deze cookie is beveiligd met:</p>
-                    <div class="sec-check">
-                        <span class="sec-check-icon">&#10003;</span>
-                        <span><strong>HttpOnly</strong> — JavaScript op de pagina kan deze cookie niet uitlezen. Dit beschermt tegen XSS-aanvallen.</span>
+                    <p>Speedy slaat een beperkt aantal gegevens op in een versleutelde PostgreSQL-database:</p>
+                    <div class="sec-data-table">
+                        <div class="sec-data-row sec-data-yes">
+                            <span class="sec-data-icon">&#10003;</span>
+                            <span><strong>Account:</strong> Je e-mailadres, naam en passkey (publieke sleutel)</span>
+                        </div>
+                        <div class="sec-data-row sec-data-yes">
+                            <span class="sec-data-icon">&#10003;</span>
+                            <span><strong>Team:</strong> Teamnaam en lidmaatschap</span>
+                        </div>
+                        <div class="sec-data-row sec-data-yes">
+                            <span class="sec-data-icon">&#10003;</span>
+                            <span><strong>API-sleutel:</strong> Je Anthropic API-sleutel, versleuteld met AES-256-GCM</span>
+                        </div>
+                        <div class="sec-data-row sec-data-no">
+                            <span class="sec-data-icon">&#10007;</span>
+                            <span>Geen e-boekhouden wachtwoorden</span>
+                        </div>
+                        <div class="sec-data-row sec-data-no">
+                            <span class="sec-data-icon">&#10007;</span>
+                            <span>Geen boekhoudkundige gegevens (facturen, mutaties, saldi)</span>
+                        </div>
+                        <div class="sec-data-row sec-data-no">
+                            <span class="sec-data-icon">&#10007;</span>
+                            <span>Geen bankgegevens of transactiehistorie</span>
+                        </div>
                     </div>
-                    <div class="sec-check">
-                        <span class="sec-check-icon">&#10003;</span>
-                        <span><strong>Secure</strong> — De cookie wordt alleen verstuurd over versleutelde HTTPS-verbindingen.</span>
-                    </div>
-                    <div class="sec-check">
-                        <span class="sec-check-icon">&#10003;</span>
-                        <span><strong>Willekeurige ID</strong> — De sessie-ID is een cryptografisch willekeurig UUID, niet te raden of te voorspellen.</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 3. Session Expiry -->
-            <div class="sec-card">
-                <div class="sec-card-header">
-                    <div class="sec-card-icon">⏱️</div>
-                    <h3>Automatische sessieverval</h3>
-                </div>
-                <div class="sec-card-body">
-                    <p>Sessies verlopen automatisch na <strong>30 minuten inactiviteit</strong>. Dit is een glijdende termijn: elke actie die je uitvoert zet de klok opnieuw. Maar zodra je 30 minuten niets doet, is de sessie voorbij.</p>
-                    <p>Daarnaast draait er elke 5 minuten een achtergrondproces dat verlopen sessies actief opruimt uit het geheugen. Na opruiming is het sessie-token van e-boekhouden <strong>permanent verwijderd</strong> — het bestaat nergens meer.</p>
-                    <p>Bij uitloggen wordt je sessie <strong>onmiddellijk</strong> vernietigd en de cookie ongeldig gemaakt. Als de server herstart gaan alle sessies verloren — er is geen persistente opslag.</p>
+                    <p>Alle boekhoudgegevens worden <em>on-the-fly</em> opgehaald bij e-boekhouden.nl en direct naar je browser gestuurd. Na het versturen wordt niets gecachet.</p>
                 </div>
             </div>
 
@@ -149,87 +175,102 @@
                     <h3>Versleuteling</h3>
                 </div>
                 <div class="sec-card-body">
-                    <p>Alle communicatie is versleuteld met TLS (Transport Layer Security):</p>
+                    <p>Alle communicatie en gevoelige data is versleuteld:</p>
                     <div class="sec-check">
                         <span class="sec-check-icon">&#10003;</span>
-                        <span><strong>Browser ↔ Speedy:</strong> HTTPS met een Let's Encrypt certificaat. Onversleuteld verkeer (HTTP) wordt automatisch doorgestuurd naar HTTPS.</span>
+                        <span><strong>Browser ↔ Speedy:</strong> HTTPS met Let's Encrypt certificaat</span>
                     </div>
                     <div class="sec-check">
                         <span class="sec-check-icon">&#10003;</span>
-                        <span><strong>Speedy ↔ e-boekhouden.nl:</strong> Alle API-aanroepen gaan uitsluitend via HTTPS. Er is geen HTTP-fallback in de code.</span>
+                        <span><strong>Speedy ↔ e-boekhouden.nl:</strong> Uitsluitend HTTPS, geen HTTP-fallback</span>
                     </div>
-                    <p>Dit betekent dat je gegevens op geen enkel moment onversleuteld over het internet gaan.</p>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span><strong>API-sleutel:</strong> AES-256-GCM versleuteld in de database</span>
+                    </div>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span><strong>e-Boekhouden sessie:</strong> AES-256-GCM versleuteld in Redis</span>
+                    </div>
                 </div>
             </div>
 
-            <!-- 5. MFA -->
+            <!-- 5. Sessions -->
+            <div class="sec-card">
+                <div class="sec-card-header">
+                    <div class="sec-card-icon">🍪</div>
+                    <h3>Sessies &amp; cookies</h3>
+                </div>
+                <div class="sec-card-body">
+                    <p>Sessies worden opgeslagen in Redis met een glijdende vervaltermijn van <strong>30 minuten</strong>. Je sessie-cookie is beveiligd met:</p>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span><strong>HttpOnly</strong> — JavaScript kan de cookie niet uitlezen (XSS-bescherming)</span>
+                    </div>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span><strong>Secure</strong> — Alleen via HTTPS verstuurd</span>
+                    </div>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span><strong>SameSite=Lax</strong> — Bescherming tegen CSRF-aanvallen</span>
+                    </div>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span><strong>Willekeurige ID</strong> — Cryptografisch willekeurig UUID</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 6. AI & API Key -->
+            <div class="sec-card">
+                <div class="sec-card-header">
+                    <div class="sec-card-icon">🤖</div>
+                    <h3>AI-functies &amp; API-sleutel</h3>
+                </div>
+                <div class="sec-card-body">
+                    <p>De AI-functies (factuurherkenning, boekingsuggesties) gebruiken de Claude API van Anthropic. Hiervoor heb je een eigen API-sleutel nodig.</p>
+                    <p>Je API-sleutel wordt <strong>versleuteld opgeslagen</strong> (AES-256-GCM) en alleen ontsleuteld op het moment dat een AI-aanroep wordt gedaan. De sleutel wordt nooit gelogd, nooit naar derden gestuurd (alleen naar api.anthropic.com), en kan op elk moment worden verwijderd via Instellingen.</p>
+                    <p>Factuurgegevens die naar Claude worden gestuurd voor analyse worden <strong>niet</strong> opgeslagen door Speedy. De PDF wordt in het geheugen verwerkt en na analyse verwijderd.</p>
+                </div>
+            </div>
+
+            <!-- 7. Rate Limiting -->
+            <div class="sec-card">
+                <div class="sec-card-header">
+                    <div class="sec-card-icon">🛡️</div>
+                    <h3>Bescherming tegen misbruik</h3>
+                </div>
+                <div class="sec-card-body">
+                    <p>Alle authenticatie-endpoints zijn beveiligd met rate limiting:</p>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span>Maximaal 10 login-/registratiepogingen per 5 minuten per IP-adres</span>
+                    </div>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span>Maximaal 5 e-boekhouden loginpogingen per 5 minuten per IP-adres</span>
+                    </div>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span>Bestandsupload gelimiteerd tot 10 MB</span>
+                    </div>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span>CORS beperkt tot eigen domein</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 8. MFA -->
             <div class="sec-card">
                 <div class="sec-card-header">
                     <div class="sec-card-icon">📱</div>
                     <h3>Twee-factor-authenticatie (MFA)</h3>
                 </div>
                 <div class="sec-card-body">
-                    <p>Speedy ondersteunt volledig de MFA van e-boekhouden.nl. Als je account MFA heeft ingeschakeld, word je na het inloggen gevraagd om je verificatiecode in te voeren.</p>
-                    <p>De MFA-code wordt — net als je wachtwoord — <strong>direct doorgestuurd naar e-boekhouden.nl</strong> en daarna uit het geheugen verwijderd. Speedy slaat de code niet op en kan deze niet opnieuw gebruiken.</p>
-                    <p>Wij raden sterk aan om MFA in te schakelen op je e-boekhouden.nl account voor optimale beveiliging.</p>
-                </div>
-            </div>
-
-            <!-- 6. Data Access -->
-            <div class="sec-card">
-                <div class="sec-card-header">
-                    <div class="sec-card-icon">📊</div>
-                    <h3>Welke gegevens kan Speedy inzien?</h3>
-                </div>
-                <div class="sec-card-body">
-                    <p>Speedy vraagt alleen de minimale gegevens op die nodig zijn om het urenformulier te vullen:</p>
-                    <div class="sec-data-table">
-                        <div class="sec-data-row sec-data-yes">
-                            <span class="sec-data-icon">&#10003;</span>
-                            <span><strong>Leest:</strong> Lijst medewerkers, projecten en activiteiten</span>
-                        </div>
-                        <div class="sec-data-row sec-data-yes">
-                            <span class="sec-data-icon">&#10003;</span>
-                            <span><strong>Schrijft:</strong> Ureninvoer die jij expliciet verstuurt</span>
-                        </div>
-                        <div class="sec-data-row sec-data-no">
-                            <span class="sec-data-icon">&#10007;</span>
-                            <span>Kan <strong>niet</strong> bij je financiële administratie</span>
-                        </div>
-                        <div class="sec-data-row sec-data-no">
-                            <span class="sec-data-icon">&#10007;</span>
-                            <span>Kan <strong>niet</strong> bij facturen of relaties</span>
-                        </div>
-                        <div class="sec-data-row sec-data-no">
-                            <span class="sec-data-icon">&#10007;</span>
-                            <span>Kan <strong>niet</strong> bij accountinstellingen</span>
-                        </div>
-                    </div>
-                    <p>Speedy kan alleen doen wat jouw e-boekhouden account mag. Er worden geen extra rechten aangevraagd.</p>
-                </div>
-            </div>
-
-            <!-- 7. CORS -->
-            <div class="sec-card">
-                <div class="sec-card-header">
-                    <div class="sec-card-icon">🛡️</div>
-                    <h3>Cross-Origin beveiliging (CORS)</h3>
-                </div>
-                <div class="sec-card-body">
-                    <p>De API van Speedy accepteert alleen verzoeken van het eigen domein (speedy-eboekhouden.nl). Verzoeken van andere websites worden geblokkeerd. Dit voorkomt dat kwaadwillige websites via jouw sessie gegevens kunnen opvragen of uren kunnen invoeren.</p>
-                </div>
-            </div>
-
-            <!-- 8. No Database -->
-            <div class="sec-card">
-                <div class="sec-card-header">
-                    <div class="sec-card-icon">🗄️</div>
-                    <h3>Geen database</h3>
-                </div>
-                <div class="sec-card-body">
-                    <p>Speedy heeft <strong>geen database</strong>. Geen MySQL, geen PostgreSQL, geen MongoDB, geen Redis. Er is letterlijk geen plek waar gegevens permanent opgeslagen zouden kunnen worden.</p>
-                    <p>Alle data (medewerkers, projecten, activiteiten) wordt <em>on-the-fly</em> opgehaald bij e-boekhouden.nl en direct naar je browser gestuurd. Na het versturen wordt de data niet gecachet of bewaard.</p>
-                    <p>Als de server herstart, is alle informatie verdwenen. Er is niets om te hacken, te lekken of te stelen.</p>
+                    <p>Speedy ondersteunt volledig de MFA van e-boekhouden.nl. De MFA-code wordt — net als je wachtwoord — <strong>direct doorgestuurd</strong> en daarna uit het geheugen verwijderd.</p>
+                    <p>Je Speedy-account zelf is beveiligd met een passkey, wat inherent sterker is dan een wachtwoord + MFA-combinatie.</p>
                 </div>
             </div>
 
@@ -237,7 +278,7 @@
     </div>
 </section>
 
-<!-- Architecture Diagram (text-based) -->
+<!-- Architecture Diagram -->
 <section class="sec-section">
     <div class="container">
         <h2 class="section-title">Architectuuroverzicht</h2>
@@ -247,7 +288,7 @@
             <div class="sec-arch-row">
                 <div class="sec-arch-box sec-arch-user">
                     <strong>Jouw browser</strong>
-                    <span>Je typt je wachtwoord in</span>
+                    <span>Passkey + e-boekhouden login</span>
                 </div>
                 <div class="sec-arch-arrow">
                     <span>HTTPS</span>
@@ -255,7 +296,7 @@
                 </div>
                 <div class="sec-arch-box sec-arch-server">
                     <strong>Speedy server</strong>
-                    <span>Stuurt direct door, slaat niets op</span>
+                    <span>Go/Gin + PostgreSQL + Redis</span>
                 </div>
                 <div class="sec-arch-arrow">
                     <span>HTTPS</span>
@@ -263,17 +304,17 @@
                 </div>
                 <div class="sec-arch-box sec-arch-ebh">
                     <strong>e-boekhouden.nl</strong>
-                    <span>Verifieert je gegevens</span>
+                    <span>Jouw administratie</span>
                 </div>
             </div>
             <div class="sec-arch-notes">
                 <div class="sec-arch-note">
                     <span class="sec-arch-note-icon">&#128274;</span>
-                    Wachtwoord leeft &lt;1 seconde in het geheugen
+                    e-Boekhouden wachtwoord leeft &lt;1 seconde in het geheugen
                 </div>
                 <div class="sec-arch-note">
                     <span class="sec-arch-note-icon">&#128274;</span>
-                    Geen database, geen schijfopslag
+                    Database bevat alleen accounts + versleutelde API-sleutels
                 </div>
                 <div class="sec-arch-note">
                     <span class="sec-arch-note-icon">&#128274;</span>
@@ -291,13 +332,13 @@
         <div class="sec-dont-grid">
             <div class="sec-dont-card">
                 <div class="sec-dont-icon">&#10007;</div>
-                <h3>Wachtwoorden opslaan</h3>
-                <p>Niet gehasht, niet versleuteld, helemaal niet. We slaan ze simpelweg niet op.</p>
+                <h3>e-Boekhouden wachtwoorden opslaan</h3>
+                <p>Je e-boekhouden wachtwoord wordt doorgestuurd en direct uit het geheugen verwijderd. Niet gehasht, niet versleuteld, helemaal niet bewaard.</p>
             </div>
             <div class="sec-dont-card">
                 <div class="sec-dont-icon">&#10007;</div>
-                <h3>Gebruikersgegevens loggen</h3>
-                <p>Je naam, e-mail of boekhoudgegevens verschijnen niet in onze logbestanden.</p>
+                <h3>Boekhoudgegevens cachen</h3>
+                <p>Facturen, mutaties, relaties en saldi worden niet opgeslagen. Alles wordt on-the-fly opgehaald bij e-boekhouden.nl.</p>
             </div>
             <div class="sec-dont-card">
                 <div class="sec-dont-icon">&#10007;</div>
@@ -307,32 +348,14 @@
             <div class="sec-dont-card">
                 <div class="sec-dont-icon">&#10007;</div>
                 <h3>Data verkopen of delen</h3>
-                <p>We hebben geen data om te verkopen. Ons verdienmodel is: er is geen verdienmodel. Het is gratis.</p>
-            </div>
-        </div>
-    </div>
-</section>
-
-<!-- Tip for Paranoid Users -->
-<section class="sec-section">
-    <div class="container">
-        <div class="sec-principle">
-            <div class="sec-principle-icon">💡</div>
-            <div>
-                <h2>Tip: gebruik een beperkt account</h2>
-                <p>
-                    Vertrouw je het niet volledig? Maak in e-boekhouden.nl een <strong>apart gebruikersaccount aan dat uitsluitend uren mag invoeren</strong>.
-                    Geef dit account geen toegang tot financiële gegevens, facturen of accountinstellingen.
-                    Gebruik vervolgens dit beperkte account om in te loggen bij Speedy.
-                    Zo kan Speedy — zelfs in een worst-case scenario — alleen uren invoeren en helemaal niets anders.
-                </p>
+                <p>We verkopen geen data. Je API-sleutel wordt alleen naar Anthropic gestuurd, en je boekhouddata wordt nergens opgeslagen.</p>
             </div>
         </div>
     </div>
 </section>
 
 <!-- Open Source -->
-<section class="sec-section sec-alt">
+<section class="sec-section">
     <div class="container">
         <div class="sec-principle">
             <div class="sec-principle-icon">💻</div>
@@ -365,12 +388,11 @@
 <section class="cta-section">
     <div class="container">
         <h2>Overtuigd? Begin direct.</h2>
-        <p>Log in met je e-boekhouden account. Geen registratie, geen opslag van gegevens.</p>
+        <p>Maak een account aan met je passkey. Geen wachtwoorden, geen gedoe.</p>
         <a href="/app/" class="btn btn-primary btn-lg">Direct beginnen</a>
     </div>
 </section>
 
-<!-- Footer -->
 </main>
 
 <footer id="site-footer" class="footer"></footer>

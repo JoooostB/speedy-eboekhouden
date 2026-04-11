@@ -1,6 +1,10 @@
 package eboekhouden
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"sync"
@@ -13,9 +17,9 @@ const (
 
 // Client holds an authenticated session with e-boekhouden.
 type Client struct {
-	httpClient *http.Client
-	authToken  string
-	mu         sync.RWMutex
+	httpClient  *http.Client
+	authToken   string
+	mu          sync.RWMutex
 	MFARequired bool
 }
 
@@ -34,6 +38,25 @@ func NewClient() (*Client, error) {
 			},
 		},
 	}, nil
+}
+
+// NewClientWithToken creates a client with an existing auth token (from a Redis session).
+func NewClientWithToken(token string) (*Client, error) {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	c := &Client{
+		httpClient: &http.Client{
+			Jar: jar,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		authToken: token,
+	}
+	return c, nil
 }
 
 // SetAuthToken stores the given auth token.
@@ -56,6 +79,56 @@ func addCommonHeaders(req *http.Request) {
 	req.Header.Set("accept-language", "nl,en-GB;q=0.9,en;q=0.8")
 	req.Header.Set("dnt", "1")
 	req.Header.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+}
+
+// apiGet performs a GET request to the secure20 API and returns the raw JSON response.
+func (c *Client) apiGet(path string) (json.RawMessage, error) {
+	req, err := http.NewRequest("GET", baseURLSecure20+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request for %s: %w", path, err)
+	}
+	addAPIHeaders(req)
+	c.setAuthCookie(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request to %s failed: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response from %s: %w", path, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("request to %s returned %d: %s", path, resp.StatusCode, string(body))
+	}
+	return json.RawMessage(body), nil
+}
+
+// apiPost performs a POST request to the secure20 API with a JSON body and returns the raw JSON response.
+func (c *Client) apiPost(path string, payload json.RawMessage) (json.RawMessage, error) {
+	req, err := http.NewRequest("POST", baseURLSecure20+path, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("creating request for %s: %w", path, err)
+	}
+	addAPIHeaders(req)
+	c.setAuthCookie(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request to %s failed: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response from %s: %w", path, err)
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("request to %s returned %d: %s", path, resp.StatusCode, string(body))
+	}
+	return json.RawMessage(body), nil
 }
 
 // addAPIHeaders adds headers for JSON API calls.
