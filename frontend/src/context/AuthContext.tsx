@@ -76,6 +76,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("auth:expired", handler);
   }, []);
 
+  // The API client emits eb:session-expired when an e-boekhouden upstream call
+  // fails because the cookie is no longer valid. Drop the connection flag so
+  // the UI re-renders the connect prompt instead of showing a raw error.
+  useEffect(() => {
+    const handler = () => {
+      setState((prev) => ({ ...prev, eboekhoudenConnected: false }));
+    };
+    window.addEventListener("eb:session-expired", handler);
+    return () => window.removeEventListener("eb:session-expired", handler);
+  }, []);
+
   // e-Boekhouden keepalive: ping every 10 minutes while connected.
   // Pauses when the tab is hidden to avoid background noise.
   useEffect(() => {

@@ -3,10 +3,12 @@ package eboekhouden
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"strings"
 	"sync"
 )
 
@@ -14,6 +16,24 @@ const (
 	baseURLSecure   = "https://secure.e-boekhouden.nl"
 	baseURLSecure20 = "https://secure20.e-boekhouden.nl"
 )
+
+// ErrSessionExpired is returned by api calls when e-boekhouden has invalidated
+// the session cookie (typically because too much time has passed since login).
+// Handlers should clear the stored token and prompt the user to reconnect.
+var ErrSessionExpired = errors.New("eboekhouden session expired")
+
+// isSessionExpiredBody returns true when the response body indicates that the
+// e-boekhouden session is no longer valid. e-Boekhouden returns HTTP 200 with
+// a JSON error envelope for these, so we have to sniff the body.
+func isSessionExpiredBody(status int, body []byte) bool {
+	if status == http.StatusUnauthorized {
+		return true
+	}
+	s := string(body)
+	return strings.Contains(s, "SECURITY_010") ||
+		strings.Contains(s, "Niet ingelogd") ||
+		strings.Contains(s, "\"errorType\":\"security\"")
+}
 
 // Client holds an authenticated session with e-boekhouden.
 type Client struct {
@@ -100,6 +120,9 @@ func (c *Client) apiGet(path string) (json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading response from %s: %w", path, err)
 	}
+	if isSessionExpiredBody(resp.StatusCode, body) {
+		return nil, ErrSessionExpired
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("request to %s returned %d: %s", path, resp.StatusCode, string(body))
 	}
@@ -124,6 +147,9 @@ func (c *Client) apiPost(path string, payload json.RawMessage) (json.RawMessage,
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading response from %s: %w", path, err)
+	}
+	if isSessionExpiredBody(resp.StatusCode, body) {
+		return nil, ErrSessionExpired
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return nil, fmt.Errorf("request to %s returned %d: %s", path, resp.StatusCode, string(body))

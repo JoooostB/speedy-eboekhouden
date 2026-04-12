@@ -15,6 +15,7 @@ import Avatar from "@mui/material/Avatar";
 import { api } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { track } from "../../analytics";
+import { PasskeysSection } from "./PasskeysSection";
 
 /** Inline SVG icon: Key (Lucide-style) */
 function KeyIcon(props: { sx?: object }) {
@@ -436,6 +437,8 @@ export function SettingsPage() {
           </ListItem>
         </List>
       </Paper>
+
+      <PasskeysSection />
 
       {/* Team Info */}
       {team && (

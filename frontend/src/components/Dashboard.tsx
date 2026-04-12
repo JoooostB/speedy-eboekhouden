@@ -109,9 +109,15 @@ export function Dashboard() {
       const autoItems = res.classifications.filter((c) => c.category === "auto");
 
       if (autoItems.length > 0) {
-        const items = autoItems.map((item) => ({
+        const soortCodes: Record<string, number> = {
+          FactuurOntvangen: 1, FactuurVerstuurd: 2,
+          FactuurbetalingOntvangen: 3, FactuurbetalingVerstuurd: 4,
+          GeldOntvangen: 5, GeldUitgegeven: 6, Memoriaal: 7,
+        };
+        const items = autoItems.map((item: any) => ({
           id: item.id,
-          soort: item.soort,
+          grootboekId: item.grootboekId || 0,
+          soort: soortCodes[item.soort] || 6,
           grootboekcode: item.grootboekcode,
           btwCode: item.btwCode,
           omschrijving: item.aiOmschrijving || item.omschrijving,

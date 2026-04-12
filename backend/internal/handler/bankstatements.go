@@ -6,12 +6,32 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joooostb/speedy-eboekhouden/internal/database"
 	"github.com/joooostb/speedy-eboekhouden/internal/eboekhouden"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
 )
 
+// BankStatementsHandler holds the dependencies needed to detect and clean up
+// stale e-boekhouden sessions when a bank-statement endpoint is hit. It exists
+// because the legacy free-function handlers had no way to clear the stored
+// token; we now need that to give the user a clean reconnect prompt instead
+// of a raw 401 error.
+type BankStatementsHandler struct {
+	sessions *session.Store
+	db       *database.DB
+}
+
+// NewBankStatementsHandler creates a new bank statements handler.
+func NewBankStatementsHandler(sessions *session.Store, db *database.DB) *BankStatementsHandler {
+	return &BankStatementsHandler{sessions: sessions, db: db}
+}
+
+func (h *BankStatementsHandler) handleEBError(c *gin.Context, err error) bool {
+	return HandleEBoekhoudenSessionExpired(c, session.FromContext(c), h.sessions, h.db, err)
+}
+
 // GetBankStatements handles GET /api/v1/bankstatements
-func GetBankStatements(c *gin.Context) {
+func (h *BankStatementsHandler) GetBankStatements(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
@@ -23,6 +43,9 @@ func GetBankStatements(c *gin.Context) {
 
 	raw, err := client.GetImportGrid(offset, limit)
 	if err != nil {
+		if h.handleEBError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -41,7 +64,7 @@ func GetBankStatements(c *gin.Context) {
 }
 
 // GetBankStatementCount handles GET /api/v1/bankstatements/count
-func GetBankStatementCount(c *gin.Context) {
+func (h *BankStatementsHandler) GetBankStatementCount(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
@@ -50,6 +73,9 @@ func GetBankStatementCount(c *gin.Context) {
 
 	count, err := client.GetImportCount()
 	if err != nil {
+		if h.handleEBError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -58,7 +84,7 @@ func GetBankStatementCount(c *gin.Context) {
 }
 
 // GetBankStatementSuggestion handles GET /api/v1/bankstatements/:id/suggestion
-func GetBankStatementSuggestion(c *gin.Context) {
+func (h *BankStatementsHandler) GetBankStatementSuggestion(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
@@ -78,6 +104,9 @@ func GetBankStatementSuggestion(c *gin.Context) {
 
 	raw, err := client.GetMutatieByAfschrift(params)
 	if err != nil {
+		if h.handleEBError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -86,7 +115,7 @@ func GetBankStatementSuggestion(c *gin.Context) {
 }
 
 // ProcessBankStatement handles POST /api/v1/bankstatements/:id/process
-func ProcessBankStatement(c *gin.Context) {
+func (h *BankStatementsHandler) ProcessBankStatement(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
@@ -101,6 +130,9 @@ func ProcessBankStatement(c *gin.Context) {
 
 	raw, err := client.CreateMutatie(json.RawMessage(body))
 	if err != nil {
+		if h.handleEBError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -109,7 +141,7 @@ func ProcessBankStatement(c *gin.Context) {
 }
 
 // GetLastMutatieData handles GET /api/v1/bankstatements/lastdata
-func GetLastMutatieData(c *gin.Context) {
+func (h *BankStatementsHandler) GetLastMutatieData(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
@@ -118,6 +150,9 @@ func GetLastMutatieData(c *gin.Context) {
 
 	raw, err := client.GetLastMutatieData()
 	if err != nil {
+		if h.handleEBError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}

@@ -321,13 +321,14 @@ export interface InboxSummary {
 
 export interface InboxProcessItem {
   id: number;
-  soort: MutatieSoort;
+  grootboekId: number;
+  soort: number;
   grootboekcode: string;
   btwCode: string;
   omschrijving: string;
+  bedrag: number;
   relatieId?: number;
   factuurnummer?: string;
-  bedrag?: number;
 }
 
 export interface InboxProcessResult {

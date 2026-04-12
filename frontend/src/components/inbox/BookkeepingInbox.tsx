@@ -151,7 +151,17 @@ export function BookkeepingInbox() {
       setItems(res.classifications);
       setSummary(res.summary);
       track("Inbox Classify", { total: String(res.totalCount) });
-    } catch {
+    } catch (classifyErr: any) {
+      // If the e-boekhouden session expired, the API client has already
+      // dispatched eb:session-expired and the AuthContext will flip the
+      // connection flag. Skip the bank-statements fallback so we don't
+      // surface a confusing 412 error — the not-connected branch will render
+      // the connect prompt on the next pass.
+      if (classifyErr?.status === 412) {
+        setLoading(false);
+        setClassifying(false);
+        return;
+      }
       // AI failed — fall back to raw bank statement lines (manual mode)
       try {
         const raw = await api.getBankStatements();
@@ -173,7 +183,11 @@ export function BookkeepingInbox() {
         }));
         setItems(manualItems);
         setSummary({ auto: 0, review: 0, invoice: 0, manual: manualItems.length });
-      } catch (err2) {
+      } catch (err2: any) {
+        if (err2?.status === 412) {
+          // Same case here — defer to the AuthContext-driven not-connected branch.
+          return;
+        }
         setError(err2 instanceof Error ? err2.message : "Kon afschriften niet laden");
       }
     } finally {
@@ -687,6 +701,7 @@ export function BookkeepingInbox() {
           selected={selectedItems}
           onProcessed={handleBatchProcessed}
           onClear={clearSelection}
+          ledgerAccounts={ledgerAccounts ?? []}
         />
       )}
 

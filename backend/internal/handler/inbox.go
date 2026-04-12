@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -40,16 +41,22 @@ type inboxClassifiedRow struct {
 
 // InboxHandler handles the bookkeeping inbox workflow.
 type InboxHandler struct {
-	claude *claude.Service
-	db     *database.DB
-	encKey crypto.AESKey
-	redis  *redis.Client
-	r2     *storage.Client
+	claude   *claude.Service
+	db       *database.DB
+	encKey   crypto.AESKey
+	redis    *redis.Client
+	r2       *storage.Client
+	sessions *session.Store
 }
 
 // NewInboxHandler creates a new inbox handler.
-func NewInboxHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, redisClient *redis.Client, r2 *storage.Client) *InboxHandler {
-	return &InboxHandler{claude: claudeSvc, db: db, encKey: encKey, redis: redisClient, r2: r2}
+func NewInboxHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, redisClient *redis.Client, r2 *storage.Client, sessions *session.Store) *InboxHandler {
+	return &InboxHandler{claude: claudeSvc, db: db, encKey: encKey, redis: redisClient, r2: r2, sessions: sessions}
+}
+
+// handleEBError is a thin instance wrapper around HandleEBoekhoudenSessionExpired.
+func (h *InboxHandler) handleEBError(c *gin.Context, sess *session.SessionData, err error) bool {
+	return HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err)
 }
 
 // ClassifyBatch handles POST /api/v1/inbox/classify — classifies all unprocessed bank lines with AI.
@@ -88,6 +95,9 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 	// Fetch unprocessed lines
 	raw, err := client.GetImportGrid(0, 2000)
 	if err != nil {
+		if h.handleEBError(c, sess, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -197,6 +207,15 @@ func (h *InboxHandler) DashboardSummary(c *gin.Context) {
 		count, err := client.GetImportCount()
 		if err == nil {
 			summary["unprocessedCount"] = count
+		} else if errors.Is(err, eboekhouden.ErrSessionExpired) {
+			// Stale token — clear it so the next /me reflects the disconnected state
+			sess.EBoekhoudenToken = ""
+			sess.MFAPending = false
+			if h.sessions != nil {
+				h.sessions.Update(c.Request.Context(), sess)
+			}
+			h.db.ClearEBToken(c.Request.Context(), sess.UserID)
+			client = nil
 		}
 
 		// Check for cached classifications summary
@@ -357,8 +376,20 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 
 	sess := session.FromContext(c)
 
+	type batchItem struct {
+		ID            int     `json:"id"`            // bank line ID (importId)
+		GrootboekId   int     `json:"grootboekId"`   // bank account internal ID
+		Soort         int     `json:"soort"`         // mutation type code
+		Grootboekcode string  `json:"grootboekcode"` // tegenrekening code (from AI)
+		BTWCode       string  `json:"btwCode"`
+		Omschrijving  string  `json:"omschrijving"`
+		Bedrag        float64 `json:"bedrag"`
+		RelatieId     int     `json:"relatieId,omitempty"`
+		Factuurnummer string  `json:"factuurnummer,omitempty"`
+	}
+
 	var req struct {
-		Items []json.RawMessage `json:"items"`
+		Items []batchItem `json:"items"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
@@ -371,25 +402,64 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		return
 	}
 
+	// Look up ledger accounts to resolve grootboekcode → internal ID
+	var ledgerAccounts []map[string]any
+	raw, err := client.GetActiveLedgerAccounts()
+	if err == nil {
+		json.Unmarshal(raw, &ledgerAccounts)
+	}
+
 	type result struct {
 		ID     int    `json:"id"`
-		Status string `json:"status"` // ok or error
+		Status string `json:"status"`
 		Error  string `json:"error,omitempty"`
 		MutNr  string `json:"mutNr,omitempty"`
 	}
 
 	var results []result
 	for _, item := range req.Items {
-		raw, err := client.CreateMutatie(item)
+		// Resolve tegenrekening code to internal ID
+		tegenRekeningId := 0
+		for _, acc := range ledgerAccounts {
+			code, _ := acc["code"].(string)
+			if code == item.Grootboekcode {
+				if id, ok := acc["id"].(float64); ok {
+					tegenRekeningId = int(id)
+				}
+				break
+			}
+		}
+
+		// Build the full mutation payload
+		mutPayload, _ := json.Marshal(map[string]any{
+			"mutatie": map[string]any{
+				"rekening":    item.GrootboekId,
+				"datum":       time.Now().Format("2006-01-02"),
+				"soort":       item.Soort,
+				"omschrijving": item.Omschrijving,
+			},
+			"mutatieRegels": []map[string]any{{
+				"index":        0,
+				"bedrag":       item.Bedrag,
+				"btw":          0,
+				"btwCode":      item.BTWCode,
+				"tegenRekening": tegenRekeningId,
+				"relatieId":    nilIfZero(item.RelatieId),
+				"factuur":      item.Factuurnummer,
+			}},
+			"importId": item.ID,
+		})
+
+		mutResp, err := client.CreateMutatie(mutPayload)
 		if err != nil {
-			results = append(results, result{Status: "error", Error: err.Error()})
+			results = append(results, result{ID: item.ID, Status: "error", Error: "Boeking mislukt"})
 			continue
 		}
 		var resp struct {
 			MutNr int `json:"mutNr"`
 		}
-		json.Unmarshal(raw, &resp)
-		results = append(results, result{Status: "ok", MutNr: fmt.Sprintf("%d", resp.MutNr)})
+		json.Unmarshal(mutResp, &resp)
+		results = append(results, result{ID: item.ID, Status: "ok", MutNr: fmt.Sprintf("%d", resp.MutNr)})
 	}
 
 	// Invalidate classification cache

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -156,6 +157,8 @@ func (s *WebAuthnService) FinishRegistration(ctx context.Context, challengeID st
 		SignCount:       credential.Authenticator.SignCount,
 		FriendlyName:    "Eerste passkey",
 	}
+	log.Printf("Storing new credential for %s: id=%s (len=%d)",
+		entry.Email, hex.EncodeToString(credential.ID), len(credential.ID))
 	if err := s.db.StoreCredential(ctx, dbCred); err != nil {
 		return nil, fmt.Errorf("storing credential: %w", err)
 	}
@@ -229,10 +232,11 @@ func (s *WebAuthnService) FinishLogin(ctx context.Context, challengeID string, r
 	}
 
 	handler := func(rawID, userHandle []byte) (gowebauthn.User, error) {
-		log.Printf("Discoverable login: looking up credential ID (len=%d), userHandle (len=%d)", len(rawID), len(userHandle))
+		log.Printf("Discoverable login: rawID=%s userHandle=%s",
+			hex.EncodeToString(rawID), hex.EncodeToString(userHandle))
 		cred, err := s.db.GetCredentialByID(ctx, rawID)
 		if err != nil {
-			log.Printf("Credential not found for ID (len=%d): %v", len(rawID), err)
+			log.Printf("Credential lookup failed for rawID=%s: %v", hex.EncodeToString(rawID), err)
 			return nil, fmt.Errorf("credential not found")
 		}
 		log.Printf("Found credential for user %s", cred.UserID)

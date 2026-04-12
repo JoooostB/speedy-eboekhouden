@@ -81,10 +81,12 @@ func main() {
 	passkeyHandler := handler.NewPasskeyHandler(webauthnSvc, store, cfg, db, encKey, mailer, r2Client)
 	ebAuthHandler := handler.NewEBoekhoudenAuthHandler(store, db, encKey)
 	settingsHandler := handler.NewSettingsHandler(db, encKey)
+	passkeySettingsHandler := handler.NewPasskeySettingsHandler(db)
 	invoiceHandler := handler.NewInvoiceHandler(claudeSvc, db, encKey, r2Client, redisClient)
 	avatarHandler := handler.NewAvatarHandler(r2Client, db)
 	classifyHandler := handler.NewClassifyHandler(claudeSvc, db, encKey)
-	inboxHandler := handler.NewInboxHandler(claudeSvc, db, encKey, redisClient, r2Client)
+	inboxHandler := handler.NewInboxHandler(claudeSvc, db, encKey, redisClient, r2Client, store)
+	bankStatementsHandler := handler.NewBankStatementsHandler(store, db)
 	soapHandler := handler.NewSoapAPIHandler(db, encKey)
 	restHandler := handler.NewRestAPIHandler(db, encKey)
 
@@ -145,6 +147,9 @@ func main() {
 			authed.DELETE("/settings/soap-credentials", settingsHandler.DeleteSoapCredentials)
 			authed.PUT("/settings/rest-token", settingsHandler.SetRestAccessToken)
 			authed.DELETE("/settings/rest-token", settingsHandler.DeleteRestAccessToken)
+			authed.GET("/settings/passkeys", passkeySettingsHandler.List)
+			authed.PATCH("/settings/passkeys/:id", passkeySettingsHandler.Rename)
+			authed.DELETE("/settings/passkeys/:id", passkeySettingsHandler.Delete)
 
 			// SOAP API (requires SOAP credentials)
 			authed.GET("/soap/relaties", soapHandler.GetRelaties)
@@ -185,11 +190,11 @@ func main() {
 				eb.POST("/hours", handler.SubmitHours)
 
 				// Bank statements
-				eb.GET("/bankstatements", handler.GetBankStatements)
-				eb.GET("/bankstatements/count", handler.GetBankStatementCount)
-				eb.GET("/bankstatements/lastdata", handler.GetLastMutatieData)
-				eb.GET("/bankstatements/:id/suggestion", handler.GetBankStatementSuggestion)
-				eb.POST("/bankstatements/:id/process", handler.ProcessBankStatement)
+				eb.GET("/bankstatements", bankStatementsHandler.GetBankStatements)
+				eb.GET("/bankstatements/count", bankStatementsHandler.GetBankStatementCount)
+				eb.GET("/bankstatements/lastdata", bankStatementsHandler.GetLastMutatieData)
+				eb.GET("/bankstatements/:id/suggestion", bankStatementsHandler.GetBankStatementSuggestion)
+				eb.POST("/bankstatements/:id/process", bankStatementsHandler.ProcessBankStatement)
 
 				// Mutations
 				eb.POST("/mutations", handler.CreateMutation)

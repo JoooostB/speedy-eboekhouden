@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { Box, Button, Typography, LinearProgress, Chip } from "@mui/material";
-import type { InboxClassification, InboxProcessItem, InboxProcessResult } from "../../api/types";
+import type { InboxClassification, InboxProcessItem, InboxProcessResult, LedgerAccount } from "../../api/types";
 import { api } from "../../api/client";
 import { track } from "../../analytics";
+import { BookingConfirmDialog } from "./BookingConfirmDialog";
 
 interface Props {
   selected: InboxClassification[];
   onProcessed: (results: Map<number, InboxProcessResult>) => void;
   onClear: () => void;
+  ledgerAccounts: LedgerAccount[];
 }
 
 /**
@@ -21,19 +23,28 @@ interface Props {
  * - Button is disabled during processing to prevent double-submit.
  * - Focus is managed: after completion, results are announced via live region.
  */
-export function BatchApproveBar({ selected, onProcessed, onClear }: Props) {
+export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts }: Props) {
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<{ ok: number; error: number } | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const handleApprove = async () => {
     setProcessing(true);
     setProgress(0);
     setResults(null);
 
+    // Map MutatieSoort names to numeric codes for the API
+    const soortCodes: Record<string, number> = {
+      FactuurOntvangen: 1, FactuurVerstuurd: 2,
+      FactuurbetalingOntvangen: 3, FactuurbetalingVerstuurd: 4,
+      GeldOntvangen: 5, GeldUitgegeven: 6, Memoriaal: 7,
+    };
+
     const items: InboxProcessItem[] = selected.map((item) => ({
       id: item.id,
-      soort: item.soort,
+      grootboekId: item.grootboekId,
+      soort: soortCodes[item.soort] || 6,
       grootboekcode: item.grootboekcode,
       btwCode: item.btwCode,
       omschrijving: item.aiOmschrijving || item.omschrijving,
@@ -62,6 +73,7 @@ export function BatchApproveBar({ selected, onProcessed, onClear }: Props) {
       setResults({ ok, error });
       onProcessed(allResults);
       track("Inbox Batch Approve", { count: String(selected.length), ok: String(ok), error: String(error) });
+      setConfirmOpen(false);
     } catch (err) {
       setResults({ ok: 0, error: selected.length });
     } finally {
@@ -171,7 +183,7 @@ export function BatchApproveBar({ selected, onProcessed, onClear }: Props) {
           <Button
             variant="contained"
             size="small"
-            onClick={handleApprove}
+            onClick={() => setConfirmOpen(true)}
             disabled={processing || selected.length === 0}
             sx={{ minWidth: 140, fontWeight: 600 }}
           >
@@ -179,6 +191,15 @@ export function BatchApproveBar({ selected, onProcessed, onClear }: Props) {
           </Button>
         </Box>
       </Box>
+
+      <BookingConfirmDialog
+        open={confirmOpen}
+        onClose={() => !processing && setConfirmOpen(false)}
+        items={selected}
+        ledgerAccounts={ledgerAccounts}
+        onConfirm={handleApprove}
+        processing={processing}
+      />
     </Box>
   );
 }

@@ -26,6 +26,7 @@ import { track } from "../../analytics";
 import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { RelationPicker } from "../shared/RelationPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
+import { BookingConfirmDialog } from "./BookingConfirmDialog";
 
 /**
  * Category config: color, label, and whether inline editing is shown.
@@ -94,6 +95,7 @@ export function InboxRow({
   const [expanded, setExpanded] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   // Editable fields (pre-filled from AI classification)
   const [soort, setSoort] = useState<MutatieSoort>(item.soort);
@@ -134,9 +136,16 @@ export function InboxRow({
     setProcessing(true);
     setError(null);
 
+    const soortCodes: Record<string, number> = {
+      FactuurOntvangen: 1, FactuurVerstuurd: 2,
+      FactuurbetalingOntvangen: 3, FactuurbetalingVerstuurd: 4,
+      GeldOntvangen: 5, GeldUitgegeven: 6, Memoriaal: 7,
+    };
+
     const payload: InboxProcessItem = {
       id: item.id,
-      soort,
+      grootboekId: item.grootboekId,
+      soort: soortCodes[soort] || 6,
       grootboekcode: selectedLedger?.code || item.grootboekcode,
       btwCode,
       omschrijving,
@@ -149,6 +158,7 @@ export function InboxRow({
       if (res.results[0]?.status === "ok") {
         onProcessed(item.id);
         track("Inbox Process Single", { category: item.category });
+        setConfirmOpen(false);
       } else {
         setError(res.results[0]?.error || "Verwerking mislukt");
       }
@@ -157,6 +167,17 @@ export function InboxRow({
     } finally {
       setProcessing(false);
     }
+  };
+
+  // Build the InboxClassification preview the dialog expects (with the user's
+  // current edits applied) so the confirmation summary reflects what will
+  // actually be booked.
+  const previewItem: InboxClassification = {
+    ...item,
+    grootboekcode: selectedLedger?.code || item.grootboekcode,
+    btwCode,
+    soort,
+    aiOmschrijving: omschrijving,
   };
 
   // Invoice file upload — delegate to parent to use the shared review dialog
@@ -474,7 +495,7 @@ export function InboxRow({
               <Button
                 variant="contained"
                 size="small"
-                onClick={handleProcess}
+                onClick={() => setConfirmOpen(true)}
                 disabled={processing || processed}
                 sx={{ fontWeight: 600, minWidth: 120 }}
               >
@@ -488,6 +509,15 @@ export function InboxRow({
           </Box>
         </Collapse>
       )}
+
+      <BookingConfirmDialog
+        open={confirmOpen}
+        onClose={() => !processing && setConfirmOpen(false)}
+        items={[previewItem]}
+        ledgerAccounts={ledgerAccounts}
+        onConfirm={handleProcess}
+        processing={processing}
+      />
     </Box>
   );
 }

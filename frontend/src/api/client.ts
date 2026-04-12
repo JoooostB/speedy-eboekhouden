@@ -59,6 +59,14 @@ async function request<T>(
       window.dispatchEvent(new CustomEvent("auth:expired"));
     }
 
+    // 412 Precondition Failed with eboekhouden_session_expired means the
+    // upstream e-boekhouden cookie is no longer valid. The backend has
+    // already cleared the stored token; the frontend needs to update its
+    // own connection state and prompt the user to reconnect.
+    if (res.status === 412 && body.error === "eboekhouden_session_expired") {
+      window.dispatchEvent(new CustomEvent("eb:session-expired"));
+    }
+
     throw new ApiError(res.status, message);
   }
 
@@ -382,6 +390,26 @@ export const api = {
   // Settings
   getSettings() {
     return request<SettingsResponse>("/settings");
+  },
+
+  // Passkey management
+  listPasskeys() {
+    return request<{ passkeys: Array<{ id: string; friendlyName: string; createdAt: string; transport: string[] }> }>(
+      "/settings/passkeys",
+    );
+  },
+
+  renamePasskey(id: string, friendlyName: string) {
+    return request<{ status: string }>(`/settings/passkeys/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ friendlyName }),
+    });
+  },
+
+  deletePasskey(id: string) {
+    return request<{ status: string }>(`/settings/passkeys/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   },
 
   checkApiKeyStatus() {

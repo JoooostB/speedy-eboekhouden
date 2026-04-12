@@ -81,6 +81,22 @@ func (db *DB) UpdateSignCount(ctx context.Context, credID []byte, count uint32) 
 	return nil
 }
 
+// RenameCredential updates the friendly_name for a credential. The user_id
+// check ensures users can only rename their own credentials.
+func (db *DB) RenameCredential(ctx context.Context, credID []byte, userID, name string) error {
+	res, err := db.Pool.Exec(ctx,
+		`UPDATE passkey_credentials SET friendly_name = $1 WHERE id = $2 AND user_id = $3`,
+		name, credID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("renaming credential: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("credential not found")
+	}
+	return nil
+}
+
 // DeleteCredential removes a passkey credential.
 func (db *DB) DeleteCredential(ctx context.Context, credID []byte, userID string) error {
 	_, err := db.Pool.Exec(ctx,
