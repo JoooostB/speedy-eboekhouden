@@ -46,6 +46,8 @@ interface InvoiceEdit {
   ledgerAccount: LedgerAccount | null;
   /** Linked bank statement line ID (marks it as processed on submit) */
   importId: number;
+  /** Bonnetje mode: book as "Geld uitgegeven" without a relation. */
+  isReceipt: boolean;
 }
 
 interface SubmitResult {
@@ -122,39 +124,62 @@ export function InvoiceReviewDialog({
       setProgress(i);
 
       try {
-        if (!inv.relation) {
-          throw new Error("Geen relatie geselecteerd");
-        }
         if (!inv.ledgerAccount) {
           throw new Error("Geen grootboekrekening geselecteerd");
         }
 
-        await api.submitInvoiceFull({
-          datum: inv.datum,
-          leverancier: inv.leverancier,
-          factuurnummer: inv.factuurnummer,
-          omschrijving: inv.omschrijving,
-          bedragExcl: parseFloat(inv.bedragExcl) || 0,
-          bedragIncl: parseFloat(inv.bedragIncl) || 0,
-          btwBedrag: parseFloat(inv.btwBedrag) || 0,
-          btwCode: inv.btwCode,
-          inEx: "EX",
-          relatieId: inv.relation.id,
-          tegenRekeningId: inv.ledgerAccount.id,
-          rekeningId: inv.source.crediteurenId || 0, // looked up from ledger accounts
-          uploadKey: inv.source.uploadKey,
-          filename: inv.source.filename,
-          ...(inv.importId ? { importId: inv.importId } : {}),
-        });
+        if (inv.isReceipt) {
+          // Bonnetje flow — no relation, "Geld uitgegeven" mutation.
+          if (!inv.importId) {
+            throw new Error("Koppel een afschriftregel om het bonnetje te boeken");
+          }
+          await api.submitReceipt({
+            datum: inv.datum,
+            leverancier: inv.leverancier,
+            omschrijving: inv.omschrijving,
+            bedragExcl: parseFloat(inv.bedragExcl) || 0,
+            bedragIncl: parseFloat(inv.bedragIncl) || 0,
+            btwBedrag: parseFloat(inv.btwBedrag) || 0,
+            btwCode: inv.btwCode,
+            tegenRekeningId: inv.ledgerAccount.id,
+            uploadKey: inv.source.uploadKey,
+            filename: inv.source.filename,
+            importId: inv.importId,
+          });
+        } else {
+          if (!inv.relation) {
+            throw new Error("Geen relatie geselecteerd");
+          }
+          await api.submitInvoiceFull({
+            datum: inv.datum,
+            leverancier: inv.leverancier,
+            factuurnummer: inv.factuurnummer,
+            omschrijving: inv.omschrijving,
+            bedragExcl: parseFloat(inv.bedragExcl) || 0,
+            bedragIncl: parseFloat(inv.bedragIncl) || 0,
+            btwBedrag: parseFloat(inv.btwBedrag) || 0,
+            btwCode: inv.btwCode,
+            inEx: "EX",
+            relatieId: inv.relation.id,
+            tegenRekeningId: inv.ledgerAccount.id,
+            rekeningId: inv.source.crediteurenId || 0,
+            uploadKey: inv.source.uploadKey,
+            filename: inv.source.filename,
+            ...(inv.importId ? { importId: inv.importId } : {}),
+          });
+        }
 
         submitResults.push({
           filename: inv.source.filename,
           status: "ok",
-          details: `${inv.leverancier} — ${formatEuro(inv.bedragIncl)} — ${inv.factuurnummer}`,
+          details: inv.isReceipt
+            ? `Bonnetje: ${inv.leverancier || "onbekend"} — ${formatEuro(inv.bedragIncl)}`
+            : `${inv.leverancier} — ${formatEuro(inv.bedragIncl)} — ${inv.factuurnummer}`,
         });
 
         track("Invoice Review Submitted", {
           confidence: String(Math.round(inv.source.invoice.confidence * 100)),
+          mode: inv.isReceipt ? "receipt" : "invoice",
         });
       } catch (err: any) {
         submitResults.push({
@@ -257,13 +282,16 @@ export function InvoiceReviewDialog({
                 component="fieldset"
                 sx={{
                   border: "1px solid",
-                  borderColor: (!inv.relation || !inv.ledgerAccount) ? "error.main" : "divider",
+                  borderColor:
+                    (!inv.ledgerAccount || (!inv.isReceipt && !inv.relation) || (inv.isReceipt && !inv.importId))
+                      ? "error.main"
+                      : "divider",
                   borderRadius: 2,
                   p: { xs: 2, sm: 3 },
                   m: 0,
                 }}
               >
-                {/* Legend: filename + confidence badge */}
+                {/* Legend: filename + confidence badge + bonnetje toggle */}
                 <Typography
                   component="legend"
                   sx={{
@@ -278,6 +306,23 @@ export function InvoiceReviewDialog({
                 >
                   {inv.source.filename}
                   <ConfidenceBadge confidence={inv.source.invoice.confidence} />
+                  <Chip
+                    label={inv.isReceipt ? "Bonnetje" : "Factuur"}
+                    size="small"
+                    color={inv.isReceipt ? "warning" : "default"}
+                    variant={inv.isReceipt ? "filled" : "outlined"}
+                    onClick={() => updateField(index, "isReceipt", !inv.isReceipt)}
+                    disabled={submitting}
+                    sx={{ fontWeight: 600, fontSize: "0.6875rem", height: 22, cursor: "pointer" }}
+                    aria-label={inv.isReceipt
+                      ? "Wisselen naar factuur (met leverancier)"
+                      : "Wisselen naar bonnetje (zonder leverancier)"}
+                  />
+                  {inv.isReceipt && inv.source.invoice.receiptReason && (
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 400 }}>
+                      ({inv.source.invoice.receiptReason})
+                    </Typography>
+                  )}
                 </Typography>
 
                 {/*
@@ -301,48 +346,53 @@ export function InvoiceReviewDialog({
 
                   {/* Form fields pane */}
                   <Box>
-                    {/* Row 1: Leverancier + Relatie */}
+                    {/* Row 1: Leverancier + Relatie (relatie verbergen voor bonnetjes) */}
                     <Box
                       sx={{
                         display: "grid",
-                        gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" },
+                        gridTemplateColumns: { xs: "1fr", sm: inv.isReceipt ? "1fr" : "1fr 1fr" },
                         gap: 2,
                       }}
                     >
                       <TextField
-                        label="Leverancier"
+                        label={inv.isReceipt ? "Leverancier (alleen omschrijving)" : "Leverancier"}
                         value={inv.leverancier}
                         onChange={(e) => updateField(index, "leverancier", e.target.value)}
                         size="small"
                         fullWidth
                         disabled={submitting}
+                        helperText={inv.isReceipt ? "Wordt alleen gebruikt in de omschrijving — geen relatie aangemaakt." : undefined}
                       />
-                      <RelationPicker
-                        value={inv.relation}
-                        onChange={(r) => updateField(index, "relation", r)}
-                        label="Relatie (crediteur)"
-                        disabled={submitting}
-                        grootboekrekeningId={inv.source.crediteurenId || 0}
-                      />
+                      {!inv.isReceipt && (
+                        <RelationPicker
+                          value={inv.relation}
+                          onChange={(r) => updateField(index, "relation", r)}
+                          label="Relatie (crediteur)"
+                          disabled={submitting}
+                          grootboekrekeningId={inv.source.crediteurenId || 0}
+                        />
+                      )}
                     </Box>
 
-                    {/* Row 2: Factuurnummer + Datum */}
+                    {/* Row 2: Factuurnummer (factuur only) + Datum */}
                     <Box
                       sx={{
                         display: "grid",
-                        gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" },
+                        gridTemplateColumns: { xs: "1fr", sm: inv.isReceipt ? "1fr" : "1fr 1fr" },
                         gap: 2,
                         mt: 2,
                       }}
                     >
-                      <TextField
-                        label="Factuurnummer"
-                        value={inv.factuurnummer}
-                        onChange={(e) => updateField(index, "factuurnummer", e.target.value)}
-                        size="small"
-                        fullWidth
-                        disabled={submitting}
-                      />
+                      {!inv.isReceipt && (
+                        <TextField
+                          label="Factuurnummer"
+                          value={inv.factuurnummer}
+                          onChange={(e) => updateField(index, "factuurnummer", e.target.value)}
+                          size="small"
+                          fullWidth
+                          disabled={submitting}
+                        />
+                      )}
                       <TextField
                         label="Datum"
                         type="date"
@@ -558,14 +608,16 @@ export function InvoiceReviewDialog({
           </Button>
         ) : (
           <>
-            {invoices.some((inv) => !inv.relation || !inv.ledgerAccount) && !submitting && (
+            {invoices.some((inv) => !inv.ledgerAccount || (!inv.isReceipt && !inv.relation) || (inv.isReceipt && !inv.importId)) && !submitting && (
               <Typography variant="body2" color="error" sx={{ mr: "auto", pl: 1 }}>
                 {(() => {
-                  const missingRel = invoices.filter((inv) => !inv.relation).length;
+                  const missingRel = invoices.filter((inv) => !inv.isReceipt && !inv.relation).length;
                   const missingLedger = invoices.filter((inv) => !inv.ledgerAccount).length;
+                  const missingBank = invoices.filter((inv) => inv.isReceipt && !inv.importId).length;
                   const parts = [];
                   if (missingRel) parts.push(`${missingRel} zonder relatie`);
                   if (missingLedger) parts.push(`${missingLedger} zonder tegenrekening`);
+                  if (missingBank) parts.push(`${missingBank} bonnetje${missingBank > 1 ? "s" : ""} zonder afschriftregel`);
                   return `Kan niet boeken: ${parts.join(", ")}`;
                 })()}
               </Typography>
@@ -576,7 +628,15 @@ export function InvoiceReviewDialog({
             <Button
               variant="contained"
               onClick={handleSubmitAll}
-              disabled={submitting || invoices.some((inv) => !inv.relation || !inv.ledgerAccount)}
+              disabled={
+                submitting ||
+                invoices.some(
+                  (inv) =>
+                    !inv.ledgerAccount ||
+                    (!inv.isReceipt && !inv.relation) ||
+                    (inv.isReceipt && !inv.importId),
+                )
+              }
               startIcon={
                 submitting ? (
                   /* Spinner icon — inline SVG spinning via CSS */
@@ -671,6 +731,7 @@ function buildEdit(a: InvoiceAnalyzeResponse, ledgerAccounts: LedgerAccount[]): 
     relation: matchedRelation,
     ledgerAccount: matchedLedger,
     importId: a.matchedBankLine?.id ?? 0,
+    isReceipt: inv.isReceipt ?? false,
   };
 }
 

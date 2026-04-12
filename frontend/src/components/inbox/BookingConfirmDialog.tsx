@@ -7,24 +7,24 @@ import {
   Button,
   Box,
   Typography,
-  Chip,
   Alert,
   CircularProgress,
-  Table,
-  TableHead,
-  TableBody,
-  TableRow,
-  TableCell,
+  Divider,
+  TextField,
 } from "@mui/material";
-import type { InboxClassification, LedgerAccount, OpenPost } from "../../api/types";
+import type { InboxClassification, LedgerAccount, OpenPost, VATCode } from "../../api/types";
 import { api } from "../../api/client";
+import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
+import { VATCodePicker } from "../shared/VATCodePicker";
 
 interface Props {
   open: boolean;
   onClose: () => void;
   items: InboxClassification[];
   ledgerAccounts: LedgerAccount[];
-  onConfirm: () => Promise<void> | void;
+  vatCodes: VATCode[];
+  /** Called with the edited item set when the user confirms. */
+  onConfirm: (editedItems: InboxClassification[]) => Promise<void> | void;
   processing: boolean;
 }
 
@@ -46,7 +46,7 @@ function fmtDate(s: string) {
   if (!s) return "";
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return s;
-  return new Intl.DateTimeFormat("nl-NL", { day: "numeric", month: "short" }).format(d);
+  return new Intl.DateTimeFormat("nl-NL", { day: "numeric", month: "short", year: "numeric" }).format(d);
 }
 
 /**
@@ -54,25 +54,52 @@ function fmtDate(s: string) {
  * without an invoice attached. Used by both the batch approve bar and the
  * single-item "Verwerken" button on InboxRow.
  *
- * Shows a summary table of how each line will be booked (tegenrekening, BTW,
- * soort) so the user can sanity-check before committing. For positive amounts
- * (potential refunds), it cross-references open crediteuren posts and flags
- * any matches so the user can decide whether to couple them to an existing
- * invoice instead of booking as a generic income line.
+ * Each item shows:
+ * - Read-only metadata: datum, bedrag, soort
+ * - Editable: tegenrekening (LedgerAccountPicker showing code + name),
+ *   BTW (VATCodePicker), omschrijving (TextField)
  *
- * Pure presentation + side-effect: the parent owns the actual processing
- * logic and passes onConfirm to be called when the user confirms.
+ * Local edits are kept in dialog state and passed back via onConfirm so the
+ * caller can submit the user's final values rather than the original AI
+ * suggestion. For positive amounts (potential refunds), it cross-references
+ * open crediteuren posts and flags any matches inline.
  */
 export function BookingConfirmDialog({
   open,
   onClose,
   items,
   ledgerAccounts,
+  vatCodes,
   onConfirm,
   processing,
 }: Props) {
   const [refundMatches, setRefundMatches] = useState<Map<number, OpenPost>>(new Map());
   const [matchingRefunds, setMatchingRefunds] = useState(false);
+  // Editable per-item state, keyed by inbox item id.
+  const [edits, setEdits] = useState<
+    Map<number, { ledger: LedgerAccount | null; btwCode: string; omschrijving: string }>
+  >(new Map());
+
+  const ledgerLookup = useMemo(() => {
+    const map = new Map<string, LedgerAccount>();
+    ledgerAccounts.forEach((a) => map.set(a.code, a));
+    return map;
+  }, [ledgerAccounts]);
+
+  // Reset local edits whenever the dialog opens with a (possibly different)
+  // set of items. Pre-fill from the items' current values.
+  useEffect(() => {
+    if (!open) return;
+    const next = new Map<number, { ledger: LedgerAccount | null; btwCode: string; omschrijving: string }>();
+    items.forEach((item) => {
+      next.set(item.id, {
+        ledger: ledgerLookup.get(item.grootboekcode) || null,
+        btwCode: item.btwCode || "GEEN",
+        omschrijving: item.aiOmschrijving || item.omschrijving,
+      });
+    });
+    setEdits(next);
+  }, [open, items, ledgerLookup]);
 
   // Positive amounts on a non-invoice booking type may actually be refunds
   // of an earlier supplier invoice. Try to match them against open crediteuren.
@@ -111,14 +138,36 @@ export function BookingConfirmDialog({
       .finally(() => setMatchingRefunds(false));
   }, [open, items, potentialRefundIds]);
 
-  const ledgerLookup = useMemo(() => {
-    const map = new Map<string, LedgerAccount>();
-    ledgerAccounts.forEach((a) => map.set(a.code, a));
-    return map;
-  }, [ledgerAccounts]);
-
   const isSingle = items.length === 1;
-  const incomplete = items.some((i) => !i.grootboekcode);
+  const incomplete = items.some((i) => {
+    const e = edits.get(i.id);
+    return !e || !e.ledger;
+  });
+
+  const updateEdit = (id: number, patch: Partial<{ ledger: LedgerAccount | null; btwCode: string; omschrijving: string }>) => {
+    setEdits((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(id) || { ledger: null, btwCode: "GEEN", omschrijving: "" };
+      next.set(id, { ...existing, ...patch });
+      return next;
+    });
+  };
+
+  const handleConfirm = () => {
+    // Merge edits back into the items so the caller submits the user's final values.
+    const editedItems: InboxClassification[] = items.map((item) => {
+      const e = edits.get(item.id);
+      if (!e) return item;
+      return {
+        ...item,
+        grootboekcode: e.ledger?.code || item.grootboekcode,
+        btwCode: e.btwCode,
+        aiOmschrijving: e.omschrijving,
+        omschrijving: e.omschrijving,
+      };
+    });
+    onConfirm(editedItems);
+  };
 
   return (
     <Dialog
@@ -133,14 +182,14 @@ export function BookingConfirmDialog({
       </DialogTitle>
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Controleer hoe {isSingle ? "deze regel wordt" : "deze regels worden"} geboekt in
-          e-Boekhouden. Klik op Bevestigen om de mutatie aan te maken.
+          Controleer hoe {isSingle ? "deze regel wordt" : "deze regels worden"} geboekt. Pas indien nodig
+          de tegenrekening, BTW of omschrijving aan en klik op Bevestigen.
         </Typography>
 
         {refundMatches.size > 0 && (
           <Alert severity="info" sx={{ mb: 2 }}>
             {refundMatches.size === 1
-              ? "Een regel komt overeen met een openstaande crediteurenfactuur — dit kan een terugbetaling zijn. Controleer of de boeking klopt of koppel handmatig aan de factuur."
+              ? "Een regel komt overeen met een openstaande crediteurenfactuur — dit kan een terugbetaling zijn. Controleer of de boeking klopt."
               : `${refundMatches.size} regels komen overeen met openstaande crediteurenfacturen — mogelijke terugbetalingen.`}
           </Alert>
         )}
@@ -151,91 +200,101 @@ export function BookingConfirmDialog({
           </Alert>
         )}
 
-        <Box sx={{ overflow: "auto" }}>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Datum</TableCell>
-                <TableCell align="right">Bedrag</TableCell>
-                <TableCell>Omschrijving</TableCell>
-                <TableCell>Tegenrekening</TableCell>
-                <TableCell>BTW</TableCell>
-                <TableCell>Soort</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {items.map((item) => {
-                const ledger = ledgerLookup.get(item.grootboekcode);
-                const refund = refundMatches.get(item.id);
-                const isNegative = item.bedrag < 0;
-                return (
-                  <TableRow key={item.id}>
-                    <TableCell sx={{ whiteSpace: "nowrap" }}>{fmtDate(item.datum)}</TableCell>
-                    <TableCell
-                      align="right"
-                      sx={{
-                        fontVariantNumeric: "tabular-nums",
-                        color: isNegative ? "error.main" : "success.dark",
-                        fontWeight: 600,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {fmtCurrency(item.bedrag)}
-                    </TableCell>
-                    <TableCell sx={{ maxWidth: 240 }}>
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {item.aiOmschrijving || item.omschrijving}
-                      </Typography>
-                      {refund && (
-                        <Typography
-                          variant="caption"
-                          sx={{ color: "info.main", display: "block", mt: 0.25 }}
-                        >
-                          ↳ Mogelijke terugbetaling: {refund.factuurnummer} — {refund.relatie}
-                        </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {item.grootboekcode ? (
-                        <Box>
-                          <Typography variant="body2" fontWeight={600}>
-                            {item.grootboekcode}
-                          </Typography>
-                          {ledger && (
-                            <Typography variant="caption" color="text.secondary">
-                              {ledger.omschrijving}
-                            </Typography>
-                          )}
-                        </Box>
-                      ) : (
-                        <Chip
-                          size="small"
-                          label="ontbreekt"
-                          color="error"
-                          sx={{ height: 20, fontSize: "0.6875rem" }}
-                        />
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption">{item.btwCode || "GEEN"}</Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption">
-                        {SOORT_LABELS[item.soort] || item.soort}
-                      </Typography>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+        {/* One stacked card per item — read-only metadata on top, editable form below. */}
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {items.map((item, idx) => {
+            const edit = edits.get(item.id);
+            const refund = refundMatches.get(item.id);
+            const isNegative = item.bedrag < 0;
+            return (
+              <Box
+                key={item.id}
+                sx={{
+                  border: "1px solid",
+                  borderColor: edit?.ledger ? "divider" : "error.light",
+                  borderRadius: 2,
+                  p: 2,
+                }}
+              >
+                {/* Read-only metadata row */}
+                <Box
+                  sx={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "baseline",
+                    gap: 2,
+                    mb: 1.5,
+                  }}
+                >
+                  <Typography
+                    variant="body1"
+                    sx={{
+                      fontWeight: 700,
+                      fontVariantNumeric: "tabular-nums",
+                      color: isNegative ? "error.main" : "success.dark",
+                    }}
+                  >
+                    {fmtCurrency(item.bedrag)}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {fmtDate(item.datum)}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    · {SOORT_LABELS[item.soort] || item.soort}
+                  </Typography>
+                  {refund && (
+                    <Typography variant="caption" sx={{ color: "info.main", flexBasis: "100%" }}>
+                      ↳ Mogelijke terugbetaling: {refund.factuurnummer} — {refund.relatie}
+                    </Typography>
+                  )}
+                </Box>
+
+                <Divider sx={{ mb: 1.5 }} />
+
+                {/* Editable form */}
+                <Box
+                  sx={{
+                    display: "grid",
+                    gap: 1.5,
+                    gridTemplateColumns: { xs: "1fr", sm: "2fr 1fr" },
+                  }}
+                >
+                  <LedgerAccountPicker
+                    accounts={ledgerAccounts}
+                    value={edit?.ledger ?? null}
+                    onChange={(ledger) => updateEdit(item.id, { ledger })}
+                    label="Tegenrekening"
+                  />
+                  <VATCodePicker
+                    codes={vatCodes}
+                    value={edit?.btwCode ?? "GEEN"}
+                    onChange={(btwCode) => updateEdit(item.id, { btwCode })}
+                    label="BTW"
+                  />
+                  <TextField
+                    label="Omschrijving"
+                    value={edit?.omschrijving ?? ""}
+                    onChange={(e) => updateEdit(item.id, { omschrijving: e.target.value })}
+                    size="small"
+                    fullWidth
+                    multiline
+                    maxRows={3}
+                    sx={{ gridColumn: { sm: "1 / -1" } }}
+                  />
+                </Box>
+
+                {/* Original bank line description for context */}
+                {item.omschrijving && item.omschrijving !== edit?.omschrijving && (
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+                    Bankregel: {item.omschrijving}
+                  </Typography>
+                )}
+
+                {/* Footer separator only between items */}
+                {!isSingle && idx < items.length - 1 && <Box sx={{ mt: 1 }} />}
+              </Box>
+            );
+          })}
         </Box>
 
         {matchingRefunds && (
@@ -253,7 +312,7 @@ export function BookingConfirmDialog({
         </Button>
         <Button
           variant="contained"
-          onClick={() => onConfirm()}
+          onClick={handleConfirm}
           disabled={processing || incomplete}
           sx={{ minWidth: 140, fontWeight: 600 }}
         >

@@ -18,6 +18,7 @@ import type {
   InvoiceAnalyzeResponse,
   InvoiceMatchResponse,
   InvoiceSubmitFullRequest,
+  InvoiceSubmitReceiptRequest,
   LedgerAccount,
   MeResponse,
   Mutatie,
@@ -304,6 +305,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     });
+  },
+
+  submitReceipt(data: InvoiceSubmitReceiptRequest) {
+    return request<{ mutNr: number; mutId: number; archived: boolean; linked: boolean }>(
+      "/invoices/submit-receipt",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    );
   },
 
   // Claude classification

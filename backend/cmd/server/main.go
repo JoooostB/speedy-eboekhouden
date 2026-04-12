@@ -220,6 +220,7 @@ func main() {
 				eb.POST("/invoices/analyze", invoiceHandler.Analyze)
 				eb.POST("/invoices/submit", invoiceHandler.Submit)
 				eb.POST("/invoices/submit-full", invoiceHandler.SubmitFull)
+				eb.POST("/invoices/submit-receipt", invoiceHandler.SubmitReceipt)
 			}
 		}
 	}

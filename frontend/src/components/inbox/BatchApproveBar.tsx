@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Box, Button, Typography, LinearProgress, Chip } from "@mui/material";
-import type { InboxClassification, InboxProcessItem, InboxProcessResult, LedgerAccount } from "../../api/types";
+import type { InboxClassification, InboxProcessItem, InboxProcessResult, LedgerAccount, VATCode } from "../../api/types";
 import { api } from "../../api/client";
 import { track } from "../../analytics";
 import { BookingConfirmDialog } from "./BookingConfirmDialog";
@@ -10,6 +10,7 @@ interface Props {
   onProcessed: (results: Map<number, InboxProcessResult>) => void;
   onClear: () => void;
   ledgerAccounts: LedgerAccount[];
+  vatCodes: VATCode[];
 }
 
 /**
@@ -23,13 +24,14 @@ interface Props {
  * - Button is disabled during processing to prevent double-submit.
  * - Focus is managed: after completion, results are announced via live region.
  */
-export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts }: Props) {
+export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts, vatCodes }: Props) {
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<{ ok: number; error: number } | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const handleApprove = async () => {
+  // Receives the items as edited by the user in the confirm dialog.
+  const handleApprove = async (editedItems: InboxClassification[]) => {
     setProcessing(true);
     setProgress(0);
     setResults(null);
@@ -41,7 +43,7 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
       GeldOntvangen: 5, GeldUitgegeven: 6, Memoriaal: 7,
     };
 
-    const items: InboxProcessItem[] = selected.map((item) => ({
+    const items: InboxProcessItem[] = editedItems.map((item) => ({
       id: item.id,
       grootboekId: item.grootboekId,
       soort: soortCodes[item.soort] || 6,
@@ -62,7 +64,7 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
         const chunk = items.slice(i, i + chunkSize);
         const res = await api.processInboxBatch(chunk);
         res.results.forEach((r, idx) => {
-          const id = selected[i + idx].id;
+          const id = chunk[idx].id;
           allResults.set(id, r);
           if (r.status === "ok") ok++;
           else error++;
@@ -72,10 +74,10 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
 
       setResults({ ok, error });
       onProcessed(allResults);
-      track("Inbox Batch Approve", { count: String(selected.length), ok: String(ok), error: String(error) });
+      track("Inbox Batch Approve", { count: String(editedItems.length), ok: String(ok), error: String(error) });
       setConfirmOpen(false);
     } catch (err) {
-      setResults({ ok: 0, error: selected.length });
+      setResults({ ok: 0, error: editedItems.length });
     } finally {
       setProcessing(false);
     }
@@ -197,6 +199,7 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
         onClose={() => !processing && setConfirmOpen(false)}
         items={selected}
         ledgerAccounts={ledgerAccounts}
+        vatCodes={vatCodes}
         onConfirm={handleApprove}
         processing={processing}
       />

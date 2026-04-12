@@ -31,6 +31,12 @@ Fields to extract:
   * If supplier is from outside the EU (US, UK, etc.) → use BU_EU_INK
   * If the invoice explicitly charges Dutch BTW → use HOOG_INK_21 or LAAG_INK_9 as normal
 - isReverseCharge: boolean — true if this is a reverse charge invoice (verlegde BTW). Set to true when btwCode is VERL_INK, VERL_INK_L9, BU_EU_INK, or BI_EU_INK.
+- isReceipt: boolean — true when this document is a bonnetje (kassabon, kwitantie, till slip) rather than a formal factuur. Set isReceipt=true when ANY of these apply:
+  * The supplier is a restaurant, cafe, bar, lunchroom, take-away, snackbar, koffiehuis, bakery, slijterij, supermarkt, kruidenier, tankstation, parkeergarage, parkeerplaats, kiosk, food truck, or any horeca establishment
+  * The document looks like a thermal till receipt: no formal addressee, no factuurnummer (or only a transaction/till number), no payment terms — just date, items, totals
+  * bedragInclBtw is below 100 EUR AND there is no proper company invoice metadata (no leverancier address, no KvK/BTW number for the buyer, no factuurnummer)
+  Receipts (bonnetjes) get booked directly as "Geld uitgegeven" with the file attached — no leverancier relation has to be created in the boekhouding. Setting isReceipt=true tells the UI to skip the relation picker.
+- receiptReason: short Dutch string (max 60 chars) explaining WHY isReceipt is true ("Restaurant", "Supermarkt < €100", "Tankstation kassabon", etc.). Empty string when isReceipt is false.
 - confidence: 0.0-1.0 how confident you are in the extraction overall
 - redenering: brief Dutch explanation (max 100 chars) of WHY you chose this tegenrekening. Use the full account name, not abbreviations. Example: "Kantoorartikelen → Kantoorkosten" or "Brandstof → Vervoerskosten"
 - belastingAdvies: array of short Dutch tax tips relevant to this invoice. Only include when applicable. Each tip is an object with "type" and "tekst". Types and rules:

@@ -146,6 +146,10 @@ export interface InvoiceData {
   grootboekcode: string;
   btwCode: string;
   isReverseCharge: boolean;
+  /** True for bonnetjes (restaurant, supermarkt, tankstation) — book as
+   *  "Geld uitgegeven" without a leverancier relation. */
+  isReceipt: boolean;
+  receiptReason: string;
   confidence: number;
   redenering: string;
   belastingAdvies: Array<{ type: string; tekst: string }>;
@@ -190,6 +194,23 @@ export interface InvoiceSubmitFullRequest {
   uploadKey: string;
   filename: string;
   importId?: number;
+}
+
+/** Payload for POST /api/v1/invoices/submit-receipt — bonnetje without relation */
+export interface InvoiceSubmitReceiptRequest {
+  datum: string;
+  leverancier: string;
+  omschrijving: string;
+  bedragExcl: number;
+  bedragIncl: number;
+  btwBedrag: number;
+  btwCode: string;
+  tegenRekeningId: number;
+  uploadKey: string;
+  filename: string;
+  importId?: number;
+  /** Bank account internal ID — required when importId is not provided. */
+  bankAccountId?: number;
 }
 
 // Settings

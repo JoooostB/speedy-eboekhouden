@@ -702,6 +702,7 @@ export function BookkeepingInbox() {
           onProcessed={handleBatchProcessed}
           onClear={clearSelection}
           ledgerAccounts={ledgerAccounts ?? []}
+          vatCodes={vatCodes ?? []}
         />
       )}
 

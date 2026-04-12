@@ -131,10 +131,13 @@ export function InboxRow({
     if (canExpand) setExpanded((prev) => !prev);
   };
 
-  // Process a single item (from expanded form)
-  const handleProcess = async () => {
+  // Process a single item — receives the (possibly edited) item from the
+  // confirmation dialog so the user's last-minute tweaks are honored.
+  const handleProcess = async (editedItems: InboxClassification[]) => {
     setProcessing(true);
     setError(null);
+
+    const edited = editedItems[0] ?? item;
 
     const soortCodes: Record<string, number> = {
       FactuurOntvangen: 1, FactuurVerstuurd: 2,
@@ -143,14 +146,14 @@ export function InboxRow({
     };
 
     const payload: InboxProcessItem = {
-      id: item.id,
-      grootboekId: item.grootboekId,
-      soort: soortCodes[soort] || 6,
-      grootboekcode: selectedLedger?.code || item.grootboekcode,
-      btwCode,
-      omschrijving,
+      id: edited.id,
+      grootboekId: edited.grootboekId,
+      soort: soortCodes[edited.soort] || 6,
+      grootboekcode: edited.grootboekcode,
+      btwCode: edited.btwCode,
+      omschrijving: edited.aiOmschrijving || edited.omschrijving,
       relatieId: relatie?.id,
-      bedrag: Math.abs(item.bedrag),
+      bedrag: Math.abs(edited.bedrag),
     };
 
     try {
@@ -515,6 +518,7 @@ export function InboxRow({
         onClose={() => !processing && setConfirmOpen(false)}
         items={[previewItem]}
         ledgerAccounts={ledgerAccounts}
+        vatCodes={vatCodes}
         onConfirm={handleProcess}
         processing={processing}
       />

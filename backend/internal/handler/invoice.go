@@ -457,6 +457,203 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	})
 }
 
+// SubmitReceipt handles POST /api/v1/invoices/submit-receipt — books a
+// "bonnetje" (restaurant, supermarket, etc.) directly as a "Geld uitgegeven"
+// mutation, with the receipt file attached to the mutation. No leverancier
+// relation is created or linked — the supplier name is only used in the
+// description so the booking is still searchable.
+//
+// This is the lightweight cousin of SubmitFull: one mutation instead of two,
+// no crediteurenrekening lookup, no relatie required.
+func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
+	client := session.ClientFromContext(c)
+	if client == nil {
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
+		return
+	}
+
+	var req struct {
+		Datum           string  `json:"datum"`
+		Leverancier     string  `json:"leverancier"`
+		Omschrijving    string  `json:"omschrijving"`
+		BedragExcl      float64 `json:"bedragExcl"`
+		BedragIncl      float64 `json:"bedragIncl"`
+		BTWBedrag       float64 `json:"btwBedrag"`
+		BTWCode         string  `json:"btwCode"`
+		TegenRekeningId int     `json:"tegenRekeningId"`
+		UploadKey       string  `json:"uploadKey"`
+		Filename        string  `json:"filename"`
+		ImportId        int     `json:"importId,omitempty"`
+		// BankAccountId is the e-boekhouden internal ID of the bank account
+		// to debit. When ImportId is set we look it up from the bank line.
+		BankAccountId int `json:"bankAccountId,omitempty"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek"})
+		return
+	}
+
+	if req.BedragIncl <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Bedrag moet positief zijn"})
+		return
+	}
+	if math.IsNaN(req.BedragIncl) || math.IsInf(req.BedragIncl, 0) ||
+		math.IsNaN(req.BedragExcl) || math.IsInf(req.BedragExcl, 0) ||
+		math.IsNaN(req.BTWBedrag) || math.IsInf(req.BTWBedrag, 0) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig bedrag"})
+		return
+	}
+	if req.TegenRekeningId == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Selecteer een kostenrekening (grootboekrekening)"})
+		return
+	}
+	if req.BTWCode == "" {
+		req.BTWCode = "HOOG_INK_21"
+	}
+	// If excl is missing but incl + btw are present, derive it.
+	if req.BedragExcl == 0 && req.BedragIncl > 0 {
+		req.BedragExcl = req.BedragIncl - req.BTWBedrag
+	}
+
+	// Resolve the bank account: prefer the explicit field, fall back to the
+	// matched bank line's grootboekId. Without one we cannot book.
+	bankAccountId := req.BankAccountId
+	if bankAccountId == 0 && req.ImportId > 0 {
+		raw, err := client.GetImportGrid(0, 500)
+		if err == nil {
+			rows, _, _ := eboekhouden.ParseImportGrid(raw)
+			for _, row := range rows {
+				id, _ := toInt(row["id"])
+				if id == req.ImportId {
+					bankAccountId, _ = toInt(row["grootboekId"])
+					break
+				}
+			}
+		}
+	}
+	if bankAccountId == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Geen bankrekening gevonden voor deze boeking. Koppel een afschriftregel of geef bankAccountId mee."})
+		return
+	}
+
+	// Step 1: Upload PDF to e-boekhouden archive (same flow as SubmitFull).
+	var archiefFileId int
+	if req.UploadKey != "" && h.r2 != nil {
+		pdfBytes, _, err := h.r2.Download(c.Request.Context(), req.UploadKey)
+		if err != nil {
+			log.Printf("R2 download error for %s: %v", req.UploadKey, err)
+		} else {
+			datum, _ := time.Parse("2006-01-02", req.Datum)
+			if datum.IsZero() {
+				datum = time.Now()
+			}
+			folderId, err := h.findOrCreateArchiveFolder(client, datum)
+			if err != nil {
+				log.Printf("Archive folder error: %v", err)
+			} else {
+				filename := sanitizeFilename(req.Filename)
+				if filename == "" {
+					filename = sanitizeFilename(fmt.Sprintf("bonnetje_%s_%s.pdf", req.Datum, req.Leverancier))
+				}
+				pdfBase64 := base64.StdEncoding.EncodeToString(pdfBytes)
+				uploadPayload, _ := json.Marshal(map[string]any{
+					"fileName":  filename,
+					"data":      pdfBase64,
+					"overwrite": false,
+					"folderId":  folderId,
+				})
+				if _, err := client.UploadArchiveFile(uploadPayload); err != nil {
+					log.Printf("Archive upload error: %v", err)
+				} else {
+					// Resolve the file ID by listing the folder.
+					if filesRaw, err := client.GetArchiveFiles(folderId); err == nil {
+						var files []map[string]any
+						if json.Unmarshal(filesRaw, &files) == nil {
+							for _, f := range files {
+								naam, _ := f["naam"].(string)
+								if naam == filename {
+									if id, ok := f["id"].(float64); ok {
+										archiefFileId = int(id)
+									}
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Step 2: Create the "Geld uitgegeven" mutation (soort 6).
+	// Bank account is debited (rekening), cost account is credited (tegenRekening).
+	// The bedrag/btw split lets e-boekhouden include this in the BTW-aangifte.
+	desc := req.Omschrijving
+	if req.Leverancier != "" {
+		if desc == "" {
+			desc = req.Leverancier
+		} else {
+			desc = req.Leverancier + " - " + desc
+		}
+	}
+	mutPayload, _ := json.Marshal(map[string]any{
+		"mutatie": map[string]any{
+			"rekening":     bankAccountId,
+			"datum":        req.Datum,
+			"soort":        6, // GeldUitgegeven
+			"omschrijving": truncate(desc, 200),
+		},
+		"mutatieRegels": []map[string]any{{
+			"index":           0,
+			"bedrag":          req.BedragExcl,
+			"bedragExclusief": req.BedragExcl,
+			"bedragInclusief": req.BedragIncl,
+			"btw":             req.BTWBedrag,
+			"btwCode":         req.BTWCode,
+			"tegenRekening":   req.TegenRekeningId,
+		}},
+		"importId": nilIfZero(req.ImportId),
+	})
+
+	mutResp, err := client.CreateMutatie(mutPayload)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje boeken mislukt: " + err.Error()})
+		return
+	}
+
+	var mutResult struct {
+		MutNr int `json:"mutNr"`
+		MutId int `json:"mutId"`
+	}
+	json.Unmarshal(mutResp, &mutResult)
+
+	// Step 3: Link the archived file to the mutation.
+	if archiefFileId > 0 && mutResult.MutNr > 0 {
+		linkPayload, _ := json.Marshal(map[string]any{
+			"koppelId":   mutResult.MutNr,
+			"folders":    []map[string]any{{"id": archiefFileId, "soort": "F"}},
+			"koppelType": "MUT",
+		})
+		if _, err := client.LinkFileToMutation(linkPayload); err != nil {
+			log.Printf("File link error: %v", err)
+		}
+	}
+
+	// Invalidate inbox cache so the bank line disappears from the inbox view.
+	sess := session.FromContext(c)
+	if sess != nil && h.redis != nil {
+		h.redis.Del(c.Request.Context(), fmt.Sprintf("inbox:classify:%s", sess.UserID))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"mutNr":    mutResult.MutNr,
+		"mutId":    mutResult.MutId,
+		"archived": archiefFileId > 0,
+		"linked":   archiefFileId > 0 && mutResult.MutNr > 0,
+	})
+}
+
 // findOrCreateArchiveFolder finds or creates Basismap/Facturen/year/month folder structure.
 // Path: Basismap → Facturen → 2026 → 01 Januari
 func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, datum time.Time) (int, error) {

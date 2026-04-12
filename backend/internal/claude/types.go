@@ -13,6 +13,12 @@ type InvoiceData struct {
 	Grootboekcode   string            `json:"grootboekcode"`
 	BTWCode         string            `json:"btwCode"`
 	IsReverseCharge bool              `json:"isReverseCharge"`
+	// IsReceipt is true when the document is a bonnetje/till slip (restaurant,
+	// supermarket, gas station, etc.) rather than a formal invoice. Receipts
+	// can be booked as "Geld uitgegeven" with the file attached, without
+	// needing a crediteur relation.
+	IsReceipt       bool              `json:"isReceipt"`
+	ReceiptReason   string            `json:"receiptReason"`
 	Confidence      float64           `json:"confidence"`
 	Redenering      string            `json:"redenering"`
 	BelastingAdvies []BelastingAdvies `json:"belastingAdvies"`
