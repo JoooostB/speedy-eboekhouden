@@ -63,6 +63,16 @@ const theme = createTheme({
         },
       },
     },
+    // AppBar inherits from Paper so the global 12px radius above would give
+    // the top navigation rounded corners — including on mobile where it sits
+    // flush against the status bar, producing a "floating pill" look that
+    // reveals the page background between the AppBar and the device notch.
+    // defaultProps: { square: true } tells MUI to skip the radius inheritance.
+    MuiAppBar: {
+      defaultProps: {
+        square: true,
+      },
+    },
     MuiOutlinedInput: {
       styleOverrides: {
         root: {
@@ -82,6 +92,16 @@ const theme = createTheme({
         paper: {
           borderRadius: 16,
         },
+      },
+    },
+    // Paint the html element with the primary blue so iOS rubber-band
+    // overscroll at the top of the page reveals the brand color rather
+    // than white. body keeps the app background. The AppBar's own color
+    // covers the actual visible header.
+    MuiCssBaseline: {
+      styleOverrides: {
+        html: { backgroundColor: "#1565c0" },
+        body: { backgroundColor: "#f8fafc" },
       },
     },
   },

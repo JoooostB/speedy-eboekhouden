@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   Box,
   Button,
@@ -11,6 +11,8 @@ import {
   LinearProgress,
   Link,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   Alert,
   AlertTitle,
@@ -20,6 +22,8 @@ import { track } from "../../analytics";
 import { RelationPicker } from "../shared/RelationPicker";
 import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
+import { dedupePurchaseVatCodes } from "./vatCodeFilters";
+import { invoiceBlocker as evaluateInvoiceBlocker } from "./invoiceValidation";
 import type {
   InvoiceAnalyzeResponse,
   LedgerAccount,
@@ -52,9 +56,22 @@ interface InvoiceEdit {
 
 interface SubmitResult {
   filename: string;
-  status: "ok" | "error";
+  status: "ok" | "error" | "skipped" | "warning";
   error?: string;
   details?: string;
+}
+
+/** Adapter — convert the dialog's editable shape into the validation
+ *  helper's input. The helper itself lives in invoiceValidation.ts so it
+ *  can be unit-tested without dragging the whole InvoiceEdit / Relation /
+ *  LedgerAccount type web into a test file. */
+function invoiceBlocker(inv: InvoiceEdit): string | null {
+  return evaluateInvoiceBlocker({
+    hasLedgerAccount: inv.ledgerAccount !== null,
+    hasRelation: inv.relation !== null,
+    hasImportId: inv.importId !== 0,
+    isReceipt: inv.isReceipt,
+  });
 }
 
 interface Props {
@@ -93,22 +110,94 @@ export function InvoiceReviewDialog({
 }: Props) {
   // Build editable state from analyzed responses
   const [invoices, setInvoices] = useState<InvoiceEdit[]>(() =>
-    analyzed.map((a) => buildEdit(a, ledgerAccounts)),
+    analyzed.map((a) => buildEdit(a, ledgerAccounts, vatCodes)),
+  );
+
+  // Purchase-only VAT codes for the supplier invoice picker. Two layers
+  // of filtering:
+  //   1. Drop sales (*_VERK_*) codes — a supplier factuur is always a
+  //      purchase.
+  //   2. Dedupe by display label. e-boekhouden returns multiple inkoop
+  //      codes that render identically in the dropdown (legacy / historical
+  //      tariff variants like LAAG_INK_6 alongside the current LAAG_INK_9,
+  //      and a few duplicate "Btw verlegd" entries). The user can't
+  //      distinguish them visually so we keep the first occurrence per
+  //      `omschrijving + percentage`. Tested in InvoiceReviewDialog.test.tsx.
+  const purchaseVatCodes = useMemo(
+    () => dedupePurchaseVatCodes(vatCodes),
+    [vatCodes],
   );
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<SubmitResult[] | null>(null);
 
-  /** Update a single invoice field */
+  /** Flip every invoice to bonnetje- or factuur-mode in one call. Saves the
+   *  user from clicking the per-card toggle N times when uploading a stack
+   *  of receipts that should all be booked as bonnetjes. */
+  const setAllReceiptMode = useCallback((isReceipt: boolean) => {
+    setInvoices((prev) => prev.map((inv) => (inv.isReceipt === isReceipt ? inv : { ...inv, isReceipt })));
+  }, []);
+
+  /** Look up a VAT code's percentage from the vatCodes list. Used by
+   *  updateField's reconciliation so the "zero-rate" logic works for every
+   *  0% code (GEEN, VERL_INK, VERL_INK_L9, BU_EU_INK, BI_EU_INK, …) and
+   *  not just for GEEN. Returns 0 when the code isn't found — safe default. */
+  const vatRate = useCallback(
+    (code: string): number => {
+      const match = vatCodes.find((v) => v.code === code);
+      return match?.percentage ?? 0;
+    },
+    [vatCodes],
+  );
+
+  /** Update a single invoice field, keeping the bedrag/btw fields internally
+   *  consistent. The invariant is: bedragExcl + btwBedrag = bedragIncl. For
+   *  any zero-rate BTW code (GEEN or a reverse-charge variant) we force
+   *  btwBedrag to 0 and bedragExcl to match bedragIncl, because non-deductible
+   *  or shifted taxes are part of the cost and must not be split out. */
   const updateField = useCallback(
     <K extends keyof InvoiceEdit>(index: number, field: K, value: InvoiceEdit[K]) => {
       setInvoices((prev) => {
         const next = [...prev];
-        next[index] = { ...next[index], [field]: value };
+        const updated: InvoiceEdit = { ...next[index], [field]: value };
+
+        const rate = vatRate(updated.btwCode);
+
+        // Reconcile bedragen depending on which field changed.
+        if (field === "btwCode") {
+          if (rate === 0) {
+            // Zero-rate code (GEEN or reverse charge): force excl to equal
+            // incl and zero out the btw amount.
+            updated.btwBedrag = "0.00";
+            updated.bedragExcl = updated.bedragIncl;
+          } else {
+            // Non-zero rate: recompute btw from incl using the real rate.
+            const incl = parseFloat(updated.bedragIncl) || 0;
+            const btw = +(incl * rate / (100 + rate)).toFixed(2);
+            updated.btwBedrag = btw.toFixed(2);
+            updated.bedragExcl = (incl - btw).toFixed(2);
+          }
+        } else if (field === "btwBedrag") {
+          const incl = parseFloat(updated.bedragIncl) || 0;
+          const btw = parseFloat(updated.btwBedrag) || 0;
+          updated.bedragExcl = (incl - btw).toFixed(2);
+        } else if (field === "bedragIncl") {
+          const incl = parseFloat(updated.bedragIncl) || 0;
+          if (rate === 0) {
+            updated.bedragExcl = updated.bedragIncl;
+            updated.btwBedrag = "0.00";
+          } else {
+            const btw = +(incl * rate / (100 + rate)).toFixed(2);
+            updated.btwBedrag = btw.toFixed(2);
+            updated.bedragExcl = (incl - btw).toFixed(2);
+          }
+        }
+
+        next[index] = updated;
         return next;
       });
     },
-    [],
+    [vatRate],
   );
 
   /** Submit all invoices sequentially */
@@ -123,16 +212,22 @@ export function InvoiceReviewDialog({
       const inv = invoices[i];
       setProgress(i);
 
-      try {
-        if (!inv.ledgerAccount) {
-          throw new Error("Geen grootboekrekening geselecteerd");
-        }
+      // Skip incomplete rows instead of failing the whole batch. The user
+      // gets a "skipped" result entry so they know which ones still need
+      // attention; the dialog stays open so they can fix and retry.
+      const blocker = invoiceBlocker(inv);
+      if (blocker) {
+        submitResults.push({
+          filename: inv.source.filename,
+          status: "skipped",
+          error: blocker,
+        });
+        continue;
+      }
 
+      try {
         if (inv.isReceipt) {
           // Bonnetje flow — no relation, "Geld uitgegeven" mutation.
-          if (!inv.importId) {
-            throw new Error("Koppel een afschriftregel om het bonnetje te boeken");
-          }
           await api.submitReceipt({
             datum: inv.datum,
             leverancier: inv.leverancier,
@@ -141,16 +236,13 @@ export function InvoiceReviewDialog({
             bedragIncl: parseFloat(inv.bedragIncl) || 0,
             btwBedrag: parseFloat(inv.btwBedrag) || 0,
             btwCode: inv.btwCode,
-            tegenRekeningId: inv.ledgerAccount.id,
+            tegenRekeningId: inv.ledgerAccount!.id,
             uploadKey: inv.source.uploadKey,
             filename: inv.source.filename,
             importId: inv.importId,
           });
         } else {
-          if (!inv.relation) {
-            throw new Error("Geen relatie geselecteerd");
-          }
-          await api.submitInvoiceFull({
+          const fullResp = await api.submitInvoiceFull({
             datum: inv.datum,
             leverancier: inv.leverancier,
             factuurnummer: inv.factuurnummer,
@@ -160,13 +252,31 @@ export function InvoiceReviewDialog({
             btwBedrag: parseFloat(inv.btwBedrag) || 0,
             btwCode: inv.btwCode,
             inEx: "EX",
-            relatieId: inv.relation.id,
-            tegenRekeningId: inv.ledgerAccount.id,
+            relatieId: inv.relation!.id,
+            tegenRekeningId: inv.ledgerAccount!.id,
             rekeningId: inv.source.crediteurenId || 0,
             uploadKey: inv.source.uploadKey,
             filename: inv.source.filename,
             ...(inv.importId ? { importId: inv.importId } : {}),
           });
+
+          // FactuurOntvangen succeeded but the bank-line-clearing payment
+          // mutation didn't — surface as a yellow warning so the user
+          // doesn't think the booking is done.
+          if (fullResp.paymentWarning) {
+            submitResults.push({
+              filename: inv.source.filename,
+              status: "warning",
+              details: `${inv.leverancier} — ${formatEuro(inv.bedragIncl)} — ${inv.factuurnummer}`,
+              error: fullResp.paymentWarning,
+            });
+            track("Invoice Review Submitted", {
+              confidence: String(Math.round(inv.source.invoice.confidence * 100)),
+              mode: "invoice",
+              outcome: "payment_warning",
+            });
+            continue;
+          }
         }
 
         submitResults.push({
@@ -212,6 +322,13 @@ export function InvoiceReviewDialog({
   const allDone = results !== null;
   const successCount = results?.filter((r) => r.status === "ok").length ?? 0;
   const errorCount = results?.filter((r) => r.status === "error").length ?? 0;
+  const skippedCount = results?.filter((r) => r.status === "skipped").length ?? 0;
+  const warningCount = results?.filter((r) => r.status === "warning").length ?? 0;
+
+  // Pre-flight blocker counts for the action bar — drives the button label
+  // ("Boek N van M" when partial) and the inline hint underneath.
+  const blockedCount = invoices.filter((inv) => invoiceBlocker(inv) !== null).length;
+  const submittableCount = invoices.length - blockedCount;
 
   return (
     <Dialog
@@ -234,6 +351,49 @@ export function InvoiceReviewDialog({
         </Typography>
       </DialogTitle>
 
+      {/* Bulk type toggle — only visible for multi-invoice batches.
+          Lives OUTSIDE DialogTitle: MUI renders the title as <h2>, and an
+          interactive <Box>/<Button> tree inside an <h2> is invalid HTML
+          which browsers recover from by closing the <h2> early, ejecting
+          this control from the layout entirely. That's how this control
+          went silently missing in production. */}
+      {invoices.length > 1 && !allDone && (
+        <Box
+          data-testid="bulk-receipt-toggle"
+          sx={{
+            px: 3,
+            pb: 1,
+            display: "flex",
+            alignItems: "center",
+            gap: 1.5,
+            flexWrap: "wrap",
+          }}
+        >
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+            Allemaal als:
+          </Typography>
+          <Button
+            size="small"
+            variant={invoices.every((i) => !i.isReceipt) ? "contained" : "outlined"}
+            onClick={() => setAllReceiptMode(false)}
+            disabled={submitting}
+            sx={{ textTransform: "none", py: 0.25 }}
+          >
+            Factuur
+          </Button>
+          <Button
+            size="small"
+            variant={invoices.every((i) => i.isReceipt) ? "contained" : "outlined"}
+            color={invoices.every((i) => i.isReceipt) ? "warning" : "primary"}
+            onClick={() => setAllReceiptMode(true)}
+            disabled={submitting}
+            sx={{ textTransform: "none", py: 0.25 }}
+          >
+            Bonnetje
+          </Button>
+        </Box>
+      )}
+
       {/* Progress bar during submission */}
       {submitting && (
         <LinearProgress
@@ -250,20 +410,30 @@ export function InvoiceReviewDialog({
         {/* Results display */}
         {allDone && (
           <Alert
-            severity={errorCount === 0 ? "success" : "warning"}
+            severity={errorCount === 0 && skippedCount === 0 && warningCount === 0 ? "success" : "warning"}
             sx={{ mb: 3 }}
             role="status"
             aria-live="polite"
           >
             <AlertTitle sx={{ fontWeight: 600 }}>
               {successCount} van {invoices.length} facturen geboekt
+              {warningCount > 0 && ` — ${warningCount} met waarschuwing`}
+              {skippedCount > 0 && ` — ${skippedCount} overgeslagen`}
+              {errorCount > 0 && ` — ${errorCount} mislukt`}
             </AlertTitle>
             {results!.map((r, i) => (
               <Typography key={i} variant="body2" sx={{ mt: 0.5 }}>
-                {r.status === "ok" ? (
+                {r.status === "ok" && (
                   <Box component="span" sx={{ color: "success.main", fontWeight: 600 }} aria-label="Geslaagd">V</Box>
-                ) : (
+                )}
+                {r.status === "error" && (
                   <Box component="span" sx={{ color: "error.main", fontWeight: 600 }} aria-label="Mislukt">X</Box>
+                )}
+                {r.status === "warning" && (
+                  <Box component="span" sx={{ color: "warning.main", fontWeight: 600 }} aria-label="Waarschuwing">!</Box>
+                )}
+                {r.status === "skipped" && (
+                  <Box component="span" sx={{ color: "warning.main", fontWeight: 600 }} aria-label="Overgeslagen">~</Box>
                 )}{" "}
                 {r.filename}
                 {r.details ? ` — ${r.details}` : ""}
@@ -291,7 +461,7 @@ export function InvoiceReviewDialog({
                   m: 0,
                 }}
               >
-                {/* Legend: filename + confidence badge + bonnetje toggle */}
+                {/* Legend: filename + confidence badge */}
                 <Typography
                   component="legend"
                   sx={{
@@ -306,24 +476,37 @@ export function InvoiceReviewDialog({
                 >
                   {inv.source.filename}
                   <ConfidenceBadge confidence={inv.source.invoice.confidence} />
-                  <Chip
-                    label={inv.isReceipt ? "Bonnetje" : "Factuur"}
+                </Typography>
+
+                {/* Bonnetje / Factuur mode toggle — a real ToggleButtonGroup
+                    rather than a Chip. ToggleButtonGroup gives proper
+                    aria-pressed semantics, keyboard navigation, and a
+                    visually unambiguous selected state. Pre-filled from the
+                    AI's isReceipt detection but always overridable. */}
+                <Box sx={{ mt: 1.5, display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+                  <ToggleButtonGroup
+                    value={inv.isReceipt ? "receipt" : "invoice"}
+                    exclusive
                     size="small"
-                    color={inv.isReceipt ? "warning" : "default"}
-                    variant={inv.isReceipt ? "filled" : "outlined"}
-                    onClick={() => updateField(index, "isReceipt", !inv.isReceipt)}
+                    onChange={(_, val) => {
+                      if (val !== null) updateField(index, "isReceipt", val === "receipt");
+                    }}
                     disabled={submitting}
-                    sx={{ fontWeight: 600, fontSize: "0.6875rem", height: 22, cursor: "pointer" }}
-                    aria-label={inv.isReceipt
-                      ? "Wisselen naar factuur (met leverancier)"
-                      : "Wisselen naar bonnetje (zonder leverancier)"}
-                  />
+                    aria-label="Type document"
+                  >
+                    <ToggleButton value="invoice" sx={{ textTransform: "none", fontWeight: 600 }}>
+                      Factuur
+                    </ToggleButton>
+                    <ToggleButton value="receipt" sx={{ textTransform: "none", fontWeight: 600 }}>
+                      Bonnetje
+                    </ToggleButton>
+                  </ToggleButtonGroup>
                   {inv.isReceipt && inv.source.invoice.receiptReason && (
-                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 400 }}>
-                      ({inv.source.invoice.receiptReason})
+                    <Typography variant="caption" color="text.secondary">
+                      Reden: {inv.source.invoice.receiptReason}
                     </Typography>
                   )}
-                </Typography>
+                </Box>
 
                 {/*
                   Side-by-side layout: PDF preview (left) + form fields (right).
@@ -477,7 +660,7 @@ export function InvoiceReviewDialog({
                       }}
                     >
                       <VATCodePicker
-                        codes={vatCodes}
+                        codes={purchaseVatCodes}
                         value={inv.btwCode}
                         onChange={(code) => updateField(index, "btwCode", code)}
                         disabled={submitting}
@@ -516,19 +699,26 @@ export function InvoiceReviewDialog({
                         </Typography>
                         <Typography variant="body2">
                           Dit is een buitenlandse factuur zonder Nederlandse BTW. De BTW wordt automatisch
-                          verlegd via BTW-code <strong>{inv.btwCode}</strong>. Controleer of deze correct is
-                          — de BTW moet je zelf aangeven in je BTW-aangifte.
+                          verlegd via BTW-code <strong>{formatBTWCode(inv.btwCode, vatCodes)}</strong>.
+                          Controleer of deze correct is — de BTW moet je zelf aangeven in je BTW-aangifte.
                         </Typography>
                       </Alert>
                     )}
 
-                    {/* Belastingadvies from Claude */}
-                    {inv.source.invoice.belastingAdvies?.length > 0 && (
+                    {/* Belastingadvies from Claude. Filter out the reverse_charge
+                        type because the dedicated warning Alert above already
+                        covers it — showing both made the dialog noisy. */}
+                    {(() => {
+                      const tips = (inv.source.invoice.belastingAdvies ?? []).filter(
+                        (t) => t.type !== "reverse_charge",
+                      );
+                      if (tips.length === 0) return null;
+                      return (
                       <Alert severity="info" sx={{ mt: 2 }} icon={false}>
                         <Typography variant="body2" fontWeight={600} gutterBottom>
                           Belastingadvies
                         </Typography>
-                        {inv.source.invoice.belastingAdvies.map((tip, i) => (
+                        {tips.map((tip, i) => (
                           <Typography key={i} variant="body2" sx={{ mt: 0.5, display: "flex", alignItems: "flex-start", gap: 0.5 }}>
                             <Box
                               component="svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -541,7 +731,8 @@ export function InvoiceReviewDialog({
                           </Typography>
                         ))}
                       </Alert>
-                    )}
+                      );
+                    })()}
 
                     {/* Matched bank line */}
                     {inv.source.matchedBankLine && (
@@ -570,10 +761,25 @@ export function InvoiceReviewDialog({
                       >
                         <Typography variant="body2" fontWeight={600}>
                           {inv.importId ? "Gekoppeld aan afschriftregel:" : "Gevonden afschriftregel:"}
+                          {inv.source.matchedBankLine.currencyConverted && (
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              sx={{ ml: 1, fontWeight: 500, fontStyle: "italic" }}
+                            >
+                              (geschatte koers — controleer bedrag)
+                            </Typography>
+                          )}
                         </Typography>
                         <Typography variant="body2">
                           {new Date(inv.source.matchedBankLine.datum).toLocaleDateString("nl-NL")} — {new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" }).format(inv.source.matchedBankLine.bedrag)} — {inv.source.matchedBankLine.omschrijving.slice(0, 80)}
                         </Typography>
+                        {inv.source.matchedBankLine.currencyConverted && inv.source.matchedBankLine.invoiceCurrency && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                            Factuur: {inv.source.matchedBankLine.invoiceAmount?.toFixed(2)} {inv.source.matchedBankLine.invoiceCurrency} —
+                            omgerekend naar EUR voor matching. De boeking gebruikt het werkelijke EUR-bedrag van de bank.
+                          </Typography>
+                        )}
                       </Alert>
                     )}
 
@@ -608,8 +814,12 @@ export function InvoiceReviewDialog({
           </Button>
         ) : (
           <>
-            {invoices.some((inv) => !inv.ledgerAccount || (!inv.isReceipt && !inv.relation) || (inv.isReceipt && !inv.importId)) && !submitting && (
-              <Typography variant="body2" color="error" sx={{ mr: "auto", pl: 1 }}>
+            {blockedCount > 0 && !submitting && (
+              <Typography
+                variant="body2"
+                color="warning.main"
+                sx={{ mr: "auto", pl: 1 }}
+              >
                 {(() => {
                   const missingRel = invoices.filter((inv) => !inv.isReceipt && !inv.relation).length;
                   const missingLedger = invoices.filter((inv) => !inv.ledgerAccount).length;
@@ -618,7 +828,7 @@ export function InvoiceReviewDialog({
                   if (missingRel) parts.push(`${missingRel} zonder relatie`);
                   if (missingLedger) parts.push(`${missingLedger} zonder tegenrekening`);
                   if (missingBank) parts.push(`${missingBank} bonnetje${missingBank > 1 ? "s" : ""} zonder afschriftregel`);
-                  return `Kan niet boeken: ${parts.join(", ")}`;
+                  return `${blockedCount} worden overgeslagen (${parts.join(", ")})`;
                 })()}
               </Typography>
             )}
@@ -628,15 +838,7 @@ export function InvoiceReviewDialog({
             <Button
               variant="contained"
               onClick={handleSubmitAll}
-              disabled={
-                submitting ||
-                invoices.some(
-                  (inv) =>
-                    !inv.ledgerAccount ||
-                    (!inv.isReceipt && !inv.relation) ||
-                    (inv.isReceipt && !inv.importId),
-                )
-              }
+              disabled={submitting || submittableCount === 0}
               startIcon={
                 submitting ? (
                   /* Spinner icon — inline SVG spinning via CSS */
@@ -683,7 +885,9 @@ export function InvoiceReviewDialog({
                 ? `Verwerken (${progress}/${invoices.length})...`
                 : invoices.length === 1
                   ? "Boeken"
-                  : `Alles boeken (${invoices.length})`}
+                  : blockedCount > 0
+                    ? `Boek ${submittableCount} van ${invoices.length}`
+                    : `Alles boeken (${invoices.length})`}
             </Button>
           </>
         )}
@@ -697,7 +901,11 @@ export function InvoiceReviewDialog({
 // ---------------------------------------------------------------------------
 
 /** Build editable state from an analyze response */
-function buildEdit(a: InvoiceAnalyzeResponse, ledgerAccounts: LedgerAccount[]): InvoiceEdit {
+function buildEdit(
+  a: InvoiceAnalyzeResponse,
+  ledgerAccounts: LedgerAccount[],
+  vatCodes: VATCode[],
+): InvoiceEdit {
   const inv = a.invoice;
 
   // Try to find ledger account by grootboekcode
@@ -718,15 +926,47 @@ function buildEdit(a: InvoiceAnalyzeResponse, ledgerAccounts: LedgerAccount[]): 
       }
     : null;
 
+  // Normalize the bedragen on load. For any zero-rate BTW code (GEEN or a
+  // reverse-charge variant like VERL_INK / BU_EU_INK) we force excl to
+  // equal incl and zero the btw — non-deductible or shifted taxes are part
+  // of the cost and must not be split out, regardless of what the PDF showed.
+  const btwCode = inv.btwCode || "HOOG_INK_21";
+  const rate = vatCodes.find((v) => v.code === btwCode)?.percentage ?? 0;
+  let bedragIncl = inv.bedragInclBtw ?? 0;
+  let bedragExcl = inv.bedragExclBtw ?? 0;
+  let btwBedrag = inv.btwBedrag ?? 0;
+
+  // For non-EUR invoices that fuzzy-matched a EUR bank line via FX
+  // conversion, swap the foreign-currency invoice amount for the actual
+  // EUR amount of the bank line. e-Boekhouden's mutation has to balance
+  // against the bank's real EUR debit; booking CHF figures would create
+  // a totals mismatch. The user can still adjust manually if needed.
+  if (a.matchedBankLine?.currencyConverted) {
+    bedragIncl = Math.abs(a.matchedBankLine.bedrag);
+    if (rate === 0) {
+      bedragExcl = bedragIncl;
+      btwBedrag = 0;
+    } else {
+      btwBedrag = +(bedragIncl * rate / (100 + rate)).toFixed(2);
+      bedragExcl = +(bedragIncl - btwBedrag).toFixed(2);
+    }
+  } else if (rate === 0) {
+    bedragExcl = bedragIncl;
+    btwBedrag = 0;
+  } else if (Math.abs(bedragExcl + btwBedrag - bedragIncl) > 0.01) {
+    // Numbers don't add up — trust incl + btw, derive excl.
+    bedragExcl = bedragIncl - btwBedrag;
+  }
+
   return {
     source: a,
     leverancier: inv.leverancier ?? "",
     factuurnummer: inv.factuurnummer ?? "",
     datum: inv.datum ?? new Date().toISOString().slice(0, 10),
-    bedragExcl: inv.bedragExclBtw?.toFixed(2) ?? "0.00",
-    bedragIncl: inv.bedragInclBtw?.toFixed(2) ?? "0.00",
-    btwBedrag: inv.btwBedrag?.toFixed(2) ?? "0.00",
-    btwCode: inv.btwCode || "HOOG_INK_21",
+    bedragExcl: bedragExcl.toFixed(2),
+    bedragIncl: bedragIncl.toFixed(2),
+    btwBedrag: btwBedrag.toFixed(2),
+    btwCode,
     omschrijving: inv.omschrijving ?? "",
     relation: matchedRelation,
     ledgerAccount: matchedLedger,
@@ -736,6 +976,18 @@ function buildEdit(a: InvoiceAnalyzeResponse, ledgerAccounts: LedgerAccount[]): 
 }
 
 /** Format a string amount as euros */
+/**
+ * Turn a raw BTW code like "VERL_INK" into a human-readable label like
+ * "Btw verlegd 21% (VERL_INK)", matching the format the picker dropdown
+ * uses so the user sees the same string everywhere. Falls back to the raw
+ * code if we can't resolve it.
+ */
+function formatBTWCode(code: string, vatCodes: VATCode[]): string {
+  const match = vatCodes.find((v) => v.code === code);
+  if (!match) return code;
+  return `${match.omschrijving} (${code})`;
+}
+
 function formatEuro(amount: string): string {
   const num = parseFloat(amount);
   if (isNaN(num)) return amount;

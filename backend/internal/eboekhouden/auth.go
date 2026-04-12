@@ -98,9 +98,9 @@ func (c *Client) Login(email, password string) error {
 		// e-boekhouden blocks logins from unknown IP addresses and sends a
 		// verification email. Detect this to give the user a clear message.
 		if strings.Contains(bodyStr, "IP") || strings.Contains(bodyStr, "bevestig") || strings.Contains(bodyStr, "e-mail") {
-			return fmt.Errorf("new_ip: e-boekhouden has detected a login from an unknown IP address. Check your email to approve this IP, then try again.")
+			return fmt.Errorf("new_ip: e-Boekhouden heeft een aanmelding vanaf een onbekend IP-adres geblokkeerd. Dit gebeurt wanneer je voor het eerst inlogt vanaf een nieuwe locatie of nieuw netwerk — een beveiligingsmaatregel van e-Boekhouden. Controleer je e-mail (de afzender is e-boekhouden.nl) en klik op de bevestigingslink om dit IP-adres goed te keuren. Probeer daarna opnieuw in te loggen.")
 		}
-		return fmt.Errorf("login failed: no auth token received")
+		return fmt.Errorf("login mislukt: geen sessie ontvangen van e-Boekhouden")
 	}
 
 	return nil

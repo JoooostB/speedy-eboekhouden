@@ -9,8 +9,8 @@ import {
   TextField,
   MenuItem,
   IconButton,
-  Alert,
   CircularProgress,
+  Tooltip,
 } from "@mui/material";
 import type {
   InboxClassification,
@@ -239,7 +239,6 @@ export function InboxRow({
             ? { bgcolor: "rgba(0,0,0,0.02)" }
             : undefined,
         }}
-        role="row"
       >
         {/* Checkbox — stops event propagation so clicking it doesn't toggle expand */}
         <Checkbox
@@ -329,6 +328,38 @@ export function InboxRow({
           )}
         </Box>
 
+        {/* "Eerder geboekt" badge — only shown when this row was auto-filled
+            from the user's learned classification memory. Helps the user
+            understand WHY a row is pre-filled with high confidence.
+            The Tooltip works for keyboard users too (the title attribute
+            previously only fired on mouse hover). */}
+        {item.learned && !processed && (
+          <Tooltip
+            title="Deze suggestie komt uit je eerdere boekingen, niet van de AI"
+            arrow
+          >
+            <Chip
+              label={
+                <Box component="span">
+                  <Box component="span" aria-hidden="true" sx={{ mr: 0.25 }}>↺</Box>
+                  eerder geboekt
+                </Box>
+              }
+              size="small"
+              sx={{
+                fontWeight: 600,
+                fontSize: "0.6875rem",
+                height: 22,
+                flexShrink: 0,
+                bgcolor: "rgba(99, 102, 241, 0.1)",
+                color: "#4338ca",
+                cursor: "help",
+              }}
+              aria-label="Eerder geboekt — suggestie uit je geschiedenis"
+            />
+          </Tooltip>
+        )}
+
         {/* Category badge — text label ensures info is not color-only */}
         <Chip
           label={processed ? "Verwerkt" : cat.label}
@@ -395,11 +426,10 @@ export function InboxRow({
               ml: { xs: 0, sm: 5.5 },
             }}
           >
-            {error && (
-              <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
-                {error}
-              </Alert>
-            )}
+            {/* Errors are surfaced inside the BookingConfirmDialog (via the
+                error prop) so the user sees them while still in the action
+                they were performing. We intentionally don't render a second
+                error here to avoid duplication once the dialog closes. */}
 
             {/* Invoice upload zone — for "invoice" category, delegates to parent review dialog */}
             {item.category === "invoice" && onInvoiceUpload && (
@@ -521,6 +551,7 @@ export function InboxRow({
         vatCodes={vatCodes}
         onConfirm={handleProcess}
         processing={processing}
+        error={error}
       />
     </Box>
   );

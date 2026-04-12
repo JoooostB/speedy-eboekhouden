@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Dialog,
   DialogTitle,
@@ -11,6 +11,7 @@ import {
   CircularProgress,
   Divider,
   TextField,
+  FormHelperText,
 } from "@mui/material";
 import type { InboxClassification, LedgerAccount, OpenPost, VATCode } from "../../api/types";
 import { api } from "../../api/client";
@@ -26,6 +27,9 @@ interface Props {
   /** Called with the edited item set when the user confirms. */
   onConfirm: (editedItems: InboxClassification[]) => Promise<void> | void;
   processing: boolean;
+  /** When set, shown as an error alert at the top of the dialog so the
+   *  user sees the failure without having to close the dialog first. */
+  error?: string | null;
 }
 
 const SOORT_LABELS: Record<string, string> = {
@@ -72,9 +76,20 @@ export function BookingConfirmDialog({
   vatCodes,
   onConfirm,
   processing,
+  error,
 }: Props) {
   const [refundMatches, setRefundMatches] = useState<Map<number, OpenPost>>(new Map());
   const [matchingRefunds, setMatchingRefunds] = useState(false);
+  const errorRef = useRef<HTMLDivElement | null>(null);
+
+  // When an error appears, scroll it into view and move focus to the alert
+  // wrapper so screen reader users hear the new status. Sighted users with a
+  // long batch list might otherwise miss the alert above the fold.
+  useEffect(() => {
+    if (!error || !errorRef.current) return;
+    errorRef.current.scrollIntoView({ block: "start", behavior: "smooth" });
+    errorRef.current.focus();
+  }, [error]);
   // Editable per-item state, keyed by inbox item id.
   const [edits, setEdits] = useState<
     Map<number, { ledger: LedgerAccount | null; btwCode: string; omschrijving: string }>
@@ -186,6 +201,14 @@ export function BookingConfirmDialog({
           de tegenrekening, BTW of omschrijving aan en klik op Bevestigen.
         </Typography>
 
+        {error && (
+          <Box ref={errorRef} tabIndex={-1} sx={{ outline: "none", mb: 2 }}>
+            <Alert severity="error" role="alert">
+              {error}
+            </Alert>
+          </Box>
+        )}
+
         {refundMatches.size > 0 && (
           <Alert severity="info" sx={{ mb: 2 }}>
             {refundMatches.size === 1
@@ -202,7 +225,7 @@ export function BookingConfirmDialog({
 
         {/* One stacked card per item — read-only metadata on top, editable form below. */}
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          {items.map((item, idx) => {
+          {items.map((item) => {
             const edit = edits.get(item.id);
             const refund = refundMatches.get(item.id);
             const isNegative = item.bedrag < 0;
@@ -259,12 +282,19 @@ export function BookingConfirmDialog({
                     gridTemplateColumns: { xs: "1fr", sm: "2fr 1fr" },
                   }}
                 >
-                  <LedgerAccountPicker
-                    accounts={ledgerAccounts}
-                    value={edit?.ledger ?? null}
-                    onChange={(ledger) => updateEdit(item.id, { ledger })}
-                    label="Tegenrekening"
-                  />
+                  <Box>
+                    <LedgerAccountPicker
+                      accounts={ledgerAccounts}
+                      value={edit?.ledger ?? null}
+                      onChange={(ledger) => updateEdit(item.id, { ledger })}
+                      label="Tegenrekening"
+                    />
+                    {!edit?.ledger && (
+                      <FormHelperText error sx={{ ml: 1.5, mt: 0.5 }}>
+                        Tegenrekening verplicht
+                      </FormHelperText>
+                    )}
+                  </Box>
                   <VATCodePicker
                     codes={vatCodes}
                     value={edit?.btwCode ?? "GEEN"}
@@ -289,9 +319,6 @@ export function BookingConfirmDialog({
                     Bankregel: {item.omschrijving}
                   </Typography>
                 )}
-
-                {/* Footer separator only between items */}
-                {!isSingle && idx < items.length - 1 && <Box sx={{ mt: 1 }} />}
               </Box>
             );
           })}

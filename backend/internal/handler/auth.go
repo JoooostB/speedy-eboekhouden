@@ -65,7 +65,10 @@ func (h *EBoekhoudenAuthHandler) Login(c *gin.Context) {
 	if err := client.Login(req.Email, req.Password); err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "new_ip") {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": errMsg})
+			// Strip the "new_ip:" prefix so the user only sees the Dutch
+			// explanation, not the internal sentinel string.
+			cleaned := strings.TrimSpace(strings.TrimPrefix(errMsg, "new_ip:"))
+			c.JSON(http.StatusUnauthorized, gin.H{"error": cleaned, "code": "new_ip"})
 		} else {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Inloggen bij e-Boekhouden mislukt. Controleer je gegevens."})
 		}

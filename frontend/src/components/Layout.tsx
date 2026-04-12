@@ -103,6 +103,11 @@ export function Layout({ children }: Props) {
           bgcolor: "primary.main",
           borderBottom: "1px solid",
           borderColor: "rgba(255,255,255,0.08)",
+          // Extend behind the iOS status bar / notch. viewport-fit=cover in
+          // index.html enables env(safe-area-inset-top) to return the actual
+          // notch height; without this padding the Toolbar content would be
+          // clipped under the status bar.
+          pt: "env(safe-area-inset-top)",
         }}
       >
         <Toolbar sx={{ gap: 1 }}>

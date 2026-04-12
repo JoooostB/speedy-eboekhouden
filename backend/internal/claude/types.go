@@ -9,6 +9,12 @@ type InvoiceData struct {
 	BedragInclBTW   float64           `json:"bedragInclBtw"`
 	BTWBedrag       float64           `json:"btwBedrag"`
 	BTWPercentage   float64           `json:"btwPercentage"`
+	// Currency is the ISO 4217 code of the invoice amounts (EUR, CHF, USD,
+	// GBP, …). Defaults to "EUR" when the PDF doesn't state a currency.
+	// Tesla Superchargers in Switzerland, hotels abroad, and foreign SaaS
+	// occasionally invoice in non-EUR — we use this for fuzzy bank-line
+	// matching via approximate FX conversion.
+	Currency        string            `json:"currency"`
 	Omschrijving    string            `json:"omschrijving"`
 	Grootboekcode   string            `json:"grootboekcode"`
 	BTWCode         string            `json:"btwCode"`

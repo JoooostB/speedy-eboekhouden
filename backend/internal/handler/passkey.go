@@ -340,6 +340,10 @@ func (h *PasskeyHandler) RecoverFinishComplete(c *gin.Context) {
 		Transport:       transports,
 		SignCount:       credential.Authenticator.SignCount,
 		FriendlyName:    "Herstelde passkey",
+		BackupEligible:  credential.Flags.BackupEligible,
+		BackupState:     credential.Flags.BackupState,
+		UserPresent:     credential.Flags.UserPresent,
+		UserVerified:    credential.Flags.UserVerified,
 	}
 	if err := h.db.StoreCredential(c.Request.Context(), dbCred); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Passkey opslaan mislukt"})

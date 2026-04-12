@@ -17,14 +17,27 @@ type PasskeyCredential struct {
 	SignCount       uint32    `json:"signCount"`
 	CreatedAt       time.Time `json:"createdAt"`
 	FriendlyName    string    `json:"friendlyName"`
+	// WebAuthn credential flags. BackupEligible is the critical one — it
+	// must remain immutable across the credential's lifetime, so we have to
+	// store it at registration and pass it back at login. UserPresent and
+	// UserVerified are stored for completeness; they're not strictly required
+	// by go-webauthn's discoverable login validator but help downstream code
+	// reason about the credential.
+	BackupEligible bool `json:"backupEligible"`
+	BackupState    bool `json:"backupState"`
+	UserPresent    bool `json:"userPresent"`
+	UserVerified   bool `json:"userVerified"`
 }
 
 // StoreCredential saves a new passkey credential.
 func (db *DB) StoreCredential(ctx context.Context, cred *PasskeyCredential) error {
 	_, err := db.Pool.Exec(ctx,
-		`INSERT INTO passkey_credentials (id, user_id, public_key, attestation_type, aaguid, transport, sign_count, friendly_name)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		`INSERT INTO passkey_credentials
+		   (id, user_id, public_key, attestation_type, aaguid, transport, sign_count, friendly_name,
+		    backup_eligible, backup_state, user_present, user_verified)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		cred.ID, cred.UserID, cred.PublicKey, cred.AttestationType, cred.AAGUID, cred.Transport, cred.SignCount, cred.FriendlyName,
+		cred.BackupEligible, cred.BackupState, cred.UserPresent, cred.UserVerified,
 	)
 	if err != nil {
 		return fmt.Errorf("storing credential: %w", err)
@@ -35,7 +48,8 @@ func (db *DB) StoreCredential(ctx context.Context, cred *PasskeyCredential) erro
 // GetCredentialsByUserID returns all passkey credentials for a user.
 func (db *DB) GetCredentialsByUserID(ctx context.Context, userID string) ([]*PasskeyCredential, error) {
 	rows, err := db.Pool.Query(ctx,
-		`SELECT id, user_id, public_key, attestation_type, aaguid, transport, sign_count, created_at, friendly_name
+		`SELECT id, user_id, public_key, attestation_type, aaguid, transport, sign_count, created_at, friendly_name,
+		        backup_eligible, backup_state, user_present, user_verified
 		 FROM passkey_credentials WHERE user_id = $1 ORDER BY created_at`,
 		userID,
 	)
@@ -47,7 +61,8 @@ func (db *DB) GetCredentialsByUserID(ctx context.Context, userID string) ([]*Pas
 	var creds []*PasskeyCredential
 	for rows.Next() {
 		c := &PasskeyCredential{}
-		if err := rows.Scan(&c.ID, &c.UserID, &c.PublicKey, &c.AttestationType, &c.AAGUID, &c.Transport, &c.SignCount, &c.CreatedAt, &c.FriendlyName); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.PublicKey, &c.AttestationType, &c.AAGUID, &c.Transport, &c.SignCount, &c.CreatedAt, &c.FriendlyName,
+			&c.BackupEligible, &c.BackupState, &c.UserPresent, &c.UserVerified); err != nil {
 			return nil, fmt.Errorf("scanning credential: %w", err)
 		}
 		creds = append(creds, c)
@@ -59,10 +74,12 @@ func (db *DB) GetCredentialsByUserID(ctx context.Context, userID string) ([]*Pas
 func (db *DB) GetCredentialByID(ctx context.Context, credID []byte) (*PasskeyCredential, error) {
 	c := &PasskeyCredential{}
 	err := db.Pool.QueryRow(ctx,
-		`SELECT id, user_id, public_key, attestation_type, aaguid, transport, sign_count, created_at, friendly_name
+		`SELECT id, user_id, public_key, attestation_type, aaguid, transport, sign_count, created_at, friendly_name,
+		        backup_eligible, backup_state, user_present, user_verified
 		 FROM passkey_credentials WHERE id = $1`,
 		credID,
-	).Scan(&c.ID, &c.UserID, &c.PublicKey, &c.AttestationType, &c.AAGUID, &c.Transport, &c.SignCount, &c.CreatedAt, &c.FriendlyName)
+	).Scan(&c.ID, &c.UserID, &c.PublicKey, &c.AttestationType, &c.AAGUID, &c.Transport, &c.SignCount, &c.CreatedAt, &c.FriendlyName,
+		&c.BackupEligible, &c.BackupState, &c.UserPresent, &c.UserVerified)
 	if err != nil {
 		return nil, fmt.Errorf("getting credential: %w", err)
 	}

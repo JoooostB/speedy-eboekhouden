@@ -37,6 +37,11 @@ type inboxClassifiedRow struct {
 	Soort          string  `json:"soort"`
 	AIOmschrijving string  `json:"aiOmschrijving"`
 	Indicator      string  `json:"indicator"`
+	// Learned is true when this row was filled in from the user's learned
+	// classification memory rather than from a fresh Claude call. The UI
+	// shows a small "eerder geboekt" badge so the user knows where the
+	// suggestion came from.
+	Learned bool `json:"learned"`
 }
 
 // InboxHandler handles the bookkeeping inbox workflow.
@@ -113,26 +118,49 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 		return
 	}
 
-	// Convert to batch lines
+	// Pre-fetch learned mappings for this user. Lines whose normalized
+	// signal matches a confirmed mapping are auto-classified locally and
+	// never reach Claude — saves API tokens and gives the user instant
+	// feedback for recurring transactions they've already booked once.
+	learned, _ := h.db.LookupLearnedBatch(c.Request.Context(), sess.UserID)
+
+	// Convert to batch lines, but skip lines that have a confirmed learned
+	// mapping (count >= 2 with confirmed_at set).
 	var lines []claude.BatchLine
+	learnedHits := make(map[int]*database.LearnedClassification)
 	for _, row := range rows {
 		id, _ := toInt(row["id"])
 		bedrag, _ := toFloat(row["mutBedrag"])
+		omschrijving := toString(row["mutOmschrijving"])
+		tegenrekening := toString(row["rekening"])
+
+		signal := database.BuildClassificationSignal(omschrijving, tegenrekening)
+		if hit, ok := learned[signal]; ok && hit.ConfirmedAt != nil {
+			learnedHits[id] = hit
+			continue
+		}
+
 		lines = append(lines, claude.BatchLine{
 			ID:            id,
 			Datum:         toString(row["mutDatum"]),
 			Bedrag:        bedrag,
-			Omschrijving:  toString(row["mutOmschrijving"]),
-			Tegenrekening: toString(row["rekening"]),
+			Omschrijving:  omschrijving,
+			Tegenrekening: tegenrekening,
 		})
 	}
 
-	// Classify with AI
-	results, err := h.claude.ClassifyBatch(c.Request.Context(), apiKey, lines)
-	if err != nil {
-		log.Printf("Claude API error for user %s: %v", sess.UserID, err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
-		return
+	// Classify with AI — only the lines that didn't hit the learned cache.
+	// Pass the user's entity type so the prompt can apply BV-vs-ZZP rules
+	// (e.g. investments on a B.V. account are business assets, not private).
+	entityType := readEntityType(c.Request.Context(), h.db, sess.UserID)
+	var results []claude.BatchClassifyResult
+	if len(lines) > 0 {
+		results, err = h.claude.ClassifyBatch(c.Request.Context(), apiKey, entityType, lines)
+		if err != nil {
+			log.Printf("Claude API error for user %s: %v", sess.UserID, err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
+			return
+		}
 	}
 
 	// Merge classifications with original row data
@@ -158,7 +186,19 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 			Confidence:   0,
 		}
 
-		if cl, ok := classMap[id]; ok {
+		if hit, ok := learnedHits[id]; ok {
+			// Confirmed learned mapping wins outright — high confidence,
+			// "auto" category, and the indicator tells the user why.
+			cr.Category = "auto"
+			cr.NeedsInvoice = false
+			cr.Confidence = 1.0
+			cr.Grootboekcode = hit.Grootboekcode
+			cr.BTWCode = hit.BTWCode
+			cr.Soort = hit.Soort
+			cr.AIOmschrijving = hit.SampleOmschrijving
+			cr.Indicator = "Eerder geboekt"
+			cr.Learned = true
+		} else if cl, ok := classMap[id]; ok {
 			cr.Category = cl.Category
 			cr.NeedsInvoice = cl.NeedsInvoice
 			cr.Confidence = cl.Confidence
@@ -409,11 +449,46 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		json.Unmarshal(raw, &ledgerAccounts)
 	}
 
+	// Pre-fetch the bank lines so we can compute learning signals (description
+	// + counterparty IBAN) per item. The batch item only carries the user's
+	// edited values, not the original bank line text — and the signal needs
+	// to match what ClassifyBatch will see on the next pass.
+	type bankLineMeta struct {
+		omschrijving string
+		rekening     string
+		datum        string
+	}
+	bankLineMetaByID := make(map[int]bankLineMeta)
+	if gridRaw, gridErr := client.GetImportGrid(0, 2000); gridErr == nil {
+		if rows, _, parseErr := eboekhouden.ParseImportGrid(gridRaw); parseErr == nil {
+			for _, row := range rows {
+				id, _ := toInt(row["id"])
+				bankLineMetaByID[id] = bankLineMeta{
+					omschrijving: toString(row["mutOmschrijving"]),
+					rekening:     toString(row["rekening"]),
+					datum:        toString(row["mutDatum"]),
+				}
+			}
+		}
+	}
+
 	type result struct {
 		ID     int    `json:"id"`
 		Status string `json:"status"`
 		Error  string `json:"error,omitempty"`
 		MutNr  string `json:"mutNr,omitempty"`
+	}
+
+	// Map e-boekhouden soort codes back to the names we store in the
+	// learned_classifications table so the next ClassifyBatch lookup matches.
+	soortName := map[int]string{
+		1: "FactuurOntvangen",
+		2: "FactuurVerstuurd",
+		3: "FactuurbetalingOntvangen",
+		4: "FactuurbetalingVerstuurd",
+		5: "GeldOntvangen",
+		6: "GeldUitgegeven",
+		7: "Memoriaal",
 	}
 
 	var results []result
@@ -430,36 +505,124 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 			}
 		}
 
-		// Build the full mutation payload
+		// Use the bank line's actual date and prefer it over time.Now() —
+		// this matches what the e-boekhouden web UI sends and avoids dating
+		// every booking on the day the user happens to process it.
+		mutDatum := time.Now().Format("2006-01-02")
+		if meta, ok := bankLineMetaByID[item.ID]; ok && meta.datum != "" {
+			// e-boekhouden returns dates as "2026-03-30T00:00:00" — strip the time.
+			if len(meta.datum) >= 10 {
+				mutDatum = meta.datum[:10]
+			}
+		}
+
+		// e-Boekhouden enforces a direction match between BTW code and soort:
+		// income soorten (3 FactuurbetalingOntvangen, 5 GeldOntvangen) require
+		// a *_VERK_* code, expense soorten (4, 6) require *_INK_*. Claude
+		// regularly picks the wrong direction (especially for refunds of past
+		// purchases — it sees the original purchase mental model and reaches
+		// for INK), so we normalize the code to match the direction here.
+		btwCode := normalizeBTWForSoort(item.BTWCode, item.Soort)
+
+		// Same direction-aware logic for inEx: bank shows the gross amount,
+		// so we always use IN for incoming and EX for outgoing.
+		inEx := "EX"
+		if item.Soort == 3 || item.Soort == 5 {
+			inEx = "IN"
+		}
+
+		// The bank line bedrag is always gross (inclusive of BTW). Split it
+		// according to the BTW code so e-boekhouden can include the booking
+		// in the BTW-aangifte.
+		rate := btwRateFromCode(btwCode)
+		bedragIncl := item.Bedrag
+		bedragExcl := item.Bedrag
+		btwBedrag := 0.0
+		if rate > 0 {
+			btwBedrag = roundCents(bedragIncl * rate / (100 + rate))
+			bedragExcl = roundCents(bedragIncl - btwBedrag)
+		}
+
+		// Build the mutation payload — mirrors what the e-boekhouden web UI
+		// sends when manually creating a Geld uitgegeven / Geld ontvangen
+		// mutation. The inEx field on the mutation is REQUIRED ("EX" or "IN");
+		// for money-out/money-in soorten the bank shows the gross amount, so
+		// we pair inEx with explicit bedragInclusief/bedragExclusief on the
+		// regel.
+		regel := map[string]any{
+			"index":           0,
+			"bedrag":          bedragExcl,
+			"btw":             btwBedrag,
+			"btwCode":         btwCode,
+			"tegenRekening":   tegenRekeningId,
+			"bedragInclusief": bedragIncl,
+			"bedragExclusief": bedragExcl,
+		}
+		// Optional fields — only include when actually set so the e-boekhouden
+		// validator doesn't choke on empty strings or zero IDs.
+		if item.RelatieId != 0 {
+			regel["relatieId"] = item.RelatieId
+		}
+		if item.Factuurnummer != "" {
+			regel["factuur"] = item.Factuurnummer
+		}
+
 		mutPayload, _ := json.Marshal(map[string]any{
 			"mutatie": map[string]any{
-				"rekening":    item.GrootboekId,
-				"datum":       time.Now().Format("2006-01-02"),
-				"soort":       item.Soort,
+				"rekening":     item.GrootboekId,
+				"datum":        mutDatum,
+				"soort":        item.Soort,
+				"inEx":         inEx,
 				"omschrijving": item.Omschrijving,
 			},
-			"mutatieRegels": []map[string]any{{
-				"index":        0,
-				"bedrag":       item.Bedrag,
-				"btw":          0,
-				"btwCode":      item.BTWCode,
-				"tegenRekening": tegenRekeningId,
-				"relatieId":    nilIfZero(item.RelatieId),
-				"factuur":      item.Factuurnummer,
-			}},
-			"importId": item.ID,
+			"mutatieRegels": []map[string]any{regel},
+			"importId":       item.ID,
 		})
 
 		mutResp, err := client.CreateMutatie(mutPayload)
 		if err != nil {
-			results = append(results, result{ID: item.ID, Status: "error", Error: "Boeking mislukt"})
+			// Surface the real error message — the client now extracts the
+			// e-Boekhouden message from JSON error envelopes, so this is
+			// human-readable instead of just "Boeking mislukt".
+			log.Printf("CreateMutatie error for item %d: %v", item.ID, err)
+			results = append(results, result{ID: item.ID, Status: "error", Error: err.Error()})
 			continue
 		}
 		var resp struct {
 			MutNr int `json:"mutNr"`
 		}
-		json.Unmarshal(mutResp, &resp)
+		if jsonErr := json.Unmarshal(mutResp, &resp); jsonErr != nil {
+			log.Printf("CreateMutatie response unmarshal error for item %d: %v body=%s", item.ID, jsonErr, string(mutResp))
+			results = append(results, result{ID: item.ID, Status: "error", Error: "Onverwacht antwoord van e-Boekhouden"})
+			continue
+		}
+		// Defense-in-depth: even if the client missed an error envelope,
+		// a successful mutation always carries a non-zero mutNr. Anything
+		// else means nothing was actually booked.
+		if resp.MutNr == 0 {
+			log.Printf("CreateMutatie returned mutNr=0 for item %d, body=%s", item.ID, string(mutResp))
+			results = append(results, result{ID: item.ID, Status: "error", Error: "Boeking niet aangemaakt — controleer de gegevens"})
+			continue
+		}
 		results = append(results, result{ID: item.ID, Status: "ok", MutNr: fmt.Sprintf("%d", resp.MutNr)})
+
+		// Update learned classifications memory now that the booking
+		// definitely succeeded. Best-effort: failures are logged but never
+		// block the main flow. The sample description is truncated to keep
+		// the table from growing unbounded if e-boekhouden ever returns a
+		// pathologically long mutOmschrijving.
+		if sess != nil && bankLineMetaByID != nil {
+			if meta, ok := bankLineMetaByID[item.ID]; ok {
+				signal := database.BuildClassificationSignal(meta.omschrijving, meta.rekening)
+				if signal != "" {
+					sample := truncate(meta.omschrijving, 200)
+					if upsertErr := h.db.UpsertLearned(c.Request.Context(), sess.UserID, signal,
+						item.Grootboekcode, item.BTWCode, soortName[item.Soort], sample); upsertErr != nil {
+						log.Printf("UpsertLearned error for user %s signal %s: %v", sess.UserID, signal, upsertErr)
+					}
+				}
+			}
+		}
 	}
 
 	// Invalidate classification cache
@@ -530,4 +693,79 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+// readEntityType pulls the user's entityType preference (BV / ZZP / EM /
+// ANDERS) from user_settings.preferences. Returns empty string when not set.
+func readEntityType(ctx context.Context, db *database.DB, userID string) string {
+	if db == nil {
+		return ""
+	}
+	settings, err := db.GetSettings(ctx, userID)
+	if err != nil || settings == nil || len(settings.Preferences) == 0 {
+		return ""
+	}
+	var prefs struct {
+		EntityType string `json:"entityType"`
+	}
+	if json.Unmarshal(settings.Preferences, &prefs) != nil {
+		return ""
+	}
+	return prefs.EntityType
+}
+
+// normalizeBTWForSoort enforces e-Boekhouden's direction rule: income soorten
+// (3 FactuurbetalingOntvangen, 5 GeldOntvangen) require *_VERK_* codes,
+// expense soorten (4, 6) require *_INK_*. We swap _INK_↔_VERK_ as needed.
+// Reverse charge codes (VERL_INK*, BU_EU_INK, BI_EU_INK) and GEEN are passed
+// through unchanged because they don't have a direction inversion.
+func normalizeBTWForSoort(code string, soort int) string {
+	isIncome := soort == 3 || soort == 5
+	isExpense := soort == 4 || soort == 6
+	if !isIncome && !isExpense {
+		return code
+	}
+	switch code {
+	case "HOOG_INK_21":
+		if isIncome {
+			return "HOOG_VERK_21"
+		}
+	case "HOOG_VERK_21":
+		if isExpense {
+			return "HOOG_INK_21"
+		}
+	case "LAAG_INK_9":
+		if isIncome {
+			return "LAAG_VERK_9"
+		}
+	case "LAAG_VERK_9":
+		if isExpense {
+			return "LAAG_INK_9"
+		}
+	}
+	return code
+}
+
+// btwRateFromCode maps an e-boekhouden BTW code to its percentage. Reverse
+// charge codes return 0 because the BTW is shifted to the recipient and
+// doesn't get split out of the bank amount on the Dutch side.
+func btwRateFromCode(code string) float64 {
+	switch code {
+	case "HOOG_INK_21", "HOOG_VERK_21":
+		return 21
+	case "LAAG_INK_9", "LAAG_VERK_9":
+		return 9
+	}
+	// GEEN, VERL_INK, VERL_INK_L9, BU_EU_INK, BI_EU_INK, etc.
+	return 0
+}
+
+// roundCents rounds to 2 decimal places using banker's rounding-equivalent
+// half-away-from-zero, which matches what e-boekhouden's web UI does for the
+// BTW split. Without this we get IEEE 754 noise like 21.000000000000004.
+func roundCents(v float64) float64 {
+	if v >= 0 {
+		return float64(int64(v*100+0.5)) / 100
+	}
+	return float64(int64(v*100-0.5)) / 100
 }

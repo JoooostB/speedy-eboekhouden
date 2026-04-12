@@ -10,12 +10,15 @@ import {
   ListItem,
   ListItemText,
   Chip,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
 import Avatar from "@mui/material/Avatar";
 import { api } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { track } from "../../analytics";
 import { PasskeysSection } from "./PasskeysSection";
+import { LearnedSection } from "./LearnedSection";
 
 /** Inline SVG icon: Key (Lucide-style) */
 function KeyIcon(props: { sx?: object }) {
@@ -119,13 +122,35 @@ export function SettingsPage() {
   const [restSaving, setRestSaving] = useState(false);
   const [restMessage, setRestMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Onderneming type — drives Claude's classification rules
+  const [entityType, setEntityType] = useState<"BV" | "ZZP" | "EM" | "ANDERS" | "">("");
+  const [entitySaving, setEntitySaving] = useState(false);
+
   useEffect(() => {
     api.getSettings().then((s) => {
       setHasApiKey(s.hasApiKey);
       setHasSoapCredentials(s.hasSoapCredentials);
       setHasRestAccessToken(s.hasRestAccessToken);
+      const et = s.preferences?.entityType;
+      if (et === "BV" || et === "ZZP" || et === "EM" || et === "ANDERS") {
+        setEntityType(et);
+      }
     }).catch(() => {});
   }, []);
+
+  const handleSaveEntityType = async (value: "BV" | "ZZP" | "EM" | "ANDERS" | "") => {
+    setEntitySaving(true);
+    try {
+      await api.setEntityType(value);
+      setEntityType(value);
+      track("Entity Type Set", { type: value || "none" });
+      setMessage({ type: "success", text: "Type onderneming opgeslagen" });
+    } catch (err: any) {
+      setMessage({ type: "error", text: err?.message || "Opslaan mislukt" });
+    } finally {
+      setEntitySaving(false);
+    }
+  };
 
   const handleSaveKey = async () => {
     setSaving(true);
@@ -261,6 +286,46 @@ export function SettingsPage() {
             </Button>
           )}
         </Box>
+      </Paper>
+
+      {/* Onderneming type — drives Claude's BV-vs-ZZP classification rules */}
+      <Paper sx={{ p: 3, mb: 3 }}>
+        <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
+          <ServerIcon sx={{ mr: 1, color: "primary.main", flexShrink: 0 }} />
+          <Typography variant="h6" component="h2">Type onderneming</Typography>
+          {entityType && <Chip label={entityType} color="success" size="small" sx={{ ml: 1 }} />}
+        </Box>
+
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Bepaalt hoe Speedy je transacties classificeert. Voor een <strong>B.V.</strong> is elke
+          transactie zakelijk — beleggingen komen op de balans als Effecten, niet als privé vermogen.
+          Voor een <strong>ZZP</strong>'er of eenmanszaak mag privégebruik gemengd worden met
+          zakelijk.
+        </Typography>
+
+        <ToggleButtonGroup
+          value={entityType}
+          exclusive
+          size="small"
+          onChange={(_, val) => {
+            if (val !== null) handleSaveEntityType(val);
+          }}
+          disabled={entitySaving}
+          aria-label="Type onderneming"
+        >
+          <ToggleButton value="BV" sx={{ textTransform: "none", fontWeight: 600 }}>
+            B.V.
+          </ToggleButton>
+          <ToggleButton value="ZZP" sx={{ textTransform: "none", fontWeight: 600 }}>
+            ZZP
+          </ToggleButton>
+          <ToggleButton value="EM" sx={{ textTransform: "none", fontWeight: 600 }}>
+            Eenmanszaak
+          </ToggleButton>
+          <ToggleButton value="ANDERS" sx={{ textTransform: "none", fontWeight: 600 }}>
+            Anders
+          </ToggleButton>
+        </ToggleButtonGroup>
       </Paper>
 
       {/* SOAP API Credentials */}
@@ -439,6 +504,8 @@ export function SettingsPage() {
       </Paper>
 
       <PasskeysSection />
+
+      <LearnedSection />
 
       {/* Team Info */}
       {team && (

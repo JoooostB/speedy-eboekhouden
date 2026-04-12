@@ -13,6 +13,7 @@ import {
   CircularProgress,
   Checkbox,
   Tooltip,
+  Snackbar,
 } from "@mui/material";
 import { api } from "../../api/client";
 import { track } from "../../analytics";
@@ -110,6 +111,10 @@ export function BookkeepingInbox() {
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [reviewInvoices, setReviewInvoices] = useState<InvoiceAnalyzeResponse[] | null>(null);
   const [apiKeyStatus, setApiKeyStatus] = useState<{ status: string; message?: string } | null>(null);
+  // Snackbar shown after rows are processed so the user gets explicit
+  // feedback that something happened — without this, processed rows just
+  // vanish silently because we render activeItems.
+  const [snackbar, setSnackbar] = useState<{ message: string; severity: "success" | "warning" } | null>(null);
 
   const firstName = getFirstName(user?.name);
 
@@ -244,8 +249,10 @@ export function BookkeepingInbox() {
   // Handle batch processing results
   const handleBatchProcessed = useCallback((results: Map<number, InboxProcessResult>) => {
     const newProcessed = new Set<number>();
+    let errorCount = 0;
     results.forEach((result, id) => {
       if (result.status === "ok") newProcessed.add(id);
+      else errorCount++;
     });
     setProcessedIds((prev) => new Set([...prev, ...newProcessed]));
     setSelected(new Set());
@@ -259,6 +266,16 @@ export function BookkeepingInbox() {
       });
       return next;
     });
+
+    // Surface explicit feedback — rows disappear instantly so the user
+    // needs an external signal that the action succeeded.
+    if (newProcessed.size > 0) {
+      const okMsg = `${newProcessed.size} ${newProcessed.size === 1 ? "regel" : "regels"} geboekt`;
+      setSnackbar({
+        message: errorCount > 0 ? `${okMsg} (${errorCount} mislukt)` : okMsg,
+        severity: errorCount > 0 ? "warning" : "success",
+      });
+    }
   }, [items]);
 
   // Handle single item processed
@@ -277,6 +294,7 @@ export function BookkeepingInbox() {
         [item.category]: Math.max(0, prev[item.category] - 1),
       }));
     }
+    setSnackbar({ message: "Regel geboekt", severity: "success" });
   }, [items]);
 
   // Clear selection
@@ -625,14 +643,16 @@ export function BookkeepingInbox() {
               </Typography>
             </Box>
 
-            {/* Row list */}
+            {/* Row list — uses activeItems so successfully processed rows
+                disappear immediately after Goedkeuren / Verwerken instead of
+                lingering with a "Verwerkt" chip. */}
             <Box
               component="ul"
               role="list"
               aria-label="Inboxitems"
               sx={{ m: 0, p: 0 }}
             >
-              {filteredItems.map((item) => (
+              {activeItems.map((item) => (
                 <InboxRow
                   key={item.id}
                   item={item}
@@ -708,6 +728,26 @@ export function BookkeepingInbox() {
 
       {/* Bottom padding to prevent batch bar from covering last row */}
       {selectedItems.length > 0 && <Box sx={{ height: 80 }} aria-hidden="true" />}
+
+      {/* Feedback toast — visible long enough to be noticed, dismissible,
+          announced to screen readers via the underlying Alert role. */}
+      <Snackbar
+        open={snackbar !== null}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        {snackbar ? (
+          <Alert
+            severity={snackbar.severity}
+            onClose={() => setSnackbar(null)}
+            variant="filled"
+            sx={{ fontWeight: 600 }}
+          >
+            {snackbar.message}
+          </Alert>
+        ) : undefined}
+      </Snackbar>
     </Box>
   );
 }

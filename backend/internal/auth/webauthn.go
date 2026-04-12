@@ -156,9 +156,17 @@ func (s *WebAuthnService) FinishRegistration(ctx context.Context, challengeID st
 		Transport:       transports,
 		SignCount:       credential.Authenticator.SignCount,
 		FriendlyName:    "Eerste passkey",
+		// Persist the WebAuthn flags so future logins can validate that
+		// BackupEligible hasn't changed (which it never should — the spec
+		// requires it to be immutable per credential).
+		BackupEligible: credential.Flags.BackupEligible,
+		BackupState:    credential.Flags.BackupState,
+		UserPresent:    credential.Flags.UserPresent,
+		UserVerified:   credential.Flags.UserVerified,
 	}
-	log.Printf("Storing new credential for %s: id=%s (len=%d)",
-		entry.Email, hex.EncodeToString(credential.ID), len(credential.ID))
+	log.Printf("Storing new credential for %s: id=%s (len=%d) BE=%t BS=%t",
+		entry.Email, hex.EncodeToString(credential.ID), len(credential.ID),
+		credential.Flags.BackupEligible, credential.Flags.BackupState)
 	if err := s.db.StoreCredential(ctx, dbCred); err != nil {
 		return nil, fmt.Errorf("storing credential: %w", err)
 	}
@@ -286,6 +294,16 @@ func (s *WebAuthnService) toWebAuthnUser(dbUser *database.User, creds []*databas
 			PublicKey:       c.PublicKey,
 			AttestationType: c.AttestationType,
 			Transport:       transports,
+			// Replay the stored flags so the library's BackupEligible
+			// immutability check passes for syncable passkeys (iCloud
+			// Keychain, Bitwarden, 1Password, Google Password Manager all
+			// register with BE=true).
+			Flags: gowebauthn.CredentialFlags{
+				UserPresent:    c.UserPresent,
+				UserVerified:   c.UserVerified,
+				BackupEligible: c.BackupEligible,
+				BackupState:    c.BackupState,
+			},
 			Authenticator: gowebauthn.Authenticator{
 				AAGUID:    c.AAGUID,
 				SignCount: c.SignCount,

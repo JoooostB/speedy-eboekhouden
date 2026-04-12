@@ -150,6 +150,9 @@ export interface InvoiceData {
    *  "Geld uitgegeven" without a leverancier relation. */
   isReceipt: boolean;
   receiptReason: string;
+  /** ISO 4217 code from the invoice (EUR by default; CHF/USD/GBP/… for
+   *  foreign invoices). Drives fuzzy bank-line matching via FX conversion. */
+  currency: string;
   confidence: number;
   redenering: string;
   belastingAdvies: Array<{ type: string; tekst: string }>;
@@ -168,12 +171,18 @@ export interface InvoiceAnalyzeResponse {
   } | null;
   /** Internal ID of the crediteuren (1600) account */
   crediteurenId: number;
-  /** Matched unprocessed bank statement line (by amount) */
+  /** Matched unprocessed bank statement line. For non-EUR invoices the
+   *  match is fuzzy via approximate FX conversion — currencyConverted is
+   *  true in that case, with invoiceCurrency / invoiceAmount carrying the
+   *  original (non-EUR) values so the UI can show "32.80 CHF ≈ €34.50". */
   matchedBankLine: {
     id: number;
     datum: string;
     bedrag: number;
     omschrijving: string;
+    currencyConverted?: boolean;
+    invoiceCurrency?: string;
+    invoiceAmount?: number;
   } | null;
 }
 
@@ -214,11 +223,13 @@ export interface InvoiceSubmitReceiptRequest {
 }
 
 // Settings
+export type EntityType = "BV" | "ZZP" | "EM" | "ANDERS" | "";
+
 export interface SettingsResponse {
   hasApiKey: boolean;
   hasSoapCredentials: boolean;
   hasRestAccessToken: boolean;
-  preferences: Record<string, unknown>;
+  preferences: { entityType?: EntityType } & Record<string, unknown>;
 }
 
 // SOAP API types (raw JSON from e-boekhouden, Dutch field names)
@@ -321,6 +332,21 @@ export interface InboxClassification {
   soort: MutatieSoort;
   aiOmschrijving: string;
   indicator: string;
+  /** True when this row was filled in from the user's learned classification
+   *  memory rather than a fresh Claude call. The UI shows a small badge. */
+  learned?: boolean;
+}
+
+export interface LearnedClassification {
+  signal: string;
+  grootboekcode: string;
+  btwCode: string;
+  soort: string;
+  count: number;
+  sampleOmschrijving: string;
+  createdAt: string;
+  updatedAt: string;
+  confirmedAt?: string | null;
 }
 
 export interface InboxClassifyResponse {

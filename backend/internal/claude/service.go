@@ -4,11 +4,36 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
+
+// readInvoiceMaxTokens is the upper bound for the Sonnet response when
+// extracting invoice fields. Real invoices with several belastingadvies
+// tips and a long redenering have been observed near 1.5k tokens, so 4k
+// gives ~2.5x headroom for unusual cases (multiple line items, long
+// supplier descriptions). 2048 — the previous value — was tight and
+// occasionally truncated for verbose vendors.
+const readInvoiceMaxTokens = 4096
+
+// classifyTransactionMaxTokens covers the single-line classification
+// response (a few short JSON fields). 1024 is comfortably above the
+// observed ~120 token output but leaves room for unusually long
+// indicator/omschrijving values.
+const classifyTransactionMaxTokens = 1024
+
+// truncateForLog clips a string to maxLen characters, suffixing
+// "...(truncated)" when clipped. Used to keep log lines compact while
+// preserving enough of the failing response to debug it.
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "...(truncated)"
+}
 
 const invoiceSystemPromptBase = `You are a Dutch bookkeeping assistant. You read PDF invoices and extract structured data.
 Extract the following fields from the invoice. Use Dutch accounting conventions.
@@ -18,18 +43,73 @@ Fields to extract:
 - leverancier: company name of the supplier
 - factuurnummer: invoice number
 - datum: invoice date in YYYY-MM-DD format
-- bedragExclBtw: amount excluding VAT (number)
-- bedragInclBtw: amount including VAT (number)
-- btwBedrag: VAT amount (number)
+- bedragExclBtw: amount excluding VAT (number, in the invoice's stated currency — DO NOT convert to EUR)
+- bedragInclBtw: amount including VAT (number, in the invoice's stated currency — DO NOT convert to EUR)
+- btwBedrag: VAT amount (number, in the invoice's stated currency)
 - btwPercentage: VAT percentage (0, 9, or 21)
+- currency: ISO 4217 currency code in uppercase (EUR, CHF, USD, GBP, DKK, SEK, NOK, JPY, CAD, AUD, …). Detect from the symbol or label on the invoice (€, EUR, CHF, $, USD, £, GBP, etc.). Default to "EUR" only when the invoice does NOT state a currency. Never silently convert amounts — preserve the original currency and let downstream code handle FX. Tesla Supercharger receipts from Switzerland are commonly in CHF; many SaaS vendors invoice in USD or GBP.
+  CRITICAL: When btwCode is GEEN, btwBedrag MUST be 0 AND bedragExclBtw MUST equal bedragInclBtw.
+  This applies to ALL non-VAT invoices: insurance with assurantiebelasting, bank fees, government fees,
+  payroll taxes, etc. The assurantiebelasting/insurance tax line is NOT deductible BTW — it's part of
+  the cost. Never split it out into bedragExclBtw, even if the PDF shows a separate "premie" line.
+  The whole invoice total is what gets booked.
 - omschrijving: brief description of what was invoiced (max 200 chars, Dutch)
 - grootboekcode: suggested tegenrekening code. ONLY use codes from the list below. Pick the most appropriate one.
 - btwCode: one of HOOG_INK_21 (21% purchase), LAAG_INK_9 (9% purchase), GEEN (no VAT), VERL_INK (reverse charge EU services), VERL_INK_L9 (reverse charge 9%), BU_EU_INK (purchase from outside EU), BI_EU_INK (intra-EU goods)
-  IMPORTANT reverse charge detection rules:
-  * If the supplier is from another EU country AND no Dutch BTW (21%/9%) is charged on the invoice → use VERL_INK (21%) or VERL_INK_L9 (9%)
-  * Signs of reverse charge: invoice says "VAT reverse charge", "BTW verlegd", "Article 196 EU VAT Directive", foreign EU VAT number, 0% VAT with EU supplier
-  * If supplier is from outside the EU (US, UK, etc.) → use BU_EU_INK
-  * If the invoice explicitly charges Dutch BTW → use HOOG_INK_21 or LAAG_INK_9 as normal
+  IMPORTANT — read these rules carefully and apply them strictly. NEVER infer reverse charge from country alone.
+
+  EU VAT Directive Article 226 REQUIRES the supplier to print explicit reverse-charge text on the invoice.
+  Without that text the invoice is non-compliant and reverse charge does NOT apply unilaterally on the
+  recipient side. Only set a reverse-charge code (VERL_INK / VERL_INK_L9 / BI_EU_INK / BU_EU_INK) when
+  the invoice ITSELF says so in plain text.
+
+  Acceptable reverse-charge phrases (any of these on the invoice qualifies):
+    * "BTW verlegd" / "BTW verlegd naar de afnemer"
+    * "VAT reverse charge" / "Reverse charge"
+    * "Steuerschuldnerschaft des Leistungsempfängers" (German)
+    * "Autoliquidation" (French)
+    * "Inversión del sujeto pasivo" (Spanish)
+    * "Article 196 EU VAT Directive" / "Articolo 196" / "Articulo 196"
+    * The buyer's foreign VAT number printed alongside a 0% VAT line with a clear cross-border statement
+
+  Decision tree, in order:
+  1. Invoice charges Dutch BTW (supplier is registered in NL with a NL VAT number AND the BTW line shows 21% / 9% NL VAT) → HOOG_INK_21 or LAAG_INK_9.
+     Critical sub-rule: if the percentage is anything OTHER than 21 or 9 (e.g. 22 in Italy, 20 in France, 19 in Germany), the supplier is charging foreign VAT, NOT Dutch BTW. Continue to the next rules — do NOT use HOOG_INK_21 just because 22 is "close to" 21.
+  1a. EV charging at an EU charging station (Tesla Supercharger, Allego, IONITY, Fastned, Shell Recharge, ChargePoint, Mer, MaXiMa, KEME, etc.) — even when the invoice charges local foreign VAT (e.g. 22% Italian, 19% German):
+     For B2B EV charging where the recipient has a valid EU VAT number, EU VAT Directive Art 38 places the supply at the customer's country, meaning the supplier should have applied reverse charge (0% VAT + reverse-charge mention). Many charging networks fail to do this and bill local VAT instead. Dutch accounting practice for a NL B.V. with valid NL VAT number is to book as if reverse charge applied — net BTW effect is zero either way and matches the legally-correct treatment. Apply this rule when ALL hold:
+       * Supplier is in an EU country (see EU member states list below)
+       * The invoice line clearly relates to EV charging / Energiekosten / kWh / laadbeurt / charging session
+       * The recipient is on the invoice with a valid NL VAT number ("BTW-nummer NL...B...")
+     Then:
+       * btwCode = VERL_INK (services, 21% reverse charge — the standard treatment for EV charging as a service)
+       * bedragInclBtw = invoice total (incl. local foreign VAT, since you'll book the foreign VAT into the cost)
+       * bedragExclBtw = bedragInclBtw, btwBedrag = 0 (zero-rate code, no Dutch BTW splitting)
+       * Add a belastingadvies tip type "geen_btw":
+         "Tesla / [LEVERANCIER] rekent [PERCENTAGE]% [LAND] BTW maar had reverse charge moeten toepassen. Geboekt als verlegde BTW (intra-EU service, art. 38) — netto BTW-effect is gelijk. De [PERCENTAGE]% lokale BTW (€[BEDRAG]) is geen NL aftrekbare BTW maar onderdeel van de kosten."
+  1b. Other foreign VAT charged WITHOUT reverse-charge text (not EV charging — generic foreign supplier with local VAT, e.g. a Swiss hotel, a UK consultancy, an Italian restaurant):
+     * btwCode = GEEN. Foreign VAT is NOT deductible via the Dutch BTW-aangifte.
+     * The whole invoice total (incl. foreign VAT) is the cost — set bedragExclBtw = bedragInclBtw, btwBedrag = 0.
+     * Lower confidence to <= 0.6 because the booking should be reviewed.
+     * Add a belastingadvies tip of type "geen_btw" with text:
+       "Buitenlandse BTW [PERCENTAGE]% van [LAND]. Niet aftrekbaar via Nederlandse BTW-aangifte. Mogelijk terugvorderbaar via EU-teruggaveprocedure (vanaf €50/€400 drempel) — overweeg of dat de moeite waard is bij dit bedrag."
+       Replace [PERCENTAGE] and [LAND] with the actual values from the invoice.
+  2. Invoice explicitly contains one of the reverse-charge phrases above:
+     * Supplier in EU and the invoice is for services or electricity/gas/digital goods → VERL_INK (21%) or VERL_INK_L9 (9%)
+     * Supplier in EU and the invoice is for physical goods shipped intra-community → BI_EU_INK
+     * Supplier outside EU → BU_EU_INK
+  3. Invoice has 0% VAT but NO reverse-charge phrase, regardless of country:
+     * Set btwCode to GEEN.
+     * Lower confidence to <= 0.5 because the invoice may be non-compliant (the user should request a corrected invoice or check the supplier's status).
+     * Add a belastingadvies tip of type "geen_btw" with text:
+       "Op deze factuur staat 0% BTW maar geen verleggingsvermelding. Vraag een correcte factuur op bij de leverancier of controleer of dit terecht is — anders niet aftrekbaar."
+  4. Invoice has Dutch BTW but charged at the wrong rate, or supplier is dubious → mark btwCode as GEEN, lower confidence.
+
+  EU member states for reference (DO NOT use this list to infer reverse charge — it's only relevant for choosing between VERL_INK and BU_EU_INK once rule 2 has confirmed reverse charge applies):
+    Austria, Belgium, Bulgaria, Croatia, Cyprus, Czechia, Denmark, Estonia, Finland, France,
+    Germany / Deutschland, Greece, Hungary, Ireland, Italy, Latvia, Lithuania, Luxembourg, Malta,
+    Netherlands, Poland, Portugal, Romania, Slovakia, Slovenia, Spain, Sweden.
+  NOT EU (use BU_EU_INK only when rule 2 above confirms reverse charge): UK / GB (post-Brexit),
+  Switzerland (CH), Norway (NO), Iceland (IS), Liechtenstein, Turkey, USA, Canada, Australia, Japan.
 - isReverseCharge: boolean — true if this is a reverse charge invoice (verlegde BTW). Set to true when btwCode is VERL_INK, VERL_INK_L9, BU_EU_INK, or BI_EU_INK.
 - isReceipt: boolean — true when this document is a bonnetje (kassabon, kwitantie, till slip) rather than a formal factuur. Set isReceipt=true when ANY of these apply:
   * The supplier is a restaurant, cafe, bar, lunchroom, take-away, snackbar, koffiehuis, bakery, slijterij, supermarkt, kruidenier, tankstation, parkeergarage, parkeerplaats, kiosk, food truck, or any horeca establishment
@@ -40,7 +120,7 @@ Fields to extract:
 - confidence: 0.0-1.0 how confident you are in the extraction overall
 - redenering: brief Dutch explanation (max 100 chars) of WHY you chose this tegenrekening. Use the full account name, not abbreviations. Example: "Kantoorartikelen → Kantoorkosten" or "Brandstof → Vervoerskosten"
 - belastingAdvies: array of short Dutch tax tips relevant to this invoice. Only include when applicable. Each tip is an object with "type" and "tekst". Types and rules:
-  * type "reverse_charge": if isReverseCharge is true, ALWAYS include this tip. Tip: "Let op: dit is een reverse charge factuur (verlegde BTW). De BTW moet je zelf aangeven en afdragen in je BTW-aangifte. De BTW-code [code] zorgt hiervoor automatisch in e-Boekhouden." Replace [code] with the actual btwCode.
+  * NEVER include type "reverse_charge" — the UI already shows a dedicated warning for isReverseCharge=true, so including it as belastingadvies is redundant noise.
   * type "kia": if bedragInclBtw >= 450 AND it's an investment (hardware, equipment, furniture, vehicle, NOT consumables/subscriptions), advise about KIA (Kleinschaligheidsinvesteringsaftrek). Tip: "Dit bedrijfsmiddel komt mogelijk in aanmerking voor KIA (investeringsaftrek). Registreer het als Vaste Activa in e-Boekhouden."
   * type "vaste_activa": if bedragExclBtw > 450 AND it's a durable good, advise to register as Vaste Activa for depreciation. Tip: "Bedrijfsmiddelen boven €450 moeten worden geactiveerd en afgeschreven via Vaste Activa."
   * type "gemengd_gebruik": if the purchase could be mixed personal/business use (phone, laptop, car, internet), advise about zakelijk percentage. Tip: "Bij gemengd gebruik (zakelijk/privé) mag alleen het zakelijke deel worden afgetrokken."
@@ -117,13 +197,19 @@ func NewService() *Service {
 
 // ReadInvoice sends a PDF to Claude for structured data extraction.
 // If accounts is provided, Claude will only suggest codes from that list.
+//
+// Errors are logged in English with full diagnostics (the actual unmarshal
+// error, the response stop reason, and a preview of Claude's output) so
+// production failures are debuggable from logs alone. The returned error
+// is a clean Dutch message safe to surface in the UI — never the raw
+// Claude response, which used to leak through the previous error format.
 func (s *Service) ReadInvoice(ctx context.Context, apiKey string, pdfBase64 string, accounts []LedgerAccountInfo) (*InvoiceData, error) {
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 	prompt := buildInvoicePrompt(accounts)
 
 	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.ModelClaudeSonnet4_5,
-		MaxTokens: 2048,
+		MaxTokens: readInvoiceMaxTokens,
 		System: []anthropic.TextBlockParam{
 			{Text: prompt},
 		},
@@ -140,20 +226,37 @@ func (s *Service) ReadInvoice(ctx context.Context, apiKey string, pdfBase64 stri
 		return nil, classifyAPIError(err)
 	}
 
+	// Detect truncation explicitly. Unlike batch classification we can't
+	// split a single PDF response into halves, so we surface a specific
+	// Dutch error that tells the user the invoice was too complex —
+	// usually means there's a way to simplify (fewer line items, shorter
+	// description) or the prompt itself needs tightening.
+	if string(msg.StopReason) == "max_tokens" {
+		log.Printf("Claude ReadInvoice hit max_tokens (limit=%d); response is truncated", readInvoiceMaxTokens)
+		return nil, fmt.Errorf("Factuur te complex voor automatische verwerking. Voer de gegevens handmatig in of probeer een andere PDF.")
+	}
+
 	text := extractText(msg)
 	if text == "" {
-		return nil, fmt.Errorf("no text in Claude response")
+		log.Printf("Claude ReadInvoice returned no text content; stopReason=%s", msg.StopReason)
+		return nil, fmt.Errorf("Geen antwoord van AI. Probeer het opnieuw.")
 	}
 
 	var invoice InvoiceData
-	if err := json.Unmarshal([]byte(cleanJSON(text)), &invoice); err != nil {
-		return nil, fmt.Errorf("parsing Claude response: %w (response: %s)", err, text)
+	cleaned := cleanJSON(text)
+	if err := json.Unmarshal([]byte(cleaned), &invoice); err != nil {
+		log.Printf("Claude ReadInvoice unmarshal failed: err=%v stopReason=%s responseLen=%d preview=%s",
+			err, msg.StopReason, len(cleaned), truncateForLog(cleaned, 500))
+		return nil, fmt.Errorf("Factuurgegevens konden niet worden verwerkt. Probeer het opnieuw of voer handmatig in.")
 	}
 
 	return &invoice, nil
 }
 
-// ClassifyTransaction sends a bank transaction description to Claude for classification.
+// ClassifyTransaction sends a bank transaction description to Claude for
+// classification. Same logging/error-shape contract as ReadInvoice: English
+// log lines with full diagnostics, Dutch user-facing error strings, no
+// raw Claude output ever leaking back to the API consumer.
 func (s *Service) ClassifyTransaction(ctx context.Context, apiKey string, req ClassifyRequest) (*ClassifyResult, error) {
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 
@@ -164,7 +267,7 @@ func (s *Service) ClassifyTransaction(ctx context.Context, apiKey string, req Cl
 
 	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.ModelClaudeHaiku4_5,
-		MaxTokens: 512,
+		MaxTokens: classifyTransactionMaxTokens,
 		System: []anthropic.TextBlockParam{
 			{Text: classifySystemPrompt},
 		},
@@ -176,14 +279,24 @@ func (s *Service) ClassifyTransaction(ctx context.Context, apiKey string, req Cl
 		return nil, classifyAPIError(err)
 	}
 
+	if string(msg.StopReason) == "max_tokens" {
+		log.Printf("Claude ClassifyTransaction hit max_tokens (limit=%d); response truncated for description=%q",
+			classifyTransactionMaxTokens, truncateForLog(req.Omschrijving, 80))
+		return nil, fmt.Errorf("AI-suggestie kon niet worden voltooid. Probeer het opnieuw.")
+	}
+
 	text := extractText(msg)
 	if text == "" {
-		return nil, fmt.Errorf("no text in Claude response")
+		log.Printf("Claude ClassifyTransaction returned no text content; stopReason=%s", msg.StopReason)
+		return nil, fmt.Errorf("Geen antwoord van AI. Probeer het opnieuw.")
 	}
 
 	var result ClassifyResult
-	if err := json.Unmarshal([]byte(cleanJSON(text)), &result); err != nil {
-		return nil, fmt.Errorf("parsing Claude response: %w (response: %s)", err, text)
+	cleaned := cleanJSON(text)
+	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
+		log.Printf("Claude ClassifyTransaction unmarshal failed: err=%v stopReason=%s responseLen=%d preview=%s",
+			err, msg.StopReason, len(cleaned), truncateForLog(cleaned, 500))
+		return nil, fmt.Errorf("AI-suggestie kon niet worden verwerkt. Probeer het opnieuw.")
 	}
 
 	return &result, nil

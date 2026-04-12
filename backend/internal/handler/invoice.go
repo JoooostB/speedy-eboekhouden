@@ -131,7 +131,16 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		}
 	}
 
-	// Try to match against unprocessed bank statement lines
+	// Try to match against unprocessed bank statement lines.
+	//
+	// For EUR invoices the bedrag matches the bank line within 2 cents.
+	// For non-EUR invoices (Tesla Supercharger receipts in CHF, foreign
+	// hotels, USD/GBP SaaS) we convert the invoice total to an approximate
+	// EUR value and match within a wider tolerance to absorb the FX margin
+	// the user's bank applied. The matched bank line carries the user's
+	// real EUR amount — the FX estimate is only used to FIND the right
+	// line, not to book any number. We surface the fuzzy match to the
+	// frontend via "currencyConverted" so the user knows to verify.
 	var matchedBankLine *gin.H
 	if invoice.BedragInclBTW > 0 {
 		client := session.ClientFromContext(c)
@@ -139,16 +148,35 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 			raw, err := client.GetImportGrid(0, 500)
 			if err == nil {
 				rows, _, _ := eboekhouden.ParseImportGrid(raw)
+
+				eurEstimate, fxConverted := convertToEUR(invoice.BedragInclBTW, invoice.Currency)
 				for _, row := range rows {
 					bedrag, _ := toFloat(row["mutBedrag"])
-					// Match on amount (within 2 cents, negative = outgoing payment)
-					if abs(abs(bedrag)-invoice.BedragInclBTW) < 0.02 && bedrag < 0 {
+					if bedrag >= 0 {
+						continue // we only match outgoing payments to invoices
+					}
+					absBedrag := abs(bedrag)
+
+					var hit bool
+					if !fxConverted {
+						// EUR: tight 2-cent tolerance to avoid false positives
+						hit = abs(absBedrag-invoice.BedragInclBTW) < 0.02
+					} else {
+						// Non-EUR: relative tolerance around the FX estimate
+						diff := abs(absBedrag - eurEstimate)
+						hit = diff/eurEstimate < currencyMatchTolerance
+					}
+
+					if hit {
 						id, _ := toInt(row["id"])
 						matchedBankLine = &gin.H{
-							"id":           id,
-							"datum":        toString(row["mutDatum"]),
-							"bedrag":       bedrag,
-							"omschrijving": toString(row["mutOmschrijving"]),
+							"id":                 id,
+							"datum":              toString(row["mutDatum"]),
+							"bedrag":             bedrag,
+							"omschrijving":       toString(row["mutOmschrijving"]),
+							"currencyConverted":  fxConverted,
+							"invoiceCurrency":    strings.ToUpper(invoice.Currency),
+							"invoiceAmount":      invoice.BedragInclBTW,
 						}
 						break
 					}
@@ -366,6 +394,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 
 	mutResp, err := client.CreateMutatie(invoiceMutPayload)
 	if err != nil {
+		log.Printf("SubmitFull CreateMutatie error: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Factuur ontvangen mislukt: " + err.Error()})
 		return
 	}
@@ -374,15 +403,44 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		MutNr int `json:"mutNr"`
 		MutId int `json:"mutId"`
 	}
-	json.Unmarshal(mutResp, &mutResult)
+	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
+		log.Printf("SubmitFull invoice unmarshal error: %v body=%s", jsonErr, string(mutResp))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden bij factuur ontvangen"})
+		return
+	}
+	if mutResult.MutNr == 0 {
+		log.Printf("SubmitFull invoice mutNr=0, body=%s", string(mutResp))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Factuur ontvangen niet aangemaakt — controleer de gegevens"})
+		return
+	}
 
-	// Step 3: If linked to a bank line, also create "Factuurbetaling verstuurd" mutation (soort 4)
-	// This books: debit crediteuren, credit bank account — and marks the bank line as processed
+	// Step 3: If linked to a bank line, also create "Factuurbetaling verstuurd"
+	// mutation (soort 4). This books: debit crediteuren, credit bank account —
+	// and marks the bank line as processed via the importId field.
+	//
+	// IMPORTANT — for soort 4 the crediteurenboeking is implicit via
+	// relatieId+factuur. e-boekhouden looks up the matching open factuur and
+	// books it automatically. We must NOT send tegenRekening on the regel:
+	// the e-boekhouden web UI does not, and including it caused silent
+	// failures where the FactuurOntvangen succeeded but the payment was
+	// rejected, leaving the bank line unprocessed (mutate.har showed the
+	// canonical web-UI shape — no tegenRekening on the regel).
+	//
+	// We also surface payment failures to the user instead of swallowing
+	// them: an unprocessed bank line is a real problem the user needs to
+	// know about — the FactuurOntvangen is booked but the bank line stays
+	// in the inbox, leading to duplicate bookings on retry.
 	var paymentMutNr int
+	var paymentWarning string
 	if req.ImportId > 0 {
-		// Find the bank account (grootboekId from the bank line)
-		// The bank account ID comes from the matched bank line's grootboekId
 		bankAccountId := 0
+		// Capture the bank line's own omschrijving so we can use it on the
+		// payment mutation, matching what the e-boekhouden web UI does
+		// (manually-import.har shows the bank line's raw description being
+		// used verbatim). Better for audit reconciliation than a synthetic
+		// "Betaling X Y" string because it's literally what shows up on
+		// the bank statement.
+		bankLineOmschrijving := ""
 		raw, err := client.GetImportGrid(0, 500)
 		if err == nil {
 			rows, _, _ := eboekhouden.ParseImportGrid(raw)
@@ -390,42 +448,58 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 				id, _ := toInt(row["id"])
 				if id == req.ImportId {
 					bankAccountId, _ = toInt(row["grootboekId"])
+					bankLineOmschrijving = toString(row["mutOmschrijving"])
 					break
 				}
 			}
 		}
 
 		if bankAccountId > 0 {
+			// Prefer the bank line's own description; fall back to a
+			// synthetic "Betaling …" if for some reason it's empty.
+			paymentOmschrijving := bankLineOmschrijving
+			if paymentOmschrijving == "" {
+				paymentOmschrijving = "Betaling " + req.Factuurnummer + " " + req.Leverancier
+			}
 			paymentPayload, _ := json.Marshal(map[string]any{
 				"mutatie": map[string]any{
-					"rekening":     bankAccountId, // bank account
+					"rekening":     bankAccountId,
 					"datum":        req.Datum,
-					"soort":        4, // FactuurbetalingVerstuurd
-					"omschrijving": truncate("Betaling "+req.Factuurnummer+" "+req.Leverancier, 200),
+					"soort":        4,
+					"omschrijving": truncate(paymentOmschrijving, 200),
 				},
 				"mutatieRegels": []map[string]any{{
-					"index":         0,
-					"bedrag":        req.BedragIncl, // payment is incl BTW
-					"btw":           0,
-					"btwCode":       "GEEN",
-					"tegenRekening": req.RekeningId, // crediteuren
-					"relatieId":     req.RelatieId,
-					"factuur":       req.Factuurnummer,
+					"index":     0,
+					"bedrag":    req.BedragIncl,
+					"btw":       0,
+					"btwCode":   "GEEN",
+					"relatieId": req.RelatieId,
+					"factuur":   req.Factuurnummer,
 				}},
-				"importId": req.ImportId, // marks the bank line as processed
+				"importId": req.ImportId,
 			})
 
 			payResp, err := client.CreateMutatie(paymentPayload)
 			if err != nil {
-				log.Printf("Payment mutation error: %v", err)
-				// Non-fatal — invoice is booked, payment just failed
+				log.Printf("SubmitFull payment mutation error for invoice mutNr=%d: %v", mutResult.MutNr, err)
+				paymentWarning = "Factuur is geboekt, maar de afschriftregel kon niet worden gemarkeerd: " + err.Error()
 			} else {
 				var payResult struct {
 					MutNr int `json:"mutNr"`
 				}
-				json.Unmarshal(payResp, &payResult)
-				paymentMutNr = payResult.MutNr
+				if jsonErr := json.Unmarshal(payResp, &payResult); jsonErr != nil {
+					log.Printf("SubmitFull payment unmarshal error: %v body=%s", jsonErr, string(payResp))
+					paymentWarning = "Factuur is geboekt, maar het antwoord van e-Boekhouden voor de betaling was onverwacht. Controleer de afschriftregel handmatig."
+				} else if payResult.MutNr == 0 {
+					log.Printf("SubmitFull payment returned mutNr=0; body=%s", string(payResp))
+					paymentWarning = "Factuur is geboekt, maar de betalingsmutatie is niet aangemaakt — afschriftregel is mogelijk niet gemarkeerd. Controleer in e-Boekhouden."
+				} else {
+					paymentMutNr = payResult.MutNr
+				}
 			}
+		} else {
+			log.Printf("SubmitFull: could not resolve bankAccountId for importId=%d (bank line not found in grid)", req.ImportId)
+			paymentWarning = "Factuur is geboekt, maar de afschriftregel kon niet worden gevonden. Controleer in e-Boekhouden."
 		}
 	}
 
@@ -448,13 +522,21 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		h.redis.Del(c.Request.Context(), fmt.Sprintf("inbox:classify:%s", sess.UserID))
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"mutNr":        mutResult.MutNr,
 		"mutId":        mutResult.MutId,
 		"paymentMutNr": paymentMutNr,
 		"archived":     archiefFileId > 0,
 		"linked":       archiefFileId > 0 && mutResult.MutNr > 0,
-	})
+	}
+	// Surface a Dutch payment-step warning to the frontend so the user
+	// sees that the bank-line clearing didn't happen. The FactuurOntvangen
+	// itself succeeded so we still return 200, but the warning lets the UI
+	// show a yellow alert instead of green.
+	if paymentWarning != "" {
+		resp["paymentWarning"] = paymentWarning
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // SubmitReceipt handles POST /api/v1/invoices/submit-receipt — books a
@@ -516,10 +598,15 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		req.BedragExcl = req.BedragIncl - req.BTWBedrag
 	}
 
-	// Resolve the bank account: prefer the explicit field, fall back to the
-	// matched bank line's grootboekId. Without one we cannot book.
-	bankAccountId := req.BankAccountId
-	if bankAccountId == 0 && req.ImportId > 0 {
+	// Resolve the bank account: prefer the matched bank line's grootboekId
+	// (which is by definition a bank account the user owns and is currently
+	// accessible in their administration), fall back to the explicit field
+	// only after validating it against the user's active ledger accounts.
+	// Without this check, a caller could supply an arbitrary internal ID and
+	// have a "Geld uitgegeven" mutation booked against an unrelated account
+	// in the same administration (e.g. savings, investment).
+	bankAccountId := 0
+	if req.ImportId > 0 {
 		raw, err := client.GetImportGrid(0, 500)
 		if err == nil {
 			rows, _, _ := eboekhouden.ParseImportGrid(raw)
@@ -532,8 +619,29 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 			}
 		}
 	}
+	if bankAccountId == 0 && req.BankAccountId != 0 {
+		// Caller-provided bank account ID — validate it appears in the
+		// user's list of active ledger accounts and is in the bank category.
+		raw, err := client.GetActiveLedgerAccounts()
+		if err == nil {
+			var accs []map[string]any
+			if json.Unmarshal(raw, &accs) == nil {
+				for _, a := range accs {
+					id, _ := a["id"].(float64)
+					cat, _ := a["rekeningCategorie"].(string)
+					if int(id) == req.BankAccountId && (strings.EqualFold(cat, "BANK") || strings.EqualFold(cat, "KAS")) {
+						bankAccountId = req.BankAccountId
+						break
+					}
+				}
+			}
+		}
+		if bankAccountId == 0 {
+			log.Printf("SubmitReceipt: rejected unverified bankAccountId %d for user", req.BankAccountId)
+		}
+	}
 	if bankAccountId == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Geen bankrekening gevonden voor deze boeking. Koppel een afschriftregel of geef bankAccountId mee."})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Geen bankrekening gevonden voor deze boeking. Koppel een afschriftregel."})
 		return
 	}
 
@@ -602,6 +710,7 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 			"rekening":     bankAccountId,
 			"datum":        req.Datum,
 			"soort":        6, // GeldUitgegeven
+			"inEx":         "EX",
 			"omschrijving": truncate(desc, 200),
 		},
 		"mutatieRegels": []map[string]any{{
@@ -618,6 +727,7 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 
 	mutResp, err := client.CreateMutatie(mutPayload)
 	if err != nil {
+		log.Printf("SubmitReceipt CreateMutatie error: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje boeken mislukt: " + err.Error()})
 		return
 	}
@@ -626,7 +736,16 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		MutNr int `json:"mutNr"`
 		MutId int `json:"mutId"`
 	}
-	json.Unmarshal(mutResp, &mutResult)
+	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
+		log.Printf("SubmitReceipt unmarshal error: %v body=%s", jsonErr, string(mutResp))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden"})
+		return
+	}
+	if mutResult.MutNr == 0 {
+		log.Printf("SubmitReceipt mutNr=0, body=%s", string(mutResp))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje niet aangemaakt — controleer de gegevens"})
+		return
+	}
 
 	// Step 3: Link the archived file to the mutation.
 	if archiefFileId > 0 && mutResult.MutNr > 0 {
@@ -654,8 +773,20 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	})
 }
 
-// findOrCreateArchiveFolder finds or creates Basismap/Facturen/year/month folder structure.
-// Path: Basismap → Facturen → 2026 → 01 Januari
+// findOrCreateArchiveFolder finds or creates the Facturen/year/month folder
+// structure. Path: (implicit root Basismap) → Facturen → 2026 → 01 Januari.
+//
+// IMPORTANT: e-Boekhouden treats parentFolderId=0 as "the implicit root
+// Basismap" and Basismap itself does NOT appear as a real folder in the
+// GetArchiveFolders response. Earlier versions of this function tried to
+// find Basismap with parentId=0, didn't, and "helpfully" created a real
+// folder literally named "Basismap" — producing a doubled
+// Basismap/Basismap/Facturen/... structure. We now skip Basismap entirely
+// and create Facturen directly under parentFolderId=0.
+//
+// For backwards-compat with users who have the doubled structure from the
+// previous broken behavior, we look for an existing "Facturen" folder at
+// any depth so we don't strand old files.
 func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, datum time.Time) (int, error) {
 	maandNamen := []string{
 		"01 Januari", "02 Februari", "03 Maart", "04 April", "05 Mei", "06 Juni",
@@ -680,37 +811,36 @@ func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, d
 		return 0, fmt.Errorf("parsing folders: %w", err)
 	}
 
-	// Find "Basismap" root (parentId == 0)
-	var basismapId int
-	for _, f := range folders {
-		if f.Naam == "Basismap" && f.ParentId == 0 {
-			basismapId = f.ID
-			break
-		}
-	}
-	if basismapId == 0 {
-		payload, _ := json.Marshal(map[string]any{"parentFolderId": 0, "name": "Basismap"})
-		resp, err := client.CreateArchiveFolder(payload)
-		if err != nil {
-			return 0, fmt.Errorf("creating Basismap folder: %w", err)
-		}
-		var created struct {
-			ID int `json:"id"`
-		}
-		json.Unmarshal(resp, &created)
-		basismapId = created.ID
-	}
-
-	// Find or create "Facturen" under Basismap
+	// Find "Facturen" — preferring one at the top level (parentId == 0,
+	// which is the implicit Basismap root). If we don't find one there but
+	// there IS one under a folder literally named "Basismap" (legacy doubled
+	// structure from the old broken code), reuse that one so old files stay
+	// findable. If neither exists, create a fresh Facturen at the root.
 	var rootId int
 	for _, f := range folders {
-		if f.Naam == "Facturen" && f.ParentId == basismapId {
+		if f.Naam == "Facturen" && f.ParentId == 0 {
 			rootId = f.ID
 			break
 		}
 	}
 	if rootId == 0 {
-		payload, _ := json.Marshal(map[string]any{"parentFolderId": basismapId, "name": "Facturen"})
+		// Legacy fallback: look for Facturen under any "Basismap" parent.
+		basismapIDs := map[int]bool{}
+		for _, f := range folders {
+			if f.Naam == "Basismap" {
+				basismapIDs[f.ID] = true
+			}
+		}
+		for _, f := range folders {
+			if f.Naam == "Facturen" && basismapIDs[f.ParentId] {
+				rootId = f.ID
+				break
+			}
+		}
+	}
+	if rootId == 0 {
+		// Create Facturen directly at the implicit root.
+		payload, _ := json.Marshal(map[string]any{"parentFolderId": 0, "name": "Facturen"})
 		resp, err := client.CreateArchiveFolder(payload)
 		if err != nil {
 			return 0, fmt.Errorf("creating Facturen folder: %w", err)

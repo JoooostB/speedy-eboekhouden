@@ -167,9 +167,11 @@ STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: applic
 assert "Registration requires name" "$STATUS" "400"
 
 # --- Rate limiting (run LAST in security section — burns the rate limit) ---
-# Rate limiting is disabled in dev mode (COOKIE_SECURE=false).
-# Test it only if COOKIE_SECURE is not explicitly false.
-if [ "${COOKIE_SECURE:-}" != "false" ]; then
+# Rate limiting is disabled in dev mode (when the backend has COOKIE_SECURE=false).
+# The shell running this script has no way to know what the backend was started
+# with, so we default to SKIP and only run when RATE_LIMIT_TEST=1 is explicitly
+# set — typically in CI against a production-like build.
+if [ "${RATE_LIMIT_TEST:-}" = "1" ]; then
     bold ""
     bold "  Rate limit test (21 rapid requests to login/begin, limit=20)..."
     RATE_LIMITED="no"
@@ -182,7 +184,7 @@ if [ "${COOKIE_SECURE:-}" != "false" ]; then
     done
     assert "Rate limiting triggers on login endpoint" "$RATE_LIMITED" "yes"
 else
-    green "  SKIP  Rate limiting disabled in dev mode (COOKIE_SECURE=false)"
+    green "  SKIP  Rate limit test (set RATE_LIMIT_TEST=1 to enable; backend must run with COOKIE_SECURE=true)"
 fi
 
 # --- e-Boekhouden auth without Speedy session ---
