@@ -11,6 +11,8 @@ import {
   LinearProgress,
   Link,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   Alert,
   AlertTitle,
@@ -99,12 +101,46 @@ export function InvoiceReviewDialog({
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<SubmitResult[] | null>(null);
 
-  /** Update a single invoice field */
+  /** Update a single invoice field, keeping the bedrag/btw fields internally
+   *  consistent. The invariant is: bedragExcl + btwBedrag = bedragIncl. When
+   *  the BTW code is GEEN we force btwBedrag to 0 and bedragExcl to match
+   *  bedragIncl, because non-deductible taxes (assurantiebelasting, bank fees,
+   *  payroll taxes) are part of the cost and must not be split out.
+   *
+   *  When btwBedrag changes, we update bedragExcl = bedragIncl - btwBedrag.
+   *  When bedragIncl changes, we update bedragExcl from the current btw.
+   *  When the user explicitly edits bedragExcl, we leave btw and incl alone
+   *  (escape hatch for power users). */
   const updateField = useCallback(
     <K extends keyof InvoiceEdit>(index: number, field: K, value: InvoiceEdit[K]) => {
       setInvoices((prev) => {
         const next = [...prev];
-        next[index] = { ...next[index], [field]: value };
+        const updated: InvoiceEdit = { ...next[index], [field]: value };
+
+        // Reconcile bedragen depending on which field changed.
+        if (field === "btwCode" && value === "GEEN") {
+          // No-BTW: zero out btw and force excl to equal incl.
+          updated.btwBedrag = "0.00";
+          updated.bedragExcl = updated.bedragIncl;
+        } else if (field === "btwBedrag") {
+          const incl = parseFloat(updated.bedragIncl) || 0;
+          const btw = parseFloat(updated.btwBedrag) || 0;
+          updated.bedragExcl = (incl - btw).toFixed(2);
+        } else if (field === "bedragIncl") {
+          const incl = parseFloat(updated.bedragIncl) || 0;
+          const btw = parseFloat(updated.btwBedrag) || 0;
+          // If the row is currently no-BTW, keep excl=incl. Otherwise derive
+          // excl from the new incl minus the existing btw (the user can
+          // re-enter btw afterwards if needed).
+          if (updated.btwCode === "GEEN" || btw === 0) {
+            updated.bedragExcl = updated.bedragIncl;
+            updated.btwBedrag = "0.00";
+          } else {
+            updated.bedragExcl = (incl - btw).toFixed(2);
+          }
+        }
+
+        next[index] = updated;
         return next;
       });
     },
@@ -291,7 +327,7 @@ export function InvoiceReviewDialog({
                   m: 0,
                 }}
               >
-                {/* Legend: filename + confidence badge + bonnetje toggle */}
+                {/* Legend: filename + confidence badge */}
                 <Typography
                   component="legend"
                   sx={{
@@ -306,24 +342,37 @@ export function InvoiceReviewDialog({
                 >
                   {inv.source.filename}
                   <ConfidenceBadge confidence={inv.source.invoice.confidence} />
-                  <Chip
-                    label={inv.isReceipt ? "Bonnetje" : "Factuur"}
+                </Typography>
+
+                {/* Bonnetje / Factuur mode toggle — a real ToggleButtonGroup
+                    rather than a Chip. ToggleButtonGroup gives proper
+                    aria-pressed semantics, keyboard navigation, and a
+                    visually unambiguous selected state. Pre-filled from the
+                    AI's isReceipt detection but always overridable. */}
+                <Box sx={{ mt: 1.5, display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+                  <ToggleButtonGroup
+                    value={inv.isReceipt ? "receipt" : "invoice"}
+                    exclusive
                     size="small"
-                    color={inv.isReceipt ? "warning" : "default"}
-                    variant={inv.isReceipt ? "filled" : "outlined"}
-                    onClick={() => updateField(index, "isReceipt", !inv.isReceipt)}
+                    onChange={(_, val) => {
+                      if (val !== null) updateField(index, "isReceipt", val === "receipt");
+                    }}
                     disabled={submitting}
-                    sx={{ fontWeight: 600, fontSize: "0.6875rem", height: 22, cursor: "pointer" }}
-                    aria-label={inv.isReceipt
-                      ? "Wisselen naar factuur (met leverancier)"
-                      : "Wisselen naar bonnetje (zonder leverancier)"}
-                  />
+                    aria-label="Type document"
+                  >
+                    <ToggleButton value="invoice" sx={{ textTransform: "none", fontWeight: 600 }}>
+                      Factuur
+                    </ToggleButton>
+                    <ToggleButton value="receipt" sx={{ textTransform: "none", fontWeight: 600 }}>
+                      Bonnetje
+                    </ToggleButton>
+                  </ToggleButtonGroup>
                   {inv.isReceipt && inv.source.invoice.receiptReason && (
-                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 400 }}>
-                      ({inv.source.invoice.receiptReason})
+                    <Typography variant="caption" color="text.secondary">
+                      Reden: {inv.source.invoice.receiptReason}
                     </Typography>
                   )}
-                </Typography>
+                </Box>
 
                 {/*
                   Side-by-side layout: PDF preview (left) + form fields (right).
@@ -718,15 +767,31 @@ function buildEdit(a: InvoiceAnalyzeResponse, ledgerAccounts: LedgerAccount[]): 
       }
     : null;
 
+  // Normalize the bedragen on load. If the AI returned btwCode=GEEN with a
+  // non-zero btwBedrag (or with bedragExcl < bedragIncl), force excl to
+  // equal incl and zero the btw — non-deductible taxes are part of the
+  // cost and must not be split out, regardless of what the PDF showed.
+  const btwCode = inv.btwCode || "HOOG_INK_21";
+  let bedragIncl = inv.bedragInclBtw ?? 0;
+  let bedragExcl = inv.bedragExclBtw ?? 0;
+  let btwBedrag = inv.btwBedrag ?? 0;
+  if (btwCode === "GEEN") {
+    bedragExcl = bedragIncl;
+    btwBedrag = 0;
+  } else if (Math.abs(bedragExcl + btwBedrag - bedragIncl) > 0.01) {
+    // Numbers don't add up — trust incl + btw, derive excl.
+    bedragExcl = bedragIncl - btwBedrag;
+  }
+
   return {
     source: a,
     leverancier: inv.leverancier ?? "",
     factuurnummer: inv.factuurnummer ?? "",
     datum: inv.datum ?? new Date().toISOString().slice(0, 10),
-    bedragExcl: inv.bedragExclBtw?.toFixed(2) ?? "0.00",
-    bedragIncl: inv.bedragInclBtw?.toFixed(2) ?? "0.00",
-    btwBedrag: inv.btwBedrag?.toFixed(2) ?? "0.00",
-    btwCode: inv.btwCode || "HOOG_INK_21",
+    bedragExcl: bedragExcl.toFixed(2),
+    bedragIncl: bedragIncl.toFixed(2),
+    btwBedrag: btwBedrag.toFixed(2),
+    btwCode,
     omschrijving: inv.omschrijving ?? "",
     relation: matchedRelation,
     ledgerAccount: matchedLedger,

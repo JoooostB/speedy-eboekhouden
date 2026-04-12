@@ -26,3 +26,4 @@ frontend/dist/
 .claude/
 secret.yaml
 *.yaml.local
+*.har

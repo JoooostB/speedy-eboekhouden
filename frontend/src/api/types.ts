@@ -214,11 +214,13 @@ export interface InvoiceSubmitReceiptRequest {
 }
 
 // Settings
+export type EntityType = "BV" | "ZZP" | "EM" | "ANDERS" | "";
+
 export interface SettingsResponse {
   hasApiKey: boolean;
   hasSoapCredentials: boolean;
   hasRestAccessToken: boolean;
-  preferences: Record<string, unknown>;
+  preferences: { entityType?: EntityType } & Record<string, unknown>;
 }
 
 // SOAP API types (raw JSON from e-boekhouden, Dutch field names)
@@ -321,6 +323,21 @@ export interface InboxClassification {
   soort: MutatieSoort;
   aiOmschrijving: string;
   indicator: string;
+  /** True when this row was filled in from the user's learned classification
+   *  memory rather than a fresh Claude call. The UI shows a small badge. */
+  learned?: boolean;
+}
+
+export interface LearnedClassification {
+  signal: string;
+  grootboekcode: string;
+  btwCode: string;
+  soort: string;
+  count: number;
+  sampleOmschrijving: string;
+  createdAt: string;
+  updatedAt: string;
+  confirmedAt?: string | null;
 }
 
 export interface InboxClassifyResponse {

@@ -324,6 +324,55 @@ func validateRestToken(accessToken string) error {
 	return nil
 }
 
+// SetEntityType handles PUT /api/v1/settings/entity-type — stores the user's
+// onderneming type (BV, ZZP, EM, ANDERS) as a preference. The Claude classifier
+// uses this to decide whether bank lines default to private or business
+// classification: for a B.V. every euro on the bank account is by definition
+// business, while a ZZP'er can mix personal and business in the same account.
+func (h *SettingsHandler) SetEntityType(c *gin.Context) {
+	sess := session.FromContext(c)
+	if sess == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+		return
+	}
+
+	var req struct {
+		EntityType string `json:"entityType"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ongeldig verzoek"})
+		return
+	}
+
+	// Whitelist accepted values to keep the prompt-injection surface narrow.
+	switch req.EntityType {
+	case "BV", "ZZP", "EM", "ANDERS", "":
+		// allowed (empty string clears the preference)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Onbekend type onderneming"})
+		return
+	}
+
+	// Merge into existing preferences rather than overwriting them.
+	settings, _ := h.db.GetSettings(c.Request.Context(), sess.UserID)
+	prefs := map[string]any{}
+	if settings != nil && len(settings.Preferences) > 0 {
+		json.Unmarshal(settings.Preferences, &prefs)
+	}
+	if req.EntityType == "" {
+		delete(prefs, "entityType")
+	} else {
+		prefs["entityType"] = req.EntityType
+	}
+	body, _ := json.Marshal(prefs)
+	if err := h.db.SetPreferences(c.Request.Context(), sess.UserID, body); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Opslaan mislukt"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "entityType": req.EntityType})
+}
+
 func sanitizeError(msg string) string {
 	// Strip anything that looks like credentials
 	msg = strings.ReplaceAll(msg, "\n", " ")

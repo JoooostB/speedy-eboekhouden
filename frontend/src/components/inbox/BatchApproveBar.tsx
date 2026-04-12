@@ -29,12 +29,14 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<{ ok: number; error: number } | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [dialogError, setDialogError] = useState<string | null>(null);
 
   // Receives the items as edited by the user in the confirm dialog.
   const handleApprove = async (editedItems: InboxClassification[]) => {
     setProcessing(true);
     setProgress(0);
     setResults(null);
+    setDialogError(null);
 
     // Map MutatieSoort names to numeric codes for the API
     const soortCodes: Record<string, number> = {
@@ -75,9 +77,23 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
       setResults({ ok, error });
       onProcessed(allResults);
       track("Inbox Batch Approve", { count: String(editedItems.length), ok: String(ok), error: String(error) });
-      setConfirmOpen(false);
-    } catch (err) {
+
+      if (error > 0) {
+        // Surface the first error inside the dialog instead of silently
+        // closing it. The user gets to see what went wrong and try again.
+        const firstError = Array.from(allResults.values()).find((r) => r.status === "error");
+        setDialogError(
+          ok === 0
+            ? `Boeking mislukt: ${firstError?.error || "onbekende fout"}`
+            : `${error} van ${editedItems.length} boekingen mislukt. Eerste fout: ${firstError?.error || "onbekend"}`,
+        );
+        // Keep the dialog open so the user can adjust and retry.
+      } else {
+        setConfirmOpen(false);
+      }
+    } catch (err: any) {
       setResults({ ok: 0, error: editedItems.length });
+      setDialogError(err?.message || "Verwerking mislukt");
     } finally {
       setProcessing(false);
     }
@@ -196,12 +212,18 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
 
       <BookingConfirmDialog
         open={confirmOpen}
-        onClose={() => !processing && setConfirmOpen(false)}
+        onClose={() => {
+          if (!processing) {
+            setConfirmOpen(false);
+            setDialogError(null);
+          }
+        }}
         items={selected}
         ledgerAccounts={ledgerAccounts}
         vatCodes={vatCodes}
         onConfirm={handleApprove}
         processing={processing}
+        error={dialogError}
       />
     </Box>
   );

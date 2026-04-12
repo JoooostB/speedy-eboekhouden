@@ -22,6 +22,11 @@ Fields to extract:
 - bedragInclBtw: amount including VAT (number)
 - btwBedrag: VAT amount (number)
 - btwPercentage: VAT percentage (0, 9, or 21)
+  CRITICAL: When btwCode is GEEN, btwBedrag MUST be 0 AND bedragExclBtw MUST equal bedragInclBtw.
+  This applies to ALL non-VAT invoices: insurance with assurantiebelasting, bank fees, government fees,
+  payroll taxes, etc. The assurantiebelasting/insurance tax line is NOT deductible BTW — it's part of
+  the cost. Never split it out into bedragExclBtw, even if the PDF shows a separate "premie" line.
+  The whole invoice total is what gets booked.
 - omschrijving: brief description of what was invoiced (max 200 chars, Dutch)
 - grootboekcode: suggested tegenrekening code. ONLY use codes from the list below. Pick the most appropriate one.
 - btwCode: one of HOOG_INK_21 (21% purchase), LAAG_INK_9 (9% purchase), GEEN (no VAT), VERL_INK (reverse charge EU services), VERL_INK_L9 (reverse charge 9%), BU_EU_INK (purchase from outside EU), BI_EU_INK (intra-EU goods)

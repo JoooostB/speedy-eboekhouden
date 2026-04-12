@@ -366,6 +366,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 
 	mutResp, err := client.CreateMutatie(invoiceMutPayload)
 	if err != nil {
+		log.Printf("SubmitFull CreateMutatie error: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Factuur ontvangen mislukt: " + err.Error()})
 		return
 	}
@@ -374,7 +375,16 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		MutNr int `json:"mutNr"`
 		MutId int `json:"mutId"`
 	}
-	json.Unmarshal(mutResp, &mutResult)
+	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
+		log.Printf("SubmitFull invoice unmarshal error: %v body=%s", jsonErr, string(mutResp))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden bij factuur ontvangen"})
+		return
+	}
+	if mutResult.MutNr == 0 {
+		log.Printf("SubmitFull invoice mutNr=0, body=%s", string(mutResp))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Factuur ontvangen niet aangemaakt — controleer de gegevens"})
+		return
+	}
 
 	// Step 3: If linked to a bank line, also create "Factuurbetaling verstuurd" mutation (soort 4)
 	// This books: debit crediteuren, credit bank account — and marks the bank line as processed
@@ -516,10 +526,15 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		req.BedragExcl = req.BedragIncl - req.BTWBedrag
 	}
 
-	// Resolve the bank account: prefer the explicit field, fall back to the
-	// matched bank line's grootboekId. Without one we cannot book.
-	bankAccountId := req.BankAccountId
-	if bankAccountId == 0 && req.ImportId > 0 {
+	// Resolve the bank account: prefer the matched bank line's grootboekId
+	// (which is by definition a bank account the user owns and is currently
+	// accessible in their administration), fall back to the explicit field
+	// only after validating it against the user's active ledger accounts.
+	// Without this check, a caller could supply an arbitrary internal ID and
+	// have a "Geld uitgegeven" mutation booked against an unrelated account
+	// in the same administration (e.g. savings, investment).
+	bankAccountId := 0
+	if req.ImportId > 0 {
 		raw, err := client.GetImportGrid(0, 500)
 		if err == nil {
 			rows, _, _ := eboekhouden.ParseImportGrid(raw)
@@ -532,8 +547,29 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 			}
 		}
 	}
+	if bankAccountId == 0 && req.BankAccountId != 0 {
+		// Caller-provided bank account ID — validate it appears in the
+		// user's list of active ledger accounts and is in the bank category.
+		raw, err := client.GetActiveLedgerAccounts()
+		if err == nil {
+			var accs []map[string]any
+			if json.Unmarshal(raw, &accs) == nil {
+				for _, a := range accs {
+					id, _ := a["id"].(float64)
+					cat, _ := a["rekeningCategorie"].(string)
+					if int(id) == req.BankAccountId && (strings.EqualFold(cat, "BANK") || strings.EqualFold(cat, "KAS")) {
+						bankAccountId = req.BankAccountId
+						break
+					}
+				}
+			}
+		}
+		if bankAccountId == 0 {
+			log.Printf("SubmitReceipt: rejected unverified bankAccountId %d for user", req.BankAccountId)
+		}
+	}
 	if bankAccountId == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Geen bankrekening gevonden voor deze boeking. Koppel een afschriftregel of geef bankAccountId mee."})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Geen bankrekening gevonden voor deze boeking. Koppel een afschriftregel."})
 		return
 	}
 
@@ -602,6 +638,7 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 			"rekening":     bankAccountId,
 			"datum":        req.Datum,
 			"soort":        6, // GeldUitgegeven
+			"inEx":         "EX",
 			"omschrijving": truncate(desc, 200),
 		},
 		"mutatieRegels": []map[string]any{{
@@ -618,6 +655,7 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 
 	mutResp, err := client.CreateMutatie(mutPayload)
 	if err != nil {
+		log.Printf("SubmitReceipt CreateMutatie error: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje boeken mislukt: " + err.Error()})
 		return
 	}
@@ -626,7 +664,16 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		MutNr int `json:"mutNr"`
 		MutId int `json:"mutId"`
 	}
-	json.Unmarshal(mutResp, &mutResult)
+	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
+		log.Printf("SubmitReceipt unmarshal error: %v body=%s", jsonErr, string(mutResp))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden"})
+		return
+	}
+	if mutResult.MutNr == 0 {
+		log.Printf("SubmitReceipt mutNr=0, body=%s", string(mutResp))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje niet aangemaakt — controleer de gegevens"})
+		return
+	}
 
 	// Step 3: Link the archived file to the mutation.
 	if archiefFileId > 0 && mutResult.MutNr > 0 {
@@ -654,8 +701,20 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	})
 }
 
-// findOrCreateArchiveFolder finds or creates Basismap/Facturen/year/month folder structure.
-// Path: Basismap → Facturen → 2026 → 01 Januari
+// findOrCreateArchiveFolder finds or creates the Facturen/year/month folder
+// structure. Path: (implicit root Basismap) → Facturen → 2026 → 01 Januari.
+//
+// IMPORTANT: e-Boekhouden treats parentFolderId=0 as "the implicit root
+// Basismap" and Basismap itself does NOT appear as a real folder in the
+// GetArchiveFolders response. Earlier versions of this function tried to
+// find Basismap with parentId=0, didn't, and "helpfully" created a real
+// folder literally named "Basismap" — producing a doubled
+// Basismap/Basismap/Facturen/... structure. We now skip Basismap entirely
+// and create Facturen directly under parentFolderId=0.
+//
+// For backwards-compat with users who have the doubled structure from the
+// previous broken behavior, we look for an existing "Facturen" folder at
+// any depth so we don't strand old files.
 func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, datum time.Time) (int, error) {
 	maandNamen := []string{
 		"01 Januari", "02 Februari", "03 Maart", "04 April", "05 Mei", "06 Juni",
@@ -680,37 +739,36 @@ func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, d
 		return 0, fmt.Errorf("parsing folders: %w", err)
 	}
 
-	// Find "Basismap" root (parentId == 0)
-	var basismapId int
-	for _, f := range folders {
-		if f.Naam == "Basismap" && f.ParentId == 0 {
-			basismapId = f.ID
-			break
-		}
-	}
-	if basismapId == 0 {
-		payload, _ := json.Marshal(map[string]any{"parentFolderId": 0, "name": "Basismap"})
-		resp, err := client.CreateArchiveFolder(payload)
-		if err != nil {
-			return 0, fmt.Errorf("creating Basismap folder: %w", err)
-		}
-		var created struct {
-			ID int `json:"id"`
-		}
-		json.Unmarshal(resp, &created)
-		basismapId = created.ID
-	}
-
-	// Find or create "Facturen" under Basismap
+	// Find "Facturen" — preferring one at the top level (parentId == 0,
+	// which is the implicit Basismap root). If we don't find one there but
+	// there IS one under a folder literally named "Basismap" (legacy doubled
+	// structure from the old broken code), reuse that one so old files stay
+	// findable. If neither exists, create a fresh Facturen at the root.
 	var rootId int
 	for _, f := range folders {
-		if f.Naam == "Facturen" && f.ParentId == basismapId {
+		if f.Naam == "Facturen" && f.ParentId == 0 {
 			rootId = f.ID
 			break
 		}
 	}
 	if rootId == 0 {
-		payload, _ := json.Marshal(map[string]any{"parentFolderId": basismapId, "name": "Facturen"})
+		// Legacy fallback: look for Facturen under any "Basismap" parent.
+		basismapIDs := map[int]bool{}
+		for _, f := range folders {
+			if f.Naam == "Basismap" {
+				basismapIDs[f.ID] = true
+			}
+		}
+		for _, f := range folders {
+			if f.Naam == "Facturen" && basismapIDs[f.ParentId] {
+				rootId = f.ID
+				break
+			}
+		}
+	}
+	if rootId == 0 {
+		// Create Facturen directly at the implicit root.
+		payload, _ := json.Marshal(map[string]any{"parentFolderId": 0, "name": "Facturen"})
 		resp, err := client.CreateArchiveFolder(payload)
 		if err != nil {
 			return 0, fmt.Errorf("creating Facturen folder: %w", err)

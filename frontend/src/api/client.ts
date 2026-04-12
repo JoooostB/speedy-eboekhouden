@@ -423,6 +423,36 @@ export const api = {
     });
   },
 
+  // Learned classifications (AI memory)
+  listLearned() {
+    return request<{
+      learned: Array<{
+        signal: string;
+        grootboekcode: string;
+        btwCode: string;
+        soort: string;
+        count: number;
+        sampleOmschrijving: string;
+        createdAt: string;
+        updatedAt: string;
+        confirmedAt?: string | null;
+      }>;
+    }>("/settings/learned");
+  },
+
+  deleteLearned(signal: string) {
+    return request<{ status: string }>(
+      `/settings/learned/item?signal=${encodeURIComponent(signal)}`,
+      { method: "DELETE" },
+    );
+  },
+
+  deleteAllLearned() {
+    return request<{ status: string }>("/settings/learned?confirm=true", {
+      method: "DELETE",
+    });
+  },
+
   checkApiKeyStatus() {
     return request<{ status: string; message?: string }>("/settings/api-key/status");
   },
@@ -460,6 +490,13 @@ export const api = {
 
   deleteRestToken() {
     return request<{ status: string }>("/settings/rest-token", { method: "DELETE" });
+  },
+
+  setEntityType(entityType: "BV" | "ZZP" | "EM" | "ANDERS" | "") {
+    return request<{ status: string; entityType: string }>("/settings/entity-type", {
+      method: "PUT",
+      body: JSON.stringify({ entityType }),
+    });
   },
 
   // SOAP API endpoints

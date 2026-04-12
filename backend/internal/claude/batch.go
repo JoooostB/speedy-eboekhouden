@@ -25,7 +25,11 @@ For EACH line, return:
 - needsInvoice: boolean — true if an invoice/receipt PDF is required for this transaction
 - confidence: 0.0-1.0
 - grootboekcode: suggested ledger account code (4100, 4200, etc.)
-- btwCode: suggested VAT code (HOOG_INK_21, LAAG_INK_9, GEEN, HOOG_VERK_21, etc.)
+- btwCode: suggested VAT code. CRITICAL — the direction MUST match the soort:
+  * For OUTGOING/expense soorten (GeldUitgegeven, FactuurbetalingVerstuurd): use INK codes (HOOG_INK_21, LAAG_INK_9, VERL_INK, BU_EU_INK, BI_EU_INK) or GEEN.
+  * For INCOMING soorten (GeldOntvangen, FactuurbetalingOntvangen): use VERK codes (HOOG_VERK_21, LAAG_VERK_9) or GEEN.
+  * REFUNDS of past purchases are still incoming → use HOOG_VERK_21 even though the original purchase was HOOG_INK_21. e-Boekhouden enforces this — INK on a Geld ontvangen line will be rejected.
+  * Bank fees, salary, taxes, private withdrawals: GEEN.
 - soort: transaction type (GeldUitgegeven, GeldOntvangen, FactuurbetalingVerstuurd, FactuurbetalingOntvangen)
 - omschrijving: cleaned/shortened description (max 200 chars, Dutch)
 - indicator: why you classified it this way (max 50 chars, Dutch, for the user)
@@ -78,13 +82,19 @@ type BatchClassifyResult struct {
 	Indicator     string  `json:"indicator"` // short explanation
 }
 
-// ClassifyBatch sends all bank lines to Claude in one call for batch classification.
-func (s *Service) ClassifyBatch(ctx context.Context, apiKey string, lines []BatchLine) ([]BatchClassifyResult, error) {
+// ClassifyBatch sends all bank lines to Claude in one call for batch
+// classification. entityType is the user's onderneming type ("BV", "ZZP",
+// "EM", "ANDERS", or empty for unknown) — it controls whether the classifier
+// defaults to private or business assumptions for ambiguous transactions.
+func (s *Service) ClassifyBatch(ctx context.Context, apiKey, entityType string, lines []BatchLine) ([]BatchClassifyResult, error) {
 	if len(lines) == 0 {
 		return []BatchClassifyResult{}, nil
 	}
 
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
+
+	// Build the system prompt with the entity-type addendum prepended.
+	systemPrompt := buildBatchSystemPrompt(entityType)
 
 	// Build the user message with all lines, wrapped in boundary tags to resist prompt injection
 	linesJSON, _ := json.Marshal(lines)
@@ -94,7 +104,7 @@ func (s *Service) ClassifyBatch(ctx context.Context, apiKey string, lines []Batc
 		Model:     anthropic.ModelClaudeHaiku4_5,
 		MaxTokens: 4096,
 		System: []anthropic.TextBlockParam{
-			{Text: batchClassifyPrompt},
+			{Text: systemPrompt},
 		},
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(userMsg)),
@@ -122,4 +132,34 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// buildBatchSystemPrompt prepends entity-type-specific guidance to the base
+// classifier prompt. The B.V. variant matters most: for a rechtspersoon every
+// bank transaction is by definition business, including investments
+// (which belong on the balance sheet as Effecten / Beleggingen, NOT as private
+// withdrawals). The ZZP variant is more permissive about private bookings.
+func buildBatchSystemPrompt(entityType string) string {
+	var addendum string
+	switch entityType {
+	case "BV":
+		addendum = `IMPORTANT CONTEXT: This bank account belongs to a Dutch B.V. (besloten vennootschap, a legal entity / rechtspersoon).
+For a B.V. there is a strict legal separation between private and business assets — every euro on this bank account is BUSINESS by definition. Private use is impossible because the account is owned by the legal entity, not by a natural person.
+
+Apply these B.V.-specific rules:
+- NEVER classify any transaction as "privé", "privéopname", "privé vermogen", or similar private categories.
+- Investment transactions (DEGIRO, Saxo, BUX, Trade Republic, Interactive Brokers, Bolero, eToro, Flatex, brokers in general) are BUSINESS investments → grootboekrekening 0140 (Effecten/Beleggingen) or similar securities account, indicator "Belegging B.V.", soort GeldUitgegeven (purchase) or GeldOntvangen (sale/dividend). Never call them "privé vermogen".
+- Owner withdrawals would be "Rekening-courant directeur" (0300 / 0310) or salary, NOT private withdrawal — but only when explicitly to the DGA.
+- Reimbursements to the DGA (e.g. "Onkostenvergoeding") are GeldUitgegeven against rekening-courant or onkostenrekening, not private.
+- Bank fees, taxes, salary payments, supplier payments — all standard business categories.
+
+`
+	case "ZZP", "EM":
+		addendum = `CONTEXT: This bank account belongs to a Dutch ZZP'er / eenmanszaak. There is no legal separation between private and business — the user can mix the two on this account. Private withdrawals (Priveopname, 0600) are valid for personal expenses, ATM withdrawals, etc.
+
+`
+	default:
+		// No addendum — use the base prompt as-is.
+	}
+	return addendum + batchClassifyPrompt
 }

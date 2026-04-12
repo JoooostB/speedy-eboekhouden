@@ -35,6 +35,39 @@ func isSessionExpiredBody(status int, body []byte) bool {
 		strings.Contains(s, "\"errorType\":\"security\"")
 }
 
+// errorEnvelope mirrors the JSON shape e-boekhouden returns for application
+// errors: HTTP 200, body like {"errorType":"validation","message":"...","code":"..."}.
+// We use json.Unmarshal rather than string sniffing so we can also surface the
+// human-readable message back to the caller.
+type errorEnvelope struct {
+	ErrorType string `json:"errorType"`
+	Message   string `json:"message"`
+	Code      string `json:"code"`
+}
+
+// parseErrorEnvelope returns (envelope, true) when the response body is an
+// e-boekhouden error envelope. It is intentionally strict: it requires
+// errorType to be set to a non-empty string AND the JSON to NOT contain a
+// success marker (mutNr, etc.) so legitimate responses are never misclassified.
+//
+// Session-expired bodies are excluded because the caller already short-circuits
+// those via isSessionExpiredBody (which returns ErrSessionExpired).
+func parseErrorEnvelope(body []byte) (errorEnvelope, bool) {
+	var env errorEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return env, false
+	}
+	if env.ErrorType == "" {
+		return env, false
+	}
+	// "security" envelopes are handled separately as ErrSessionExpired so the
+	// frontend can flip the connection state. Don't double-handle them here.
+	if env.ErrorType == "security" {
+		return env, false
+	}
+	return env, true
+}
+
 // Client holds an authenticated session with e-boekhouden.
 type Client struct {
 	httpClient  *http.Client
@@ -123,10 +156,32 @@ func (c *Client) apiGet(path string) (json.RawMessage, error) {
 	if isSessionExpiredBody(resp.StatusCode, body) {
 		return nil, ErrSessionExpired
 	}
+	if env, isErr := parseErrorEnvelope(body); isErr {
+		return nil, fmt.Errorf("e-Boekhouden: %s", envelopeMessage(env))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("request to %s returned %d: %s", path, resp.StatusCode, string(body))
 	}
 	return json.RawMessage(body), nil
+}
+
+// envelopeMessage returns the most user-friendly string from an error
+// envelope, capped to 200 characters. The cap prevents an unusually long or
+// maliciously crafted upstream message from inflating our API responses or
+// causing rendering issues in the frontend.
+func envelopeMessage(env errorEnvelope) string {
+	msg := env.Message
+	if msg == "" {
+		msg = env.Code
+	}
+	if msg == "" {
+		msg = env.ErrorType
+	}
+	const maxLen = 200
+	if len(msg) > maxLen {
+		msg = msg[:maxLen]
+	}
+	return msg
 }
 
 // apiPost performs a POST request to the secure20 API with a JSON body and returns the raw JSON response.
@@ -150,6 +205,9 @@ func (c *Client) apiPost(path string, payload json.RawMessage) (json.RawMessage,
 	}
 	if isSessionExpiredBody(resp.StatusCode, body) {
 		return nil, ErrSessionExpired
+	}
+	if env, isErr := parseErrorEnvelope(body); isErr {
+		return nil, fmt.Errorf("e-Boekhouden: %s", envelopeMessage(env))
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return nil, fmt.Errorf("request to %s returned %d: %s", path, resp.StatusCode, string(body))
