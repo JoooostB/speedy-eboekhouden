@@ -20,7 +20,7 @@ import { track } from "../../analytics";
 import { useAuth } from "../../context/AuthContext";
 import { useLedgerAccounts } from "../../hooks/useLedgerAccounts";
 import { useVATCodes } from "../../hooks/useVATCodes";
-import type { InboxClassification, InboxCategory, InboxProcessResult, InvoiceAnalyzeResponse } from "../../api/types";
+import type { InboxClassification, InboxCategory, InboxProcessResult, AnalyzedInvoice } from "../../api/types";
 import { InboxRow } from "./InboxRow";
 import { BatchApproveBar } from "./BatchApproveBar";
 import { InvoiceReviewDialog } from "./InvoiceReviewDialog";
@@ -109,7 +109,7 @@ export function BookkeepingInbox() {
   const [processedIds, setProcessedIds] = useState<Set<number>>(new Set());
   const [analyzingInvoices, setAnalyzingInvoices] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
-  const [reviewInvoices, setReviewInvoices] = useState<InvoiceAnalyzeResponse[] | null>(null);
+  const [reviewInvoices, setReviewInvoices] = useState<AnalyzedInvoice[] | null>(null);
   const [apiKeyStatus, setApiKeyStatus] = useState<{ status: string; message?: string } | null>(null);
   // Snackbar shown after rows are processed so the user gets explicit
   // feedback that something happened — without this, processed rows just
@@ -118,16 +118,26 @@ export function BookkeepingInbox() {
 
   const firstName = getFirstName(user?.name);
 
-  // Shared handler for analyzing invoice files (used by both upload button and InboxRow)
+  // Shared handler for analyzing invoice files (used by both upload button and InboxRow).
+  //
+  // Each analyzed response is enriched with the original File object and a
+  // blob: URL so the review dialog can (a) preview the PDF locally even when
+  // R2 isn't configured and (b) re-ship the PDF inline as base64 on submit
+  // without a second upload round-trip. The blob URLs are revoked when the
+  // dialog closes — see handleReviewClose below.
   const handleInvoiceFiles = useCallback(async (files: File[]) => {
     setAnalyzingInvoices(true);
     setAnalyzeError(null);
 
-    const analyzed: InvoiceAnalyzeResponse[] = [];
+    const analyzed: AnalyzedInvoice[] = [];
     for (const file of files) {
       try {
         const res = await api.analyzeInvoice(file);
-        analyzed.push(res);
+        analyzed.push({
+          ...res,
+          localFile: file,
+          localPdfUrl: URL.createObjectURL(file),
+        });
         track("Invoice Analyzed", { confidence: String(Math.round(res.invoice.confidence * 100)) });
       } catch (err: any) {
         setAnalyzeError(`Fout bij ${file.name}: ${err.message}`);
@@ -139,6 +149,18 @@ export function BookkeepingInbox() {
       setReviewInvoices(analyzed);
     }
   }, []);
+
+  // Revoke any blob URLs we created for PDF previews to release the underlying
+  // file data. The browser holds the File alive for the lifetime of every
+  // outstanding object URL, so leaking these on every batch eats memory fast.
+  const handleReviewClose = useCallback(() => {
+    if (reviewInvoices) {
+      for (const r of reviewInvoices) {
+        if (r.localPdfUrl) URL.revokeObjectURL(r.localPdfUrl);
+      }
+    }
+    setReviewInvoices(null);
+  }, [reviewInvoices]);
 
   // Load inbox — try AI classification first, fall back to raw bank lines.
   //
@@ -548,7 +570,7 @@ export function BookkeepingInbox() {
       {reviewInvoices && (
         <InvoiceReviewDialog
           open={true}
-          onClose={() => setReviewInvoices(null)}
+          onClose={handleReviewClose}
           analyzed={reviewInvoices}
           ledgerAccounts={ledgerAccounts ?? []}
           vatCodes={vatCodes ?? []}

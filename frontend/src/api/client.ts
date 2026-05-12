@@ -1,4 +1,5 @@
 import type {
+  ArchiveFolder,
   AuthResponse,
   BankStatementsResponse,
   BulkRequest,
@@ -261,11 +262,11 @@ export const api = {
 
   // Archive
   getArchiveFolders() {
-    return request<unknown[]>("/archive/folders");
+    return request<ArchiveFolder[]>("/archive/folders");
   },
 
   createArchiveFolder(data: { parentFolderId: number; name: string }) {
-    return request<unknown>("/archive/folders", {
+    return request<{ id: number }>("/archive/folders", {
       method: "POST",
       body: JSON.stringify(data),
     });
