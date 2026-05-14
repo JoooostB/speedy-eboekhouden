@@ -35,3 +35,18 @@ export function isSalesCode(code: string): boolean {
     code.startsWith("LAAG_VERK")
   );
 }
+
+/** True when the BTW code represents a reverse-charge or intra-/extra-EU
+ *  acquisition treatment. The dialog uses this to decide whether to keep
+ *  showing the "Verlegde BTW" warning after the user has changed the
+ *  dropdown — if they explicitly picked GEEN or a regular HOOG/LAAG code,
+ *  the warning would lie about what's about to be booked, so we hide it. */
+export function isReverseChargeCode(code: string): boolean {
+  // VERL_INK, VERL_INK_L9, BU_EU_INK, BI_EU_INK and any future variants
+  // sharing those prefixes. GEEN and the regular tariff codes are excluded.
+  return (
+    code.startsWith("VERL_") ||
+    code.startsWith("BU_EU_") ||
+    code.startsWith("BI_EU_")
+  );
+}

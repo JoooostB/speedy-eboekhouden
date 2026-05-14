@@ -112,6 +112,57 @@ func SubmitHours(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"results": results})
 }
 
+// GetHoursOverview handles GET /api/v1/hours/overview?from=YYYY-MM-DD&to=YYYY-MM-DD
+// [&employeeId=NNN][&projectId=NNN][&activityId=NNN]
+//
+// Returns previously-booked hour entries in the given period. The bulk
+// entry calendar uses this to render "Xu al geboekt" badges per date and
+// to warn about strict (employee+date+project+activity) duplicates before
+// submission.
+func GetHoursOverview(c *gin.Context) {
+	client := session.ClientFromContext(c)
+	if client == nil {
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
+		return
+	}
+
+	fromStr := c.Query("from")
+	toStr := c.Query("to")
+	if fromStr == "" || toStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from en to query parameters zijn verplicht (YYYY-MM-DD)"})
+		return
+	}
+	from, err := parseDate(fromStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("ongeldige from datum %q: %v", fromStr, err)})
+		return
+	}
+	to, err := parseDate(toStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("ongeldige to datum %q: %v", toStr, err)})
+		return
+	}
+
+	// Optional filters — 0 means "no filter" both on our side and upstream.
+	employeeID, _ := strconv.Atoi(c.Query("employeeId"))
+	projectID, _ := strconv.Atoi(c.Query("projectId"))
+	activityID, _ := strconv.Atoi(c.Query("activityId"))
+
+	rows, err := client.GetHourOverview(eboekhouden.HourOverviewQuery{
+		PeriodStart:  from,
+		PeriodEnd:    to,
+		MedewerkerID: employeeID,
+		ProjectID:    projectID,
+		ActiviteitID: activityID,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"entries": rows})
+}
+
 // parseDate converts "YYYY-MM-DD" to eboekhouden.Date with integer day, month, and year fields.
 func parseDate(s string) (eboekhouden.Date, error) {
 	parts := strings.Split(s, "-")

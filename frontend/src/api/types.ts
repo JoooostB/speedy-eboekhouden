@@ -73,6 +73,25 @@ export interface BulkResponse {
   results: EntryResult[];
 }
 
+/** One previously-booked hour entry, returned by /hours/overview.
+ *  Used by the bulk-entry calendar to mark dates that already have
+ *  hours so the user doesn't double-book. */
+export interface HourOverviewEntry {
+  id: number;
+  /** ISO datetime — typically "2026-04-01T00:00:00" with zero time. */
+  datum: string;
+  medewerker: string;
+  project: string;
+  activiteit: string;
+  opmerkingen: string;
+  aantalUren: number;
+  aantalKilometers: number;
+}
+
+export interface HourOverviewResponse {
+  entries: HourOverviewEntry[];
+}
+
 // Bank statements
 export interface BankStatementRow {
   id: number;
@@ -164,6 +183,23 @@ export interface InvoiceAnalyzeResponse {
   uploadKey: string;
   /** Public CDN URL for the uploaded PDF (from R2) */
   pdfUrl: string;
+  /** SHA-256 of the uploaded PDF — echoed back to SubmitFull so the
+   *  backend can write a duplicate-detection marker post-booking. */
+  pdfHash: string;
+  /** True when the analysis result came from the per-user cache (i.e. the
+   *  same PDF + ledger-account-set was analyzed before within the TTL). */
+  cachedAnalysis?: boolean;
+  /** Set when this exact PDF was previously booked successfully. The UI
+   *  shows a prominent warning so the user can avoid creating a duplicate
+   *  mutation. */
+  alreadySubmitted?: {
+    mutNr: number;
+    paymentMutNr?: number;
+    leverancier?: string;
+    factuur?: string;
+    bedragIncl?: number;
+    submittedAt: string;
+  };
   matchedRelation: {
     id: number;
     code: string;
@@ -203,6 +239,9 @@ export interface InvoiceSubmitFullRequest {
   uploadKey: string;
   filename: string;
   importId?: number;
+  /** Echo of the analyze response's pdfHash so the backend can write a
+   *  duplicate-detection marker. Optional for legacy clients. */
+  pdfHash?: string;
 }
 
 /** Payload for POST /api/v1/invoices/submit-receipt — bonnetje without relation */

@@ -3,6 +3,7 @@ import type {
   BankStatementsResponse,
   BulkRequest,
   BulkResponse,
+  HourOverviewResponse,
   ClassifyRequest,
   ClassifyResult,
   CreateInvoiceRequest,
@@ -202,6 +203,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     });
+  },
+
+  getHoursOverview(opts: { from: string; to: string; employeeId?: number; projectId?: number; activityId?: number }) {
+    const params = new URLSearchParams({ from: opts.from, to: opts.to });
+    if (opts.employeeId) params.set("employeeId", String(opts.employeeId));
+    if (opts.projectId) params.set("projectId", String(opts.projectId));
+    if (opts.activityId) params.set("activityId", String(opts.activityId));
+    return request<HourOverviewResponse>(`/hours/overview?${params.toString()}`);
   },
 
   // Bank statements

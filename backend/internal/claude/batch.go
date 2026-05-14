@@ -136,8 +136,9 @@ func (s *Service) ClassifyBatch(ctx context.Context, apiKey, entityType string, 
 	userMsg := fmt.Sprintf("Classify these %d bank statement lines.\n\n<bank_data>\n%s\n</bank_data>\n\nReturn only the JSON array.", len(lines), string(linesJSON))
 
 	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.ModelClaudeHaiku4_5,
-		MaxTokens: batchClassifyMaxTokens,
+		Model:       anthropic.ModelClaudeHaiku4_5,
+		MaxTokens:   batchClassifyMaxTokens,
+		Temperature: anthropic.Float(0), // deterministic batch classification
 		System: []anthropic.TextBlockParam{
 			{Text: systemPrompt},
 		},

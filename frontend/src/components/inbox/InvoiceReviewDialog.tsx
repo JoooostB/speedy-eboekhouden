@@ -22,7 +22,7 @@ import { track } from "../../analytics";
 import { RelationPicker } from "../shared/RelationPicker";
 import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
-import { dedupePurchaseVatCodes } from "./vatCodeFilters";
+import { dedupePurchaseVatCodes, isReverseChargeCode } from "./vatCodeFilters";
 import { invoiceBlocker as evaluateInvoiceBlocker } from "./invoiceValidation";
 import type {
   InvoiceAnalyzeResponse,
@@ -257,6 +257,7 @@ export function InvoiceReviewDialog({
             rekeningId: inv.source.crediteurenId || 0,
             uploadKey: inv.source.uploadKey,
             filename: inv.source.filename,
+            pdfHash: inv.source.pdfHash,
             ...(inv.importId ? { importId: inv.importId } : {}),
           });
 
@@ -478,6 +479,33 @@ export function InvoiceReviewDialog({
                   <ConfidenceBadge confidence={inv.source.invoice.confidence} />
                 </Typography>
 
+                {/* Duplicate-upload warning — shown when the same PDF
+                    (by content hash) was previously booked successfully.
+                    Loud orange alert because re-booking a duplicate creates
+                    a phantom mutation in e-boekhouden that's awkward to
+                    unwind. The user can still proceed if they really want
+                    to (e.g. a credit note follow-up that happens to share
+                    a PDF) — we just make sure they made an active choice. */}
+                {inv.source.alreadySubmitted && (
+                  <Alert severity="warning" sx={{ mt: 1.5 }}>
+                    <AlertTitle sx={{ fontWeight: 700 }}>
+                      Mogelijk dubbele factuur
+                    </AlertTitle>
+                    <Typography variant="body2">
+                      Deze PDF is eerder geboekt op{" "}
+                      <strong>
+                        {new Date(inv.source.alreadySubmitted.submittedAt).toLocaleDateString("nl-NL")}
+                      </strong>{" "}
+                      als mutatie nr <strong>{inv.source.alreadySubmitted.mutNr}</strong>
+                      {inv.source.alreadySubmitted.factuur
+                        ? ` (factuur ${inv.source.alreadySubmitted.factuur})`
+                        : ""}
+                      . Controleer of je deze opnieuw wilt boeken — het levert anders een dubbele
+                      mutatie op in e-Boekhouden.
+                    </Typography>
+                  </Alert>
+                )}
+
                 {/* Bonnetje / Factuur mode toggle — a real ToggleButtonGroup
                     rather than a Chip. ToggleButtonGroup gives proper
                     aria-pressed semantics, keyboard navigation, and a
@@ -691,8 +719,14 @@ export function InvoiceReviewDialog({
                       </Box>
                     )}
 
-                    {/* Reverse charge warning — prominent */}
-                    {inv.source.invoice.isReverseCharge && (
+                    {/* Reverse charge warning — only shown when the AI flagged
+                        the invoice as reverse charge AND the user hasn't
+                        overridden the dropdown to a non-reverse-charge code.
+                        Previously the alert kept rendering with the new
+                        selection's label spliced in, producing nonsense like
+                        "verlegd via BTW-code Geen btw" when the user picked
+                        GEEN. The user's explicit override wins. */}
+                    {inv.source.invoice.isReverseCharge && isReverseChargeCode(inv.btwCode) && (
                       <Alert severity="warning" sx={{ mt: 2 }}>
                         <Typography variant="body2" fontWeight={600} gutterBottom>
                           Verlegde BTW (reverse charge)
@@ -705,32 +739,69 @@ export function InvoiceReviewDialog({
                       </Alert>
                     )}
 
-                    {/* Belastingadvies from Claude. Filter out the reverse_charge
-                        type because the dedicated warning Alert above already
-                        covers it — showing both made the dialog noisy. */}
+                    {/* Belastingadvies from Claude.
+                        - Filter out the reverse_charge type because the
+                          dedicated warning Alert above already covers it.
+                        - Elevate "geen_btw" tips into their own prominent
+                          info Alert at the top: these warn about BTW that
+                          is NOT deductible (assurantiebelasting,
+                          buitenlandse BTW, foreign tax) and the user kept
+                          missing them in the small icon-less box. They
+                          materially affect the booking, so they deserve
+                          weight comparable to the reverse-charge alert.
+                        - Render remaining advisory tips (KIA, vaste activa,
+                          gemengd gebruik, representatie) in a compact list
+                          below as before. */}
                     {(() => {
-                      const tips = (inv.source.invoice.belastingAdvies ?? []).filter(
+                      const allTips = (inv.source.invoice.belastingAdvies ?? []).filter(
                         (t) => t.type !== "reverse_charge",
                       );
-                      if (tips.length === 0) return null;
+                      const headlineTips = allTips.filter((t) => t.type === "geen_btw");
+                      const otherTips = allTips.filter((t) => t.type !== "geen_btw");
+                      if (allTips.length === 0) return null;
                       return (
-                      <Alert severity="info" sx={{ mt: 2 }} icon={false}>
-                        <Typography variant="body2" fontWeight={600} gutterBottom>
-                          Belastingadvies
-                        </Typography>
-                        {tips.map((tip, i) => (
-                          <Typography key={i} variant="body2" sx={{ mt: 0.5, display: "flex", alignItems: "flex-start", gap: 0.5 }}>
-                            <Box
-                              component="svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                              strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
-                              sx={{ width: 14, height: 14, color: "info.main", flexShrink: 0, mt: 0.3 }}
+                        <>
+                          {headlineTips.map((tip, i) => (
+                            <Alert
+                              key={`headline-${i}`}
+                              severity="info"
+                              variant="outlined"
+                              sx={{
+                                mt: 2,
+                                borderWidth: 2,
+                                borderLeftWidth: 6,
+                                bgcolor: "rgba(2, 136, 209, 0.06)",
+                                "& .MuiAlert-message": { width: "100%" },
+                              }}
                             >
-                              <circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />
-                            </Box>
-                            {tip.tekst}
-                          </Typography>
-                        ))}
-                      </Alert>
+                              <AlertTitle sx={{ fontWeight: 700 }}>
+                                Let op — niet aftrekbare BTW
+                              </AlertTitle>
+                              <Typography variant="body2" sx={{ lineHeight: 1.55 }}>
+                                {tip.tekst}
+                              </Typography>
+                            </Alert>
+                          ))}
+                          {otherTips.length > 0 && (
+                            <Alert severity="info" sx={{ mt: 2 }} icon={false}>
+                              <Typography variant="body2" fontWeight={600} gutterBottom>
+                                Belastingadvies
+                              </Typography>
+                              {otherTips.map((tip, i) => (
+                                <Typography key={i} variant="body2" sx={{ mt: 0.5, display: "flex", alignItems: "flex-start", gap: 0.5 }}>
+                                  <Box
+                                    component="svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+                                    sx={{ width: 14, height: 14, color: "info.main", flexShrink: 0, mt: 0.3 }}
+                                  >
+                                    <circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />
+                                  </Box>
+                                  {tip.tekst}
+                                </Typography>
+                              ))}
+                            </Alert>
+                          )}
+                        </>
                       );
                     })()}
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import {
   Box,
   Button,
@@ -6,6 +6,11 @@ import {
   Alert,
   Divider,
   TextField,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import { api } from "../api/client";
@@ -13,6 +18,8 @@ import type { Employee, Project, Activity, EntryResult, BulkEntry } from "../api
 import { useEmployees } from "../hooks/useEmployees";
 import { useProjects } from "../hooks/useProjects";
 import { useActivities } from "../hooks/useActivities";
+import { useHourOverview } from "../hooks/useHourOverview";
+import { strictMatchKey, formatHours } from "./hours/hourOverlay";
 import { EmployeeSelector } from "./EmployeeSelector";
 import { ProjectSelector } from "./ProjectSelector";
 import { ActivitySelector } from "./ActivitySelector";
@@ -37,8 +44,28 @@ export function BulkEntryForm() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  // Visible calendar range — updated by MonthCalendar when the user
+  // navigates between months. Drives the hour-overview fetch so badges
+  // and duplicate warnings stay in sync with whatever month is on screen.
+  const [visibleRange, setVisibleRange] = useState<{ from: string; to: string } | null>(null);
+
+  // State for the duplicate-confirmation dialog: a list of conflicts to
+  // surface ("Joost · 2026-04-01 · PUP · Consultancy") plus a resolved
+  // submit handler that runs after the user clicks Toch indienen.
+  const [duplicateConflicts, setDuplicateConflicts] = useState<string[] | null>(null);
+
   const totalEntries = selectedEmployees.length * selectedDates.size;
   const totalHours = totalEntries * parseFloat(hours || "0");
+
+  // Pull previously-booked hours for the visible calendar range. Filtered
+  // to the currently-selected employees so the badge counts are scoped to
+  // who you're booking for (matches the user's mental model — "is THIS
+  // person already booked on this day").
+  const { overlay: hourOverlay, loading: overlayLoading } = useHourOverview({
+    from: visibleRange?.from ?? null,
+    to: visibleRange?.to ?? null,
+    employeeIds: selectedEmployees.map((e) => e.id),
+  });
 
   const canSubmit =
     selectedEmployees.length > 0 &&
@@ -48,7 +75,32 @@ export function BulkEntryForm() {
     parseFloat(hours) > 0 &&
     !submitting;
 
-  const handleSubmit = async () => {
+  /** Detect strict-match duplicates between the current selection and the
+   *  already-booked hours overlay. Returns the list of human-readable
+   *  conflict strings (empty when there are none) so the confirmation
+   *  dialog can show exactly what would be doubled. */
+  const findDuplicateConflicts = useCallback((): string[] => {
+    if (!selectedProject || !selectedActivity) return [];
+    const conflicts: string[] = [];
+    for (const emp of selectedEmployees) {
+      for (const date of selectedDates) {
+        const key = strictMatchKey({
+          date,
+          employeeName: emp.naam,
+          projectLabel: selectedProject.naam,
+          activityLabel: selectedActivity.naam,
+        });
+        if (hourOverlay.strictKeys.has(key)) {
+          conflicts.push(
+            `${date} · ${emp.naam} · ${selectedProject.naam} · ${selectedActivity.naam}`,
+          );
+        }
+      }
+    }
+    return conflicts;
+  }, [selectedEmployees, selectedProject, selectedActivity, selectedDates, hourOverlay]);
+
+  const performSubmit = async () => {
     if (!selectedProject || !selectedActivity) return;
 
     setError("");
@@ -83,6 +135,19 @@ export function BulkEntryForm() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  /** Top-level submit handler — guards on strict-match duplicates before
+   *  hitting the API. If any conflicts exist, opens the confirmation
+   *  dialog; the dialog's "Toch indienen" button calls performSubmit. */
+  const handleSubmit = () => {
+    const conflicts = findDuplicateConflicts();
+    if (conflicts.length > 0) {
+      setDuplicateConflicts(conflicts);
+      track("Hours Duplicate Warning Shown", { count: String(conflicts.length) });
+      return;
+    }
+    performSubmit();
   };
 
   const handleReset = () => {
@@ -136,7 +201,21 @@ export function BulkEntryForm() {
         rows={2}
       />
 
-      <MonthCalendar selectedDates={selectedDates} onChange={setSelectedDates} />
+      <MonthCalendar
+        selectedDates={selectedDates}
+        onChange={setSelectedDates}
+        bookedHours={hourOverlay.byDate}
+        bookedDetails={hourOverlay.byDateDetails}
+        onVisibleRangeChange={(from, to) => setVisibleRange({ from, to })}
+      />
+
+      {selectedEmployees.length > 0 && hourOverlay.byDate.size > 0 && !overlayLoading && (
+        <Typography variant="caption" color="text.secondary">
+          {hourOverlay.byDate.size} {hourOverlay.byDate.size === 1 ? "dag" : "dagen"} in deze maand
+          {selectedEmployees.length === 1 ? " heeft" : " hebben"} al uren — zichtbaar als badge in de
+          rechterbovenhoek van de cel.
+        </Typography>
+      )}
 
       <Divider />
 
@@ -161,6 +240,75 @@ export function BulkEntryForm() {
       </Button>
 
       <SubmitResults results={results} loading={submitting} total={totalEntries} onReset={handleReset} />
+
+      {/* Duplicate-confirmation dialog. Listed conflicts let the user
+          see exactly which (date · employee · project · activity)
+          combinations already exist in e-boekhouden before deciding to
+          either go back and adjust the selection, or override. */}
+      <Dialog
+        open={duplicateConflicts !== null}
+        onClose={() => !submitting && setDuplicateConflicts(null)}
+        maxWidth="sm"
+        fullWidth
+        aria-labelledby="duplicate-hours-title"
+      >
+        <DialogTitle id="duplicate-hours-title" sx={{ fontWeight: 600 }}>
+          {duplicateConflicts && duplicateConflicts.length === 1
+            ? "1 dubbele uren-boeking gevonden"
+            : `${duplicateConflicts?.length ?? 0} dubbele uren-boekingen gevonden`}
+        </DialogTitle>
+        <DialogContent dividers>
+          <DialogContentText sx={{ mb: 2 }}>
+            Deze combinaties van datum · medewerker · project · activiteit zijn al eerder in
+            e-Boekhouden geboekt. Doorgaan maakt nieuwe uren-regels aan bovenop wat er al staat —
+            dat betekent dubbele uren.
+          </DialogContentText>
+          <Box
+            sx={{
+              maxHeight: 240,
+              overflow: "auto",
+              border: "1px solid",
+              borderColor: "divider",
+              borderRadius: 1,
+              p: 1.5,
+              bgcolor: "grey.50",
+            }}
+          >
+            {duplicateConflicts?.map((line, i) => (
+              <Typography
+                key={i}
+                variant="caption"
+                component="div"
+                sx={{ fontFamily: "monospace", lineHeight: 1.7 }}
+              >
+                {line}
+              </Typography>
+            ))}
+          </Box>
+          <DialogContentText sx={{ mt: 2 }}>
+            Totaal te boeken in deze actie: <strong>{formatHours(totalHours)}</strong>{" "}
+            ({totalEntries} regels). Pas je selectie aan om de dubbele dagen te deselecteren,
+            of ga toch door als je weet wat je doet.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDuplicateConflicts(null)} disabled={submitting}>
+            Terug om aan te passen
+          </Button>
+          <Button
+            color="warning"
+            variant="contained"
+            disabled={submitting}
+            onClick={() => {
+              setDuplicateConflicts(null);
+              track("Hours Duplicate Override", { count: String(duplicateConflicts?.length ?? 0) });
+              performSubmit();
+            }}
+          >
+            Toch indienen
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

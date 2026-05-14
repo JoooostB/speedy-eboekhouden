@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +25,68 @@ import (
 	"github.com/joooostb/speedy-eboekhouden/internal/storage"
 	"github.com/redis/go-redis/v9"
 )
+
+// invoiceAnalysisCacheTTL is how long an analyzed PDF's parsed data stays
+// in Redis. 7 days is long enough for bulk re-uploads of an old archive
+// to produce stable, identical suggestions, and short enough that prompt
+// updates roll through within a week as the cache expires naturally.
+const invoiceAnalysisCacheTTL = 7 * 24 * time.Hour
+
+// invoiceSubmittedMarkerTTL keeps the "this PDF was successfully booked
+// as mutNr X" marker around long enough to catch re-uploads weeks or
+// months later (90 days). The user typically sees their old PDFs again
+// when they're cleaning up an archive — the marker prevents accidental
+// duplicate bookings even at long delays.
+const invoiceSubmittedMarkerTTL = 90 * 24 * time.Hour
+
+// invoicePDFContentHash returns a stable hex-encoded SHA-256 of the raw
+// PDF bytes. Used as the canonical key for invoice-level caching so a
+// re-upload of the exact same file produces identical analysis results
+// (deterministic) AND surfaces a "this was already booked" warning when
+// the file was previously processed.
+func invoicePDFContentHash(pdfBytes []byte) string {
+	sum := sha256.Sum256(pdfBytes)
+	return hex.EncodeToString(sum[:])
+}
+
+// invoiceAnalysisCacheKey returns the Redis key for cached invoice analysis
+// results. Scoped per user (so cross-tenant collisions are impossible),
+// per PDF hash, and per ledger-account-set hash because the suggested
+// grootboekcode is a function of the available accounts — re-running an
+// analyze after the user adds/removes an account should produce a fresh
+// suggestion rather than reusing the stale one.
+func invoiceAnalysisCacheKey(userID string, pdfBytes []byte, accounts []claude.LedgerAccountInfo) string {
+	pdfHash := invoicePDFContentHash(pdfBytes)
+	// Stable ordering — sort accounts by code so callers passing the same
+	// set in different orders still hit the same cache entry.
+	codes := make([]string, 0, len(accounts))
+	for _, a := range accounts {
+		codes = append(codes, a.Code)
+	}
+	sort.Strings(codes)
+	accountsHash := sha256.Sum256([]byte(strings.Join(codes, ",")))
+	return fmt.Sprintf("invoice:analyze:%s:%s:%s", userID, pdfHash, hex.EncodeToString(accountsHash[:8]))
+}
+
+// invoiceSubmittedMarkerKey returns the Redis key for the "this PDF has
+// been successfully booked" marker. Scoped per user + PDF hash; the value
+// is a JSON blob with the resulting mutNr and submission timestamp so the
+// analyze endpoint can show a clear duplicate warning.
+func invoiceSubmittedMarkerKey(userID, pdfHash string) string {
+	return fmt.Sprintf("invoice:submitted:%s:%s", userID, pdfHash)
+}
+
+// invoiceSubmittedMarker is the value we cache against the submission key.
+// Kept small — the analyze endpoint just needs enough to render a Dutch
+// warning ("Deze factuur is al eerder geboekt op X als mutatie nr Y").
+type invoiceSubmittedMarker struct {
+	MutNr        int       `json:"mutNr"`
+	PaymentMutNr int       `json:"paymentMutNr,omitempty"`
+	Leverancier  string    `json:"leverancier,omitempty"`
+	Factuur      string    `json:"factuur,omitempty"`
+	BedragIncl   float64   `json:"bedragIncl,omitempty"`
+	SubmittedAt  time.Time `json:"submittedAt"`
+}
 
 // InvoiceHandler handles invoice processing with Claude.
 type InvoiceHandler struct {
@@ -91,11 +156,58 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		}
 	}
 
-	invoice, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, pdfBase64, accounts)
-	if err != nil {
-		log.Printf("Claude invoice read error: %v", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
-		return
+	// Content-addressed analysis cache: hash the PDF bytes + the user's
+	// ledger accounts (because the suggested grootboekcode is a function
+	// of the available accounts) and check Redis before calling Claude.
+	// A second upload of the same PDF returns the same JSON instantly,
+	// instead of re-classifying with non-deterministic outputs.
+	pdfHash := invoicePDFContentHash(pdfBytes)
+	cacheKey := invoiceAnalysisCacheKey(sess.UserID, pdfBytes, accounts)
+	var invoice *claude.InvoiceData
+	cacheHit := false
+	if h.redis != nil {
+		if cached, err := h.redis.Get(c.Request.Context(), cacheKey).Bytes(); err == nil {
+			var cachedInvoice claude.InvoiceData
+			if json.Unmarshal(cached, &cachedInvoice) == nil {
+				invoice = &cachedInvoice
+				cacheHit = true
+				log.Printf("Invoice analyze cache HIT for user %s pdfHash=%s", sess.UserID, pdfHash[:16])
+			}
+		}
+	}
+	if invoice == nil {
+		fresh, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, pdfBase64, accounts)
+		if err != nil {
+			log.Printf("Claude invoice read error: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
+			return
+		}
+		invoice = fresh
+		// Best-effort cache write — failures are logged but never fail the request.
+		if h.redis != nil {
+			if body, err := json.Marshal(invoice); err == nil {
+				if setErr := h.redis.Set(c.Request.Context(), cacheKey, body, invoiceAnalysisCacheTTL).Err(); setErr != nil {
+					log.Printf("Invoice analyze cache write error: %v", setErr)
+				}
+			}
+		}
+	}
+
+	// Duplicate-upload detection: if the user previously booked the same
+	// PDF (same content hash) we surface the prior mutNr + datum in the
+	// response so the dialog can warn before they accidentally book it
+	// again. Scoped per user via the submission marker key.
+	var alreadySubmitted *invoiceSubmittedMarker
+	if h.redis != nil {
+		markerKey := invoiceSubmittedMarkerKey(sess.UserID, pdfHash)
+		if raw, err := h.redis.Get(c.Request.Context(), markerKey).Bytes(); err == nil {
+			var marker invoiceSubmittedMarker
+			if json.Unmarshal(raw, &marker) == nil {
+				alreadySubmitted = &marker
+				log.Printf("Invoice analyze duplicate detected for user %s pdfHash=%s priorMutNr=%d",
+					sess.UserID, pdfHash[:16], marker.MutNr)
+			}
+		}
 	}
 
 	// Store PDF temporarily in R2 for later submission
@@ -210,7 +322,7 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"invoice":         invoice,
 		"uploadKey":       uploadKey,
 		"pdfUrl":          pdfURL,
@@ -218,7 +330,30 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		"filename":        filename,
 		"matchedRelation": matchedRelation,
 		"crediteurenId":   crediteurenId,
-	})
+		// pdfHash is echoed back so SubmitFull can write the submission
+		// marker without rehashing the PDF (which we'd otherwise need to
+		// re-download from R2). The frontend treats it as opaque.
+		"pdfHash":         pdfHash,
+		// cachedAnalysis lets the UI surface a small "eerder geanalyseerd"
+		// hint so the user knows why the result feels familiar.
+		"cachedAnalysis":  cacheHit,
+	}
+	// alreadySubmitted is set when the same PDF (by content hash) was
+	// previously booked successfully via SubmitFull. The dialog renders a
+	// loud Dutch warning so the user can decide whether they really want
+	// to book it again — typical case is accidentally re-uploading from
+	// an archive folder that's already been processed.
+	if alreadySubmitted != nil {
+		resp["alreadySubmitted"] = gin.H{
+			"mutNr":        alreadySubmitted.MutNr,
+			"paymentMutNr": alreadySubmitted.PaymentMutNr,
+			"leverancier":  alreadySubmitted.Leverancier,
+			"factuur":      alreadySubmitted.Factuur,
+			"bedragIncl":   alreadySubmitted.BedragIncl,
+			"submittedAt":  alreadySubmitted.SubmittedAt.Format(time.RFC3339),
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // SubmitFull handles POST /api/v1/invoices/submit-full
@@ -253,6 +388,13 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 
 		// Optional: bank statement line to mark as processed
 		ImportId int `json:"importId,omitempty"`
+
+		// Content hash echoed back from /analyze. We use it to write a
+		// per-user "this PDF has been booked as mutNr X" marker so a
+		// later re-upload triggers a duplicate-detection warning.
+		// Optional — when absent (legacy clients), no marker is written
+		// but the booking still succeeds.
+		PdfHash string `json:"pdfHash,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -520,6 +662,30 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	sess := session.FromContext(c)
 	if sess != nil && h.redis != nil {
 		h.redis.Del(c.Request.Context(), fmt.Sprintf("inbox:classify:%s", sess.UserID))
+	}
+
+	// Write the duplicate-detection marker so a future re-upload of this
+	// exact PDF surfaces an "already booked" warning at /analyze time.
+	// Best-effort: a marker write failure never blocks the booking response.
+	if sess != nil && h.redis != nil && req.PdfHash != "" && mutResult.MutNr > 0 {
+		marker := invoiceSubmittedMarker{
+			MutNr:        mutResult.MutNr,
+			PaymentMutNr: paymentMutNr,
+			Leverancier:  req.Leverancier,
+			Factuur:      req.Factuurnummer,
+			BedragIncl:   req.BedragIncl,
+			SubmittedAt:  time.Now(),
+		}
+		if body, mErr := json.Marshal(marker); mErr == nil {
+			if setErr := h.redis.Set(
+				c.Request.Context(),
+				invoiceSubmittedMarkerKey(sess.UserID, req.PdfHash),
+				body,
+				invoiceSubmittedMarkerTTL,
+			).Err(); setErr != nil {
+				log.Printf("Invoice submitted marker write error: %v", setErr)
+			}
+		}
 	}
 
 	resp := gin.H{

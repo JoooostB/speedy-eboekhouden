@@ -210,6 +210,12 @@ func (s *Service) ReadInvoice(ctx context.Context, apiKey string, pdfBase64 stri
 	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.ModelClaudeSonnet4_5,
 		MaxTokens: readInvoiceMaxTokens,
+		// Temperature 0: invoice extraction is a deterministic data-extraction
+		// task. We want the same PDF to produce the same JSON every time so a
+		// re-upload doesn't oscillate between btwCode=GEEN, BU_EU_INK, etc.
+		// Combined with the upload-key-based cache in the inbox match flow,
+		// the user gets stable suggestions across retries.
+		Temperature: anthropic.Float(0),
 		System: []anthropic.TextBlockParam{
 			{Text: prompt},
 		},
@@ -266,8 +272,9 @@ func (s *Service) ClassifyTransaction(ctx context.Context, apiKey string, req Cl
 	)
 
 	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.ModelClaudeHaiku4_5,
-		MaxTokens: classifyTransactionMaxTokens,
+		Model:       anthropic.ModelClaudeHaiku4_5,
+		MaxTokens:   classifyTransactionMaxTokens,
+		Temperature: anthropic.Float(0), // deterministic single-line classification
 		System: []anthropic.TextBlockParam{
 			{Text: classifySystemPrompt},
 		},

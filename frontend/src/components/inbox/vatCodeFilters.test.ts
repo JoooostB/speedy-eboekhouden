@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dedupePurchaseVatCodes, isSalesCode } from "./vatCodeFilters";
+import { dedupePurchaseVatCodes, isSalesCode, isReverseChargeCode } from "./vatCodeFilters";
 import type { VATCode } from "../../api/types";
 
 const code = (
@@ -32,6 +32,30 @@ describe("isSalesCode", () => {
     expect(isSalesCode("VERL_INK")).toBe(false);
     expect(isSalesCode("BU_EU_INK")).toBe(false);
     expect(isSalesCode("BI_EU_INK")).toBe(false);
+  });
+});
+
+describe("isReverseChargeCode", () => {
+  it("flags reverse-charge variants", () => {
+    expect(isReverseChargeCode("VERL_INK")).toBe(true);
+    expect(isReverseChargeCode("VERL_INK_L9")).toBe(true);
+    expect(isReverseChargeCode("BU_EU_INK")).toBe(true);
+    expect(isReverseChargeCode("BI_EU_INK")).toBe(true);
+  });
+
+  it("does NOT flag GEEN or regular tariff codes", () => {
+    // Regression: when the user overrides the dropdown to GEEN or a
+    // standard tariff, the reverse-charge warning must hide itself —
+    // otherwise it claims the booking will be reverse-charged while
+    // the user has explicitly opted out.
+    expect(isReverseChargeCode("GEEN")).toBe(false);
+    expect(isReverseChargeCode("HOOG_INK_21")).toBe(false);
+    expect(isReverseChargeCode("LAAG_INK_9")).toBe(false);
+  });
+
+  it("does NOT flag sales codes", () => {
+    expect(isReverseChargeCode("HOOG_VERK_21")).toBe(false);
+    expect(isReverseChargeCode("LAAG_VERK_9")).toBe(false);
   });
 });
 

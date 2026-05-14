@@ -193,6 +193,7 @@ func main() {
 				eb.GET("/projects", handler.GetProjects)
 				eb.GET("/activities", handler.GetActivities)
 				eb.POST("/hours", handler.SubmitHours)
+				eb.GET("/hours/overview", handler.GetHoursOverview)
 
 				// Bank statements
 				eb.GET("/bankstatements", bankStatementsHandler.GetBankStatements)
