@@ -5,11 +5,13 @@ metadata:
     external-dns.alpha.kubernetes.io/target: buskervezel.nl
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
-    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
-    traefik.ingress.kubernetes.io/router.tls.domains.0.main: speedy-eboekhouden.nl
   name: speedy-eboekhouden
 spec:
   ingressClassName: traefik
+  tls:
+    - secretName: speedy-eboekhouden-nl-tls
+      hosts:
+        - speedy-eboekhouden.nl
   rules:
     - host: speedy-eboekhouden.nl
       http:

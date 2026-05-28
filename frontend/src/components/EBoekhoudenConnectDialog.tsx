@@ -147,7 +147,15 @@ export function EBoekhoudenConnectDialog({ open, onClose }: Props) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 inputRef={emailRef}
-                autoComplete="email"
+                // autoComplete="username" — NOT "email". Password managers
+                // (Bitwarden, 1Password, iCloud Keychain) match the credential
+                // username against the input directly above current-password
+                // and ONLY when it carries autocomplete="username". Using
+                // "email" makes them treat it as a newsletter / recovery
+                // field and skip the autofill — which is the regression we
+                // hit here: password filled, email stayed blank.
+                autoComplete="username"
+                name="email"
                 sx={{ mb: 2 }}
               />
               <TextField
@@ -157,6 +165,7 @@ export function EBoekhoudenConnectDialog({ open, onClose }: Props) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
+                name="password"
                 sx={{ mb: 2 }}
               />
 

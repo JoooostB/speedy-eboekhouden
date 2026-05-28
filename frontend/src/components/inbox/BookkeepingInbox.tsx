@@ -140,13 +140,21 @@ export function BookkeepingInbox() {
     }
   }, []);
 
-  // Load inbox — try AI classification first, fall back to raw bank lines
+  // Load inbox — try AI classification first, fall back to raw bank lines.
+  //
+  // We reset `loading` to true at the start of every load so refresh /
+  // reconnect flows show the same loading affordance as the very first
+  // mount. Without this, the empty-state guard ("Inbox zero!") rendered
+  // momentarily during the connect → classify path because `loading`
+  // stayed false from the not-connected branch while `classifying` was
+  // true with items still empty.
   const loadInbox = useCallback(async (force = false) => {
     if (!eboekhoudenConnected) {
       setLoading(false);
       return;
     }
 
+    setLoading(true);
     setClassifying(true);
     setError(null);
 
@@ -350,11 +358,20 @@ export function BookkeepingInbox() {
           {getGreeting()}{firstName ? `, ${firstName}` : ""}
         </Typography>
         <Typography variant="body1" color="text.secondary" aria-live="polite">
-          {loading
-            ? "Inbox wordt geladen..."
-            : totalActive === 0
-              ? "Je inbox is leeg. Alles is verwerkt!"
-              : `${totalActive} ${totalActive === 1 ? "afschriftregel" : "afschriftregels"} om te verwerken`}
+          {/* Distinguish the two loading flavors so the user knows WHY
+              the initial connect → classify path can take 5-30 seconds
+              (it's the AI call, not a stuck request). The cached path
+              still flashes briefly through "Inbox wordt geladen" which
+              is fine. */}
+          {loading && items.length === 0
+            ? classifying
+              ? "Afschriften worden geclassificeerd met AI — dit duurt even bij een nieuwe verbinding..."
+              : "Inbox wordt geladen..."
+            : classifying && items.length > 0
+              ? "Vernieuwen…"
+              : totalActive === 0
+                ? "Je inbox is leeg. Alles is verwerkt!"
+                : `${totalActive} ${totalActive === 1 ? "afschriftregel" : "afschriftregels"} om te verwerken`}
         </Typography>
       </Box>
 
@@ -673,8 +690,11 @@ export function BookkeepingInbox() {
         </>
       )}
 
-      {/* Empty state — inbox zero */}
-      {!loading && totalActive === 0 && items.length >= 0 && (
+      {/* Empty state — inbox zero. Belt-and-suspenders against the race we
+          hit before: NEVER show the celebration while a load or
+          classification is still in flight, otherwise the user sees "all
+          caught up" while Claude is still working through their backlog. */}
+      {!loading && !classifying && totalActive === 0 && (
         <Paper
           variant="outlined"
           sx={{
