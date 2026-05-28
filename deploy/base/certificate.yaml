@@ -1,0 +1,15 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: speedy-eboekhouden-nl
+spec:
+  secretName: speedy-eboekhouden-nl-tls
+  dnsNames:
+    - speedy-eboekhouden.nl
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    rotationPolicy: Always
