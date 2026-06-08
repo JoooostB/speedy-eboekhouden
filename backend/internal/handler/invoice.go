@@ -720,6 +720,23 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		return
 	}
 
+	// extraLine is one additional booking line within the same mutation.
+	// Used most commonly for restaurant tips: the receipt itself shows
+	// €40 food at 9% BTW, but the bank charged €45 because the user added
+	// a €5 tip on the card. The €5 tip portion gets its own line with
+	// btwCode GEEN (tips are not deductible BTW under Dutch tax rules)
+	// and typically the same tegenrekening as the main line
+	// (representatiekosten). Generalises to any case where one booking
+	// needs to be split across multiple BTW codes / tegenrekeningen.
+	type extraLine struct {
+		BedragExcl      float64 `json:"bedragExcl"`
+		BedragIncl      float64 `json:"bedragIncl"`
+		BTWBedrag       float64 `json:"btwBedrag"`
+		BTWCode         string  `json:"btwCode"`
+		TegenRekeningId int     `json:"tegenRekeningId"`
+		Omschrijving    string  `json:"omschrijving,omitempty"`
+	}
+
 	var req struct {
 		Datum           string  `json:"datum"`
 		Leverancier     string  `json:"leverancier"`
@@ -735,6 +752,10 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		// BankAccountId is the e-boekhouden internal ID of the bank account
 		// to debit. When ImportId is set we look it up from the bank line.
 		BankAccountId int `json:"bankAccountId,omitempty"`
+		// ExtraLines is optional — used by the dialog when the user
+		// splits a receipt into multiple booking lines (e.g. food vs tip).
+		// Each line is appended to mutatieRegels after the main line.
+		ExtraLines []extraLine `json:"extraLines,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -762,6 +783,38 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	// If excl is missing but incl + btw are present, derive it.
 	if req.BedragExcl == 0 && req.BedragIncl > 0 {
 		req.BedragExcl = req.BedragIncl - req.BTWBedrag
+	}
+
+	// Validate every extra line: positive bedragIncl, finite values, valid
+	// tegenrekening. Derive bedragExcl when missing, same as the main line.
+	const maxExtraLines = 10
+	if len(req.ExtraLines) > maxExtraLines {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Maximaal %d extra regels per boeking", maxExtraLines)})
+		return
+	}
+	for i := range req.ExtraLines {
+		el := &req.ExtraLines[i]
+		if el.BedragIncl <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: bedrag moet positief zijn", i+1)})
+			return
+		}
+		if math.IsNaN(el.BedragIncl) || math.IsInf(el.BedragIncl, 0) ||
+			math.IsNaN(el.BedragExcl) || math.IsInf(el.BedragExcl, 0) ||
+			math.IsNaN(el.BTWBedrag) || math.IsInf(el.BTWBedrag, 0) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: ongeldig bedrag", i+1)})
+			return
+		}
+		if el.TegenRekeningId == 0 {
+			// Default to the main line's tegenrekening — the common tip
+			// case routes through the same expense account anyway.
+			el.TegenRekeningId = req.TegenRekeningId
+		}
+		if el.BTWCode == "" {
+			el.BTWCode = "GEEN"
+		}
+		if el.BedragExcl == 0 {
+			el.BedragExcl = el.BedragIncl - el.BTWBedrag
+		}
 	}
 
 	// Resolve the bank account: prefer the matched bank line's grootboekId
@@ -871,6 +924,34 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 			desc = req.Leverancier + " - " + desc
 		}
 	}
+	regels := []map[string]any{{
+		"index":           0,
+		"bedrag":          req.BedragExcl,
+		"bedragExclusief": req.BedragExcl,
+		"bedragInclusief": req.BedragIncl,
+		"btw":             req.BTWBedrag,
+		"btwCode":         req.BTWCode,
+		"tegenRekening":   req.TegenRekeningId,
+	}}
+	// Append any user-added extra lines (typically tip splits). The
+	// per-line `index` is sequential — matches what the web UI does
+	// when a user manually adds multiple regels to a single mutation.
+	for i, el := range req.ExtraLines {
+		regel := map[string]any{
+			"index":           i + 1,
+			"bedrag":          el.BedragExcl,
+			"bedragExclusief": el.BedragExcl,
+			"bedragInclusief": el.BedragIncl,
+			"btw":             el.BTWBedrag,
+			"btwCode":         el.BTWCode,
+			"tegenRekening":   el.TegenRekeningId,
+		}
+		if el.Omschrijving != "" {
+			regel["omschrijving"] = truncate(el.Omschrijving, 200)
+		}
+		regels = append(regels, regel)
+	}
+
 	mutPayload, _ := json.Marshal(map[string]any{
 		"mutatie": map[string]any{
 			"rekening":     bankAccountId,
@@ -879,16 +960,8 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 			"inEx":         "EX",
 			"omschrijving": truncate(desc, 200),
 		},
-		"mutatieRegels": []map[string]any{{
-			"index":           0,
-			"bedrag":          req.BedragExcl,
-			"bedragExclusief": req.BedragExcl,
-			"bedragInclusief": req.BedragIncl,
-			"btw":             req.BTWBedrag,
-			"btwCode":         req.BTWCode,
-			"tegenRekening":   req.TegenRekeningId,
-		}},
-		"importId": nilIfZero(req.ImportId),
+		"mutatieRegels": regels,
+		"importId":      nilIfZero(req.ImportId),
 	})
 
 	mutResp, err := client.CreateMutatie(mutPayload)

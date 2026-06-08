@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
@@ -90,6 +92,13 @@ func GetKvKAddress(c *gin.Context) {
 }
 
 // CreateRelation handles POST /api/v1/relations
+//
+// Returns a structured upstream-validation error as 400, not 502, so
+// Cloudflare passes it through to the user instead of swallowing it and
+// rendering its branded "Bad Gateway" page (which gives the user zero
+// signal about what was wrong with their input). Real gateway failures —
+// network errors, e-boekhouden being down — still return 502 so the
+// distinction stays meaningful in logs and monitoring.
 func CreateRelation(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
@@ -103,11 +112,35 @@ func CreateRelation(c *gin.Context) {
 		return
 	}
 
+	log.Printf("CreateRelation: payload=%s", truncateForLog(string(body), 500))
+
 	raw, err := client.CreateRelation(json.RawMessage(body))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		msg := err.Error()
+		log.Printf("CreateRelation upstream error: %v", err)
+		// Errors prefixed "e-Boekhouden: " come from our parseErrorEnvelope
+		// detection — these are application-level validation errors from
+		// the upstream API, not gateway failures. Surfacing them as 400
+		// lets the actual Dutch error message reach the user (Cloudflare
+		// intercepts our 502s and shows its own page).
+		if strings.HasPrefix(msg, "e-Boekhouden: ") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": msg})
 		return
 	}
 
+	log.Printf("CreateRelation: success")
 	c.Data(http.StatusOK, "application/json", raw)
+}
+
+// truncateForLog clips s to maxLen characters with an ellipsis suffix.
+// Used for log lines that include user payloads so they stay grep-able
+// without exploding when someone pastes a huge body.
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "...(truncated)"
 }

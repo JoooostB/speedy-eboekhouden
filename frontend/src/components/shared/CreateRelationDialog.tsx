@@ -202,7 +202,11 @@ export function CreateRelationDialog({
         ...EMPTY_FORM,
         bedrijf: result.bedrijf,
         kvk: result.kvkNummer,
-        adres: result.adres,
+        // result.adres from KvK search is the combined "straat+nr postcode plaats"
+        // string. Leave the dedicated adres field empty here — the follow-up
+        // getKvKAddress call below populates it with a clean street+number.
+        // If the address fetch fails, the user fills it manually before save.
+        adres: "",
         plaats: result.plaats,
         code: generateCode(result.bedrijf),
       };
@@ -210,14 +214,21 @@ export function CreateRelationDialog({
       setForm(newForm);
       setActiveStep(1);
 
-      // Fetch detailed address from vestigingsnummer
+      // Fetch detailed address from vestigingsnummer. Use the structured
+      // straatnaam + huisnummer + huisletter — NEVER volledigAdres, which
+      // includes postcode and plaats embedded in the same string and
+      // breaks e-Boekhouden's relation save (the API expects a clean
+      // street+number in `adres`, with `postcode` and `plaats` as separate
+      // fields). Previously we got "Korfstraat 126 1433DD Kudelstaart" in
+      // adres which produced a 502 on save.
       if (result.vestigingsnummer) {
         setFetchingAddress(true);
         try {
           const addr = await api.getKvKAddress(result.vestigingsnummer);
+          const streetLine = `${addr.straatnaam} ${addr.huisnummer}${addr.huisletter || ""}`.trim();
           setForm((prev) => ({
             ...prev,
-            adres: addr.volledigAdres || `${addr.straatnaam} ${addr.huisnummer}${addr.huisletter || ""}`,
+            adres: streetLine,
             postcode: addr.postcode || prev.postcode,
             plaats: addr.plaats || prev.plaats,
             land: addr.land || prev.land,
@@ -265,20 +276,40 @@ export function CreateRelationDialog({
     setSubmitError("");
 
     try {
+      // Match the payload shape the e-Boekhouden web UI sends — see
+      // create-relation.har for the canonical reference. The API rejects
+      // payloads missing certain default fields (geslacht, the *2 postadres
+      // duplicates, the consent flags) and rejects extra fields like
+      // telefoon/iban/btwNummer/grootboekrekeningId. We send the same
+      // minimal shape and let e-Boekhouden assign the default crediteuren
+      // grootboekrekening based on bp="B".
+      const adres = form.adres.trim();
+      const postcode = form.postcode.trim();
+      const plaats = form.plaats.trim();
+      const land = form.land.trim();
       const result = await api.createRelation({
         relatie: {
           bp: "B", // B = crediteur/leverancier
           code: form.code.trim(),
           bedrijf: form.bedrijf.trim(),
           kvk: form.kvk.trim(),
-          adres: form.adres.trim(),
-          postcode: form.postcode.trim(),
-          plaats: form.plaats.trim(),
-          land: form.land.trim(),
-          telefoon: form.telefoon.trim(),
-          iban: form.iban.trim(),
-          btwNummer: form.btwNummer.trim(),
-          grootboekrekeningId,
+          geslacht: "m",
+          adres,
+          postcode,
+          plaats,
+          land,
+          // postadres duplicates — required by the API even when there's
+          // no separate post-address. Mirror the bezoekadres values.
+          adres2: adres,
+          postcode2: postcode,
+          plaats2: plaats,
+          land2: land,
+          // Consent + SEPA flags, all default to 0 unless the user opts in.
+          sepaMachtiging: 0,
+          menHAllowMail: 0,
+          menHAllowHerken: 0,
+          geenEmail: 0,
+          la: 0,
         },
       });
 

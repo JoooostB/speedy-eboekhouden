@@ -32,6 +32,16 @@ import type {
 } from "../../api/types";
 
 /** Mutable state per invoice in the review list */
+/** One additional booking line within a receipt — typically a restaurant
+ *  tip that was added on the card but didn't make it onto the receipt
+ *  itself. The tegenrekening defaults to the parent line's at submit
+ *  time when left null. */
+interface ExtraLineEdit {
+  bedragIncl: string;
+  btwCode: string;
+  omschrijving: string;
+}
+
 interface InvoiceEdit {
   /** Original analyze response — holds uploadKey (R2 reference) and filename */
   source: InvoiceAnalyzeResponse;
@@ -52,6 +62,8 @@ interface InvoiceEdit {
   importId: number;
   /** Bonnetje mode: book as "Geld uitgegeven" without a relation. */
   isReceipt: boolean;
+  /** Extra booking lines (tip split, etc.). Empty by default. */
+  extraLines: ExtraLineEdit[];
 }
 
 interface SubmitResult {
@@ -200,6 +212,55 @@ export function InvoiceReviewDialog({
     [vatRate],
   );
 
+  /** Append an extra booking line to the receipt at `index`. Called by the
+   *  "Splits in fooi" hint with a pre-filled GEEN-BTW line for the bank-vs-
+   *  invoice delta. Caller can also pass a blank line for "manual split". */
+  const addExtraLine = useCallback(
+    (index: number, line: ExtraLineEdit) => {
+      setInvoices((prev) => {
+        const next = [...prev];
+        next[index] = {
+          ...next[index],
+          extraLines: [...next[index].extraLines, line],
+        };
+        return next;
+      });
+    },
+    [],
+  );
+
+  /** Update a single field on one extra line. */
+  const updateExtraLine = useCallback(
+    <K extends keyof ExtraLineEdit>(
+      index: number,
+      lineIdx: number,
+      field: K,
+      value: ExtraLineEdit[K],
+    ) => {
+      setInvoices((prev) => {
+        const next = [...prev];
+        const lines = next[index].extraLines.map((el, i) =>
+          i === lineIdx ? { ...el, [field]: value } : el,
+        );
+        next[index] = { ...next[index], extraLines: lines };
+        return next;
+      });
+    },
+    [],
+  );
+
+  /** Remove an extra line by index. */
+  const removeExtraLine = useCallback((index: number, lineIdx: number) => {
+    setInvoices((prev) => {
+      const next = [...prev];
+      next[index] = {
+        ...next[index],
+        extraLines: next[index].extraLines.filter((_, i) => i !== lineIdx),
+      };
+      return next;
+    });
+  }, []);
+
   /** Submit all invoices sequentially */
   const handleSubmitAll = useCallback(async () => {
     setSubmitting(true);
@@ -228,6 +289,26 @@ export function InvoiceReviewDialog({
       try {
         if (inv.isReceipt) {
           // Bonnetje flow — no relation, "Geld uitgegeven" mutation.
+          // Convert any user-added split lines (typically the tip) into
+          // the backend's extraLines shape with proper BTW split per line.
+          const extraLines = inv.extraLines
+            .filter((el) => (parseFloat(el.bedragIncl) || 0) > 0)
+            .map((el) => {
+              const incl = parseFloat(el.bedragIncl) || 0;
+              const elRate = vatRate(el.btwCode);
+              const btw = elRate === 0 ? 0 : +((incl * elRate) / (100 + elRate)).toFixed(2);
+              const excl = +(incl - btw).toFixed(2);
+              return {
+                bedragIncl: incl,
+                bedragExcl: excl,
+                btwBedrag: btw,
+                btwCode: el.btwCode,
+                omschrijving: el.omschrijving || undefined,
+                // tegenRekeningId omitted → backend defaults to the main
+                // line's tegenrekening, which is the right behaviour for
+                // the common tip case (same expense account, different BTW).
+              };
+            });
           await api.submitReceipt({
             datum: inv.datum,
             leverancier: inv.leverancier,
@@ -240,6 +321,7 @@ export function InvoiceReviewDialog({
             uploadKey: inv.source.uploadKey,
             filename: inv.source.filename,
             importId: inv.importId,
+            ...(extraLines.length > 0 ? { extraLines } : {}),
           });
         } else {
           const fullResp = await api.submitInvoiceFull({
@@ -854,6 +936,177 @@ export function InvoiceReviewDialog({
                       </Alert>
                     )}
 
+                    {/* Tip / multi-line split.
+                        Auto-detect: when the matched bank line is more
+                        than €0.05 above the receipt total, the difference
+                        is almost certainly a tip the user added on their
+                        card. Surface a one-click "Splits in fooi" action
+                        that adds a GEEN-BTW line for the delta — same
+                        tegenrekening as the meal (representatie), which
+                        is how Dutch bookkeepers consistently treat tips.
+                        After the click (or when there's any extra line),
+                        the editor below lets the user fine-tune. */}
+                    {inv.isReceipt && (() => {
+                      const incl = parseFloat(inv.bedragIncl) || 0;
+                      const extraSum = inv.extraLines.reduce(
+                        (sum, el) => sum + (parseFloat(el.bedragIncl) || 0),
+                        0,
+                      );
+                      const bankAmount = inv.source.matchedBankLine
+                        ? Math.abs(inv.source.matchedBankLine.bedrag)
+                        : 0;
+                      const totalNow = incl + extraSum;
+                      const delta = bankAmount > 0 ? bankAmount - totalNow : 0;
+                      const showTipHint =
+                        bankAmount > 0 &&
+                        delta > 0.05 &&
+                        inv.extraLines.length === 0;
+                      const balanced =
+                        bankAmount === 0 ||
+                        Math.abs(bankAmount - totalNow) < 0.02;
+
+                      if (showTipHint) {
+                        return (
+                          <Alert
+                            severity="info"
+                            sx={{ mt: 2 }}
+                            action={
+                              <Button
+                                color="inherit"
+                                size="small"
+                                onClick={() =>
+                                  addExtraLine(index, {
+                                    bedragIncl: delta.toFixed(2),
+                                    btwCode: "GEEN",
+                                    omschrijving: "Fooi",
+                                  })
+                                }
+                                disabled={submitting}
+                                sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
+                              >
+                                Splits in fooi
+                              </Button>
+                            }
+                          >
+                            <Typography variant="body2">
+                              Het bonnetje is €{incl.toFixed(2)}, maar het afschrift
+                              toont €{bankAmount.toFixed(2)} — verschil van{" "}
+                              <strong>€{delta.toFixed(2)}</strong>. Dat is meestal
+                              een fooi. Splits in een aparte regel zonder BTW (fooien
+                              zijn geen aftrekbare BTW onder Nederlandse regels).
+                            </Typography>
+                          </Alert>
+                        );
+                      }
+
+                      if (inv.extraLines.length === 0) return null;
+
+                      return (
+                        <Box sx={{ mt: 2 }}>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ fontWeight: 600, display: "block", mb: 1 }}
+                          >
+                            Extra regels
+                          </Typography>
+                          {inv.extraLines.map((el, lineIdx) => (
+                            <Box
+                              key={lineIdx}
+                              sx={{
+                                display: "grid",
+                                gridTemplateColumns: { xs: "1fr", sm: "1.5fr 1.5fr 1fr auto" },
+                                gap: 1.5,
+                                mb: 1.5,
+                                alignItems: "start",
+                              }}
+                            >
+                              <TextField
+                                label="Omschrijving"
+                                value={el.omschrijving}
+                                onChange={(e) => updateExtraLine(index, lineIdx, "omschrijving", e.target.value)}
+                                size="small"
+                                disabled={submitting}
+                              />
+                              <VATCodePicker
+                                codes={purchaseVatCodes}
+                                value={el.btwCode}
+                                onChange={(code) => updateExtraLine(index, lineIdx, "btwCode", code)}
+                                disabled={submitting}
+                              />
+                              <TextField
+                                label="Bedrag incl. BTW"
+                                value={el.bedragIncl}
+                                onChange={(e) => updateExtraLine(index, lineIdx, "bedragIncl", e.target.value)}
+                                size="small"
+                                disabled={submitting}
+                                slotProps={{
+                                  input: {
+                                    startAdornment: (
+                                      <Typography variant="body2" color="text.secondary" sx={{ mr: 0.5 }}>
+                                        &euro;
+                                      </Typography>
+                                    ),
+                                  },
+                                }}
+                              />
+                              <Button
+                                color="error"
+                                size="small"
+                                onClick={() => removeExtraLine(index, lineIdx)}
+                                disabled={submitting}
+                                sx={{ minWidth: 0, alignSelf: "center" }}
+                                aria-label={`Verwijder regel ${lineIdx + 2}`}
+                              >
+                                Verwijder
+                              </Button>
+                            </Box>
+                          ))}
+                          <Box
+                            sx={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              mt: 1,
+                              pt: 1,
+                              borderTop: "1px solid",
+                              borderColor: "divider",
+                            }}
+                          >
+                            <Button
+                              size="small"
+                              onClick={() =>
+                                addExtraLine(index, {
+                                  bedragIncl: "",
+                                  btwCode: "GEEN",
+                                  omschrijving: "",
+                                })
+                              }
+                              disabled={submitting}
+                            >
+                              + Voeg regel toe
+                            </Button>
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                fontFamily: "monospace",
+                                fontWeight: 600,
+                                color: balanced ? "success.dark" : "warning.main",
+                              }}
+                            >
+                              Totaal {formatEuro(totalNow.toFixed(2))}
+                              {bankAmount > 0 && (
+                                <>
+                                  {" "}
+                                  / bank {formatEuro(bankAmount.toFixed(2))}
+                                </>
+                              )}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      );
+                    })()}
+
                     {/* Row 5: Omschrijving */}
                     <Box sx={{ mt: 2 }}>
                       <TextField
@@ -1043,6 +1296,7 @@ function buildEdit(
     ledgerAccount: matchedLedger,
     importId: a.matchedBankLine?.id ?? 0,
     isReceipt: inv.isReceipt ?? false,
+    extraLines: [],
   };
 }
 

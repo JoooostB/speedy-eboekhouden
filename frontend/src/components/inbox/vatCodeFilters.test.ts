@@ -120,12 +120,44 @@ describe("dedupePurchaseVatCodes", () => {
     expect(dedupePurchaseVatCodes([])).toEqual([]);
   });
 
-  it("keeps the first occurrence on collision", () => {
+  it("keeps a canonical code over a legacy variant regardless of API order", () => {
+    // The regression: API returned a legacy code BEFORE the canonical
+    // VERL_INK, so the previous first-wins dedupe dropped the canonical
+    // one — leaving the BTW picker blank when the AI returned VERL_INK.
     const out = dedupePurchaseVatCodes([
-      code(1, "FIRST", "Same label", 21),
-      code(2, "SECOND", "Same label", 21),
+      code(1, "LEGACY_VERL_21", "Btw verlegd 21%", 0),
+      code(2, "VERL_INK", "Btw verlegd 21%", 0),
     ]);
     expect(out.length).toBe(1);
-    expect(out[0].code).toBe("FIRST");
+    expect(out[0].code).toBe("VERL_INK");
+  });
+
+  it("prefers shorter codes when neither is canonical", () => {
+    // Tie-breaker for non-canonical buckets: shorter wins because legacy
+    // variants tend to have _OLD / _2 / etc. suffixes.
+    const out = dedupePurchaseVatCodes([
+      code(1, "AFWIJK_2", "Afwijkend", 7),
+      code(2, "AFWIJK", "Afwijkend", 7),
+    ]);
+    expect(out.length).toBe(1);
+    expect(out[0].code).toBe("AFWIJK");
+  });
+
+  it("preserves canonical codes for every canonical group", () => {
+    // Sanity: with a realistic API response containing every canonical
+    // code, all of them survive the dedupe.
+    const out = dedupePurchaseVatCodes([
+      code(1, "HOOG_INK_21", "Btw hoog 21%", 21),
+      code(2, "LAAG_INK_9", "Btw laag 9%", 9),
+      code(3, "GEEN", "Geen btw", 0),
+      code(4, "VERL_INK", "Btw verlegd 21%", 0),
+      code(5, "VERL_INK_L9", "Btw verlegd 9%", 0),
+      code(6, "BU_EU_INK", "Leveringen/diensten van buiten EU 0%", 0),
+      code(7, "BI_EU_INK", "Goederen naar binnen de EU 0%", 0),
+    ]);
+    const codesOut = out.map((c) => c.code).sort();
+    expect(codesOut).toEqual(
+      ["BI_EU_INK", "BU_EU_INK", "GEEN", "HOOG_INK_21", "LAAG_INK_9", "VERL_INK", "VERL_INK_L9"].sort(),
+    );
   });
 });

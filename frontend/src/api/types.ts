@@ -244,6 +244,22 @@ export interface InvoiceSubmitFullRequest {
   pdfHash?: string;
 }
 
+/** One additional booking line within a single receipt mutation. Used to
+ *  split a restaurant tip (no BTW) from the food portion (9% BTW), or
+ *  any case where one bonnetje needs to span multiple BTW codes. */
+export interface ReceiptExtraLine {
+  bedragExcl: number;
+  bedragIncl: number;
+  btwBedrag: number;
+  btwCode: string;
+  /** Optional — defaults to the main line's tegenrekening when omitted,
+   *  which is the right behaviour for the common tip case (same expense
+   *  account, just a different BTW treatment). */
+  tegenRekeningId?: number;
+  /** Optional per-line label (e.g. "Fooi"). */
+  omschrijving?: string;
+}
+
 /** Payload for POST /api/v1/invoices/submit-receipt — bonnetje without relation */
 export interface InvoiceSubmitReceiptRequest {
   datum: string;
@@ -259,6 +275,8 @@ export interface InvoiceSubmitReceiptRequest {
   importId?: number;
   /** Bank account internal ID — required when importId is not provided. */
   bankAccountId?: number;
+  /** Additional regels for split bookings (e.g. food + tip). */
+  extraLines?: ReceiptExtraLine[];
 }
 
 // Settings
