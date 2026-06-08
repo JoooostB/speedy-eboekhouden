@@ -177,11 +177,21 @@ export interface InvoiceData {
   belastingAdvies: Array<{ type: string; tekst: string }>;
 }
 
+/** A folder in the e-boekhouden digitaal archief. */
+export interface ArchiveFolder {
+  id: number;
+  naam: string;
+  /** 0 means "root" (the implicit Basismap that e-boekhouden never returns). */
+  parentId: number;
+  isDeleted: boolean;
+}
+
 export interface InvoiceAnalyzeResponse {
   invoice: InvoiceData;
   filename: string;
   uploadKey: string;
-  /** Public CDN URL for the uploaded PDF (from R2) */
+  /** Public CDN URL for the uploaded PDF (from R2). Empty when R2 is not
+   *  configured — the frontend then falls back to localPdfUrl. */
   pdfUrl: string;
   /** SHA-256 of the uploaded PDF — echoed back to SubmitFull so the
    *  backend can write a duplicate-detection marker post-booking. */
@@ -207,6 +217,11 @@ export interface InvoiceAnalyzeResponse {
   } | null;
   /** Internal ID of the crediteuren (1600) account */
   crediteurenId: number;
+
+  // NOTE: client-side enrichments (a kept reference to the original File
+  // object, a blob: URL for in-browser preview, etc.) live on the
+  // AnalyzedInvoice extension type below — NOT on this interface. This
+  // type describes the JSON shape the backend actually sends.
   /** Matched unprocessed bank statement line. For non-EUR invoices the
    *  match is fuzzy via approximate FX conversion — currencyConverted is
    *  true in that case, with invoiceCurrency / invoiceAmount carrying the
@@ -220,6 +235,22 @@ export interface InvoiceAnalyzeResponse {
     invoiceCurrency?: string;
     invoiceAmount?: number;
   } | null;
+}
+
+/** InvoiceAnalyzeResponse plus client-side enrichments added by the inbox
+ *  after a successful /invoices/analyze call. These fields keep the
+ *  original PDF File reachable in-memory so:
+ *   - the review dialog can preview it via a blob: URL without R2,
+ *   - the submit handlers can re-encode it as base64 and ship inline.
+ *  None of these fields ever round-trip through JSON; they're purely
+ *  client-side state. Keeping them off InvoiceAnalyzeResponse avoids
+ *  pretending they could come from the backend. */
+export interface AnalyzedInvoice extends InvoiceAnalyzeResponse {
+  /** Object URL created via URL.createObjectURL on the original File.
+   *  Must be revoked by the owning component to release the file data. */
+  localPdfUrl?: string;
+  /** Original File for re-encoding as base64 on submit. */
+  localFile?: File;
 }
 
 /** Payload for POST /api/v1/invoices/submit-full */
@@ -238,6 +269,13 @@ export interface InvoiceSubmitFullRequest {
   rekeningId: number;
   uploadKey: string;
   filename: string;
+  /** Base64-encoded PDF; alternative to uploadKey for clients that don't use
+   *  R2. The backend prefers pdfBase64 when both are present. */
+  pdfBase64?: string;
+  /** Archive folder ID picked by the user. When omitted the backend either
+   *  auto-creates Inkoopfacturen/year/month (if R2 is configured) or skips
+   *  archiving entirely. */
+  folderId?: number;
   importId?: number;
   /** Echo of the analyze response's pdfHash so the backend can write a
    *  duplicate-detection marker. Optional for legacy clients. */
@@ -272,6 +310,10 @@ export interface InvoiceSubmitReceiptRequest {
   tegenRekeningId: number;
   uploadKey: string;
   filename: string;
+  /** Base64-encoded PDF; see InvoiceSubmitFullRequest.pdfBase64. */
+  pdfBase64?: string;
+  /** Archive folder ID; see InvoiceSubmitFullRequest.folderId. */
+  folderId?: number;
   importId?: number;
   /** Bank account internal ID — required when importId is not provided. */
   bankAccountId?: number;

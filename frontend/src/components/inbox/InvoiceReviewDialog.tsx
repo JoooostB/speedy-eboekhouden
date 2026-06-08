@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import {
   Box,
   Button,
@@ -22,10 +22,16 @@ import { track } from "../../analytics";
 import { RelationPicker } from "../shared/RelationPicker";
 import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
+import { ArchiveFolderPicker } from "../shared/ArchiveFolderPicker";
+import {
+  findArchiveFolderForSupplier,
+  useArchiveFolders,
+  type ArchiveFolderWithPath,
+} from "../../hooks/useArchiveFolders";
 import { dedupePurchaseVatCodes, isReverseChargeCode } from "./vatCodeFilters";
 import { invoiceBlocker as evaluateInvoiceBlocker } from "./invoiceValidation";
 import type {
-  InvoiceAnalyzeResponse,
+  AnalyzedInvoice,
   LedgerAccount,
   Relation,
   VATCode,
@@ -44,7 +50,7 @@ interface ExtraLineEdit {
 
 interface InvoiceEdit {
   /** Original analyze response — holds uploadKey (R2 reference) and filename */
-  source: InvoiceAnalyzeResponse;
+  source: AnalyzedInvoice;
   /** Editable fields */
   leverancier: string;
   factuurnummer: string;
@@ -64,6 +70,9 @@ interface InvoiceEdit {
   isReceipt: boolean;
   /** Extra booking lines (tip split, etc.). Empty by default. */
   extraLines: ExtraLineEdit[];
+  /** Picked archive folder; null means do not upload this PDF to the
+   *  digitaal archief. */
+  archiveFolder: ArchiveFolderWithPath | null;
 }
 
 interface SubmitResult {
@@ -89,7 +98,7 @@ function invoiceBlocker(inv: InvoiceEdit): string | null {
 interface Props {
   open: boolean;
   onClose: () => void;
-  analyzed: InvoiceAnalyzeResponse[];
+  analyzed: AnalyzedInvoice[];
   ledgerAccounts: LedgerAccount[];
   vatCodes: VATCode[];
   /** Called after dialog completes so the inbox can refresh */
@@ -142,6 +151,30 @@ export function InvoiceReviewDialog({
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<SubmitResult[] | null>(null);
+
+  // Archive folders are fetched once at the dialog level so we can both
+  // pass them to each ArchiveFolderPicker AND pre-fill suggestions based on
+  // the invoice supplier. The picker still calls useArchiveFolders itself
+  // for the empty-state / error handling — the extra fetch is cheap and
+  // keeps the picker usable in isolation.
+  const { folders: archiveFolders } = useArchiveFolders();
+
+  // When folders arrive, fill in any invoice whose archiveFolder is still
+  // null with the best matching folder for its supplier. We deliberately
+  // depend only on `folders`: this runs once per folder-list change so a
+  // user who deselects a suggested folder afterwards isn't re-surprised by
+  // the suggestion popping back in on every render.
+  useEffect(() => {
+    if (archiveFolders.length === 0) return;
+    setInvoices((prev) =>
+      prev.map((inv) =>
+        inv.archiveFolder == null
+          ? { ...inv, archiveFolder: findArchiveFolderForSupplier(archiveFolders, inv.leverancier) }
+          : inv,
+      ),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [archiveFolders]);
 
   /** Flip every invoice to bonnetje- or factuur-mode in one call. Saves the
    *  user from clicking the per-card toggle N times when uploading a stack
@@ -286,6 +319,31 @@ export function InvoiceReviewDialog({
         continue;
       }
 
+      // Encode the original File as base64 once per invoice so the backend can
+      // place it in the archive without R2 round-tripping. Only sent when the
+      // user has picked a destination folder — otherwise the backend skips
+      // archive upload entirely.
+      let pdfBase64: string | undefined;
+      if (inv.archiveFolder && inv.source.localFile) {
+        try {
+          pdfBase64 = await fileToBase64(inv.source.localFile);
+        } catch (err: any) {
+          submitResults.push({
+            filename: inv.source.filename,
+            status: "error",
+            error: `PDF kon niet worden gelezen: ${err?.message ?? "onbekende fout"}`,
+          });
+          continue;
+        }
+      }
+      const folderId = inv.archiveFolder?.id;
+
+      // The user expected the PDF to be archived if and only if both a folder
+      // and a PDF were available. We use this below to detect a silent
+      // archive failure (mutation booked but `archived: false`) and surface
+      // it as a warning instead of letting the user assume everything is OK.
+      const archiveExpected = !!pdfBase64 && !!folderId;
+
       try {
         if (inv.isReceipt) {
           // Bonnetje flow — no relation, "Geld uitgegeven" mutation.
@@ -309,7 +367,7 @@ export function InvoiceReviewDialog({
                 // the common tip case (same expense account, different BTW).
               };
             });
-          await api.submitReceipt({
+          const receiptResp = await api.submitReceipt({
             datum: inv.datum,
             leverancier: inv.leverancier,
             omschrijving: inv.omschrijving,
@@ -322,7 +380,25 @@ export function InvoiceReviewDialog({
             filename: inv.source.filename,
             importId: inv.importId,
             ...(extraLines.length > 0 ? { extraLines } : {}),
+            ...(pdfBase64 ? { pdfBase64 } : {}),
+            ...(folderId ? { folderId } : {}),
           });
+
+          if (archiveExpected && receiptResp.archived === false) {
+            submitResults.push({
+              filename: inv.source.filename,
+              status: "warning",
+              details: `Bonnetje: ${inv.leverancier || "onbekend"} — ${formatEuro(inv.bedragIncl)}`,
+              error:
+                "Bonnetje is geboekt, maar de PDF kon niet naar het archief worden geüpload. Upload het bestand handmatig of probeer opnieuw.",
+            });
+            track("Invoice Review Submitted", {
+              confidence: String(Math.round(inv.source.invoice.confidence * 100)),
+              mode: "receipt",
+              outcome: "archive_warning",
+            });
+            continue;
+          }
         } else {
           const fullResp = await api.submitInvoiceFull({
             datum: inv.datum,
@@ -341,6 +417,8 @@ export function InvoiceReviewDialog({
             filename: inv.source.filename,
             pdfHash: inv.source.pdfHash,
             ...(inv.importId ? { importId: inv.importId } : {}),
+            ...(pdfBase64 ? { pdfBase64 } : {}),
+            ...(folderId ? { folderId } : {}),
           });
 
           // FactuurOntvangen succeeded but the bank-line-clearing payment
@@ -357,6 +435,22 @@ export function InvoiceReviewDialog({
               confidence: String(Math.round(inv.source.invoice.confidence * 100)),
               mode: "invoice",
               outcome: "payment_warning",
+            });
+            continue;
+          }
+
+          if (archiveExpected && fullResp.archived === false) {
+            submitResults.push({
+              filename: inv.source.filename,
+              status: "warning",
+              details: `${inv.leverancier} — ${formatEuro(inv.bedragIncl)} — ${inv.factuurnummer}`,
+              error:
+                "Factuur is geboekt, maar de PDF kon niet naar het archief worden geüpload. Upload het bestand handmatig of probeer opnieuw.",
+            });
+            track("Invoice Review Submitted", {
+              confidence: String(Math.round(inv.source.invoice.confidence * 100)),
+              mode: "invoice",
+              outcome: "archive_warning",
             });
             continue;
           }
@@ -631,9 +725,11 @@ export function InvoiceReviewDialog({
                     mt: 2,
                   }}
                 >
-                  {/* PDF preview pane */}
+                  {/* PDF preview pane. Prefer the R2 presigned URL when
+                      available, fall back to the client-side blob: URL so the
+                      preview works in self-hosted deployments without R2. */}
                   <PdfPreview
-                    pdfUrl={inv.source.pdfUrl}
+                    pdfUrl={inv.source.pdfUrl || inv.source.localPdfUrl || ""}
                     filename={inv.source.filename}
                   />
 
@@ -781,6 +877,18 @@ export function InvoiceReviewDialog({
                         onChange={(acc) => updateField(index, "ledgerAccount", acc)}
                         label="Tegenrekening"
                         disabled={submitting}
+                      />
+                    </Box>
+
+                    {/* Row 4b: Archive folder picker. Optional — leaving it
+                        empty means the PDF is not uploaded to the digitaal
+                        archief (mutation is still booked). */}
+                    <Box sx={{ mt: 2 }}>
+                      <ArchiveFolderPicker
+                        value={inv.archiveFolder}
+                        onChange={(f) => updateField(index, "archiveFolder", f)}
+                        disabled={submitting}
+                        helperText="Optioneel — laat leeg om de PDF niet in het digitaal archief op te slaan."
                       />
                     </Box>
 
@@ -1226,7 +1334,7 @@ export function InvoiceReviewDialog({
 
 /** Build editable state from an analyze response */
 function buildEdit(
-  a: InvoiceAnalyzeResponse,
+  a: AnalyzedInvoice,
   ledgerAccounts: LedgerAccount[],
   vatCodes: VATCode[],
 ): InvoiceEdit {
@@ -1297,6 +1405,7 @@ function buildEdit(
     importId: a.matchedBankLine?.id ?? 0,
     isReceipt: inv.isReceipt ?? false,
     extraLines: [],
+    archiveFolder: null,
   };
 }
 
@@ -1317,6 +1426,29 @@ function formatEuro(amount: string): string {
   const num = parseFloat(amount);
   if (isNaN(num)) return amount;
   return `\u20AC${num.toFixed(2)}`;
+}
+
+/**
+ * Read a File and return the base64-encoded body without the
+ * "data:<mime>;base64," prefix \u2014 that prefix is what readAsDataURL adds, but
+ * the e-boekhouden archive upload endpoint expects raw base64. Rejects on
+ * read errors so the caller can surface a clear UI message.
+ */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Onverwacht resultaat bij het lezen van de PDF"));
+        return;
+      }
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Lezen mislukt"));
+    reader.readAsDataURL(file);
+  });
 }
 
 /**

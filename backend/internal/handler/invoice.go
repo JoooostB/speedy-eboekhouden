@@ -382,9 +382,19 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		TegenRekeningId int `json:"tegenRekeningId"` // cost account
 		RekeningId      int `json:"rekeningId"`      // crediteuren account
 
-		// PDF reference (R2 key from /invoices/analyze response)
+		// PDF reference. Two sources are supported and PdfBase64 wins when
+		// both are provided so a client can opt out of R2 entirely:
+		//   - PdfBase64: PDF inlined as base64 (self-hosted, no R2 needed)
+		//   - UploadKey: R2 object key from a prior /invoices/analyze call
 		UploadKey string `json:"uploadKey"`
+		PdfBase64 string `json:"pdfBase64,omitempty"`
 		Filename  string `json:"filename"`
+
+		// FolderID is the e-boekhouden archive folder the user picked. When
+		// zero we fall back to the legacy findOrCreateArchiveFolder behavior
+		// (only relevant for R2 deployments — self-hosted clients should
+		// always send a FolderID or skip archiving entirely).
+		FolderID int `json:"folderId,omitempty"`
 
 		// Optional: bank statement line to mark as processed
 		ImportId int `json:"importId,omitempty"`
@@ -455,58 +465,51 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		req.BTWCode = "HOOG_INK_21"
 	}
 
-	// Step 1: Upload PDF to e-boekhouden digitaal archief
+	// Step 1: Upload PDF to e-boekhouden digitaal archief.
+	//
+	// PDF source: prefer the inlined PdfBase64 from the client (no R2 required)
+	// and fall back to an R2 download keyed by UploadKey for backward compat
+	// with deployments that still use the analyze→R2→submit flow.
+	//
+	// Folder selection: prefer the explicit user choice (FolderID from the
+	// frontend picker); when zero AND R2 is in play, keep the legacy auto
+	// "Inkoopfacturen/jaar/maand" behavior so R2 deployments don't regress.
+	// Self-hosted clients without R2 that omit FolderID skip archiving — an
+	// explicit opt-out, not a silent failure.
 	var archiefFileId int
-	if req.UploadKey != "" && h.r2 != nil {
-		// Fetch PDF from R2 (already uploaded during /invoices/analyze)
-		pdfBytes, _, err := h.r2.Download(c.Request.Context(), req.UploadKey)
-		if err != nil {
+	var pdfBytes []byte
+	if req.PdfBase64 != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(req.PdfBase64); err != nil {
+			log.Printf("SubmitFull: invalid pdfBase64: %v", err)
+		} else {
+			pdfBytes = decoded
+		}
+	} else if req.UploadKey != "" && h.r2 != nil {
+		if downloaded, _, err := h.r2.Download(c.Request.Context(), req.UploadKey); err != nil {
 			log.Printf("R2 download error for %s: %v", req.UploadKey, err)
 		} else {
-			// Find or create the archive folder: Inkoopfacturen/year/month
+			pdfBytes = downloaded
+		}
+	}
+	if len(pdfBytes) > 0 {
+		folderID := req.FolderID
+		if folderID == 0 && h.r2 != nil {
 			datum, _ := time.Parse("2006-01-02", req.Datum)
 			if datum.IsZero() {
 				datum = time.Now()
 			}
-			folderId, err := h.findOrCreateArchiveFolder(client, datum)
-			if err != nil {
+			if id, err := h.findOrCreateArchiveFolder(client, datum); err != nil {
 				log.Printf("Archive folder error: %v", err)
 			} else {
-				// Upload to e-boekhouden archive (base64 is required by their API)
-				filename := sanitizeFilename(req.Filename)
-				if req.Filename == "" {
-					filename = sanitizeFilename(fmt.Sprintf("factuur_%s.pdf", req.Factuurnummer))
-				}
-				pdfBase64 := base64.StdEncoding.EncodeToString(pdfBytes)
-				uploadPayload, _ := json.Marshal(map[string]any{
-					"fileName":  filename,
-					"data":      pdfBase64,
-					"overwrite": false,
-					"folderId":  folderId,
-				})
-				_, err := client.UploadArchiveFile(uploadPayload)
-				if err != nil {
-					log.Printf("Archive upload error: %v", err)
-				} else {
-					// The upload response returns folderId (the destination folder), NOT the file ID.
-					// To get the file ID, list files in the folder and find the one we just uploaded.
-					filesRaw, err := client.GetArchiveFiles(folderId)
-					if err == nil {
-						var files []map[string]any
-						if json.Unmarshal(filesRaw, &files) == nil {
-							for _, f := range files {
-								naam, _ := f["naam"].(string)
-								if naam == filename {
-									if id, ok := f["id"].(float64); ok {
-										archiefFileId = int(id)
-									}
-									break
-								}
-							}
-						}
-					}
-				}
+				folderID = id
 			}
+		}
+		if folderID > 0 {
+			filename := req.Filename
+			if filename == "" {
+				filename = fmt.Sprintf("factuur_%s.pdf", req.Factuurnummer)
+			}
+			archiefFileId = h.uploadAndResolveArchiveFile(client, pdfBytes, folderID, filename)
 		}
 	}
 
@@ -746,9 +749,14 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		BTWBedrag       float64 `json:"btwBedrag"`
 		BTWCode         string  `json:"btwCode"`
 		TegenRekeningId int     `json:"tegenRekeningId"`
-		UploadKey       string  `json:"uploadKey"`
-		Filename        string  `json:"filename"`
-		ImportId        int     `json:"importId,omitempty"`
+		// PDF source: PdfBase64 (preferred, no R2 needed) or UploadKey + R2.
+		UploadKey string `json:"uploadKey"`
+		PdfBase64 string `json:"pdfBase64,omitempty"`
+		Filename  string `json:"filename"`
+		// FolderID is the picked archive folder; zero falls back to legacy
+		// auto-folder when R2 is configured.
+		FolderID int `json:"folderId,omitempty"`
+		ImportId int `json:"importId,omitempty"`
 		// BankAccountId is the e-boekhouden internal ID of the bank account
 		// to debit. When ImportId is set we look it up from the bank line.
 		BankAccountId int `json:"bankAccountId,omitempty"`
@@ -864,52 +872,44 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		return
 	}
 
-	// Step 1: Upload PDF to e-boekhouden archive (same flow as SubmitFull).
+	// Step 1: Upload PDF to e-boekhouden archive — see SubmitFull for the
+	// dual-source (PdfBase64 vs R2) + dual-folder (explicit vs legacy auto)
+	// rationale. Identical decision tree here, only the default filename
+	// differs ("bonnetje_…" instead of "factuur_…").
 	var archiefFileId int
-	if req.UploadKey != "" && h.r2 != nil {
-		pdfBytes, _, err := h.r2.Download(c.Request.Context(), req.UploadKey)
-		if err != nil {
+	var pdfBytes []byte
+	if req.PdfBase64 != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(req.PdfBase64); err != nil {
+			log.Printf("SubmitReceipt: invalid pdfBase64: %v", err)
+		} else {
+			pdfBytes = decoded
+		}
+	} else if req.UploadKey != "" && h.r2 != nil {
+		if downloaded, _, err := h.r2.Download(c.Request.Context(), req.UploadKey); err != nil {
 			log.Printf("R2 download error for %s: %v", req.UploadKey, err)
 		} else {
+			pdfBytes = downloaded
+		}
+	}
+	if len(pdfBytes) > 0 {
+		folderID := req.FolderID
+		if folderID == 0 && h.r2 != nil {
 			datum, _ := time.Parse("2006-01-02", req.Datum)
 			if datum.IsZero() {
 				datum = time.Now()
 			}
-			folderId, err := h.findOrCreateArchiveFolder(client, datum)
-			if err != nil {
+			if id, err := h.findOrCreateArchiveFolder(client, datum); err != nil {
 				log.Printf("Archive folder error: %v", err)
 			} else {
-				filename := sanitizeFilename(req.Filename)
-				if filename == "" {
-					filename = sanitizeFilename(fmt.Sprintf("bonnetje_%s_%s.pdf", req.Datum, req.Leverancier))
-				}
-				pdfBase64 := base64.StdEncoding.EncodeToString(pdfBytes)
-				uploadPayload, _ := json.Marshal(map[string]any{
-					"fileName":  filename,
-					"data":      pdfBase64,
-					"overwrite": false,
-					"folderId":  folderId,
-				})
-				if _, err := client.UploadArchiveFile(uploadPayload); err != nil {
-					log.Printf("Archive upload error: %v", err)
-				} else {
-					// Resolve the file ID by listing the folder.
-					if filesRaw, err := client.GetArchiveFiles(folderId); err == nil {
-						var files []map[string]any
-						if json.Unmarshal(filesRaw, &files) == nil {
-							for _, f := range files {
-								naam, _ := f["naam"].(string)
-								if naam == filename {
-									if id, ok := f["id"].(float64); ok {
-										archiefFileId = int(id)
-									}
-									break
-								}
-							}
-						}
-					}
-				}
+				folderID = id
 			}
+		}
+		if folderID > 0 {
+			filename := req.Filename
+			if filename == "" {
+				filename = fmt.Sprintf("bonnetje_%s_%s.pdf", req.Datum, req.Leverancier)
+			}
+			archiefFileId = h.uploadAndResolveArchiveFile(client, pdfBytes, folderID, filename)
 		}
 	}
 
@@ -1010,6 +1010,50 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		"archived": archiefFileId > 0,
 		"linked":   archiefFileId > 0 && mutResult.MutNr > 0,
 	})
+}
+
+// uploadAndResolveArchiveFile uploads pdfBytes into folderID and returns the
+// archive file ID assigned by e-boekhouden. The /folder/upload endpoint
+// returns the destination folder ID — not the file ID — so we list the folder
+// after upload and match on filename to recover the real ID, which the caller
+// needs to link the file to a mutation. Returns 0 on any failure (logged).
+//
+// The filename is sanitized internally; an empty input becomes "document.pdf".
+// Callers that want a more descriptive name (e.g. "factuur_X.pdf") should pass
+// that string in rawFilename — sanitization keeps it but adds ".pdf" if missing.
+func (h *InvoiceHandler) uploadAndResolveArchiveFile(client *eboekhouden.Client, pdfBytes []byte, folderID int, rawFilename string) int {
+	if len(pdfBytes) == 0 || folderID == 0 {
+		return 0
+	}
+	filename := sanitizeFilename(rawFilename)
+	uploadPayload, _ := json.Marshal(map[string]any{
+		"fileName":  filename,
+		"data":      base64.StdEncoding.EncodeToString(pdfBytes),
+		"overwrite": false,
+		"folderId":  folderID,
+	})
+	if _, err := client.UploadArchiveFile(uploadPayload); err != nil {
+		log.Printf("Archive upload error: %v", err)
+		return 0
+	}
+	filesRaw, err := client.GetArchiveFiles(folderID)
+	if err != nil {
+		log.Printf("Archive file list error after upload: %v", err)
+		return 0
+	}
+	var files []map[string]any
+	if err := json.Unmarshal(filesRaw, &files); err != nil {
+		log.Printf("Archive file list parse error: %v", err)
+		return 0
+	}
+	for _, f := range files {
+		if naam, _ := f["naam"].(string); naam == filename {
+			if id, ok := f["id"].(float64); ok {
+				return int(id)
+			}
+		}
+	}
+	return 0
 }
 
 // findOrCreateArchiveFolder finds or creates the Facturen/year/month folder
