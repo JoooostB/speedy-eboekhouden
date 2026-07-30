@@ -46,13 +46,9 @@ spec:
               memory: 32Mi
             limits:
               memory: 192Mi
-          livenessProbe:
-            exec:
-              command:
-                - redis-cli
-                - ping
-            initialDelaySeconds: 10
-            periodSeconds: 30
+          # No liveness probe on purpose: a single-instance Redis does not
+          # deadlock in a way a restart fixes, and probe timeouts during
+          # node/IO stalls were killing a healthy database.
           readinessProbe:
             exec:
               command:
@@ -60,6 +56,7 @@ spec:
                 - ping
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
       volumes:
         - name: redis-data
           persistentVolumeClaim:
