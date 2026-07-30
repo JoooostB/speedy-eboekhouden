@@ -45,12 +45,14 @@ spec:
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 30
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /healthz
               port: 8080
             initialDelaySeconds: 3
             periodSeconds: 10
+            timeoutSeconds: 5
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -87,12 +89,14 @@ spec:
               port: 80
             initialDelaySeconds: 5
             periodSeconds: 30
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /healthz
               port: 80
             initialDelaySeconds: 3
             periodSeconds: 10
+            timeoutSeconds: 5
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -126,9 +130,11 @@ spec:
               port: 80
             initialDelaySeconds: 3
             periodSeconds: 30
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /
               port: 80
             initialDelaySeconds: 2
             periodSeconds: 10
+            timeoutSeconds: 5

@@ -55,16 +55,9 @@ spec:
               memory: 128Mi
             limits:
               memory: 512Mi
-          livenessProbe:
-            exec:
-              command:
-                - pg_isready
-                - -U
-                - speedy
-                - -d
-                - speedy
-            initialDelaySeconds: 15
-            periodSeconds: 30
+          # No liveness probe on purpose: a single-instance Postgres does not
+          # deadlock in a way a restart fixes, and probe timeouts during
+          # node/IO stalls were killing a healthy database.
           readinessProbe:
             exec:
               command:
@@ -75,6 +68,7 @@ spec:
                 - speedy
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
   volumeClaimTemplates:
     - metadata:
         name: postgres-data
