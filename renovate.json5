@@ -1,0 +1,24 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+  ],
+
+  // Auto-merge: platformAutomerge is OFF because GitHub-native auto-merge
+  // needs branch protection / rulesets, which private repos on the Free plan
+  // don't have (native auto-merge would merge instantly, before CI). Instead
+  // Renovate itself waits: on a later run it merges the PR only once all its
+  // checks (the CI `backend` and `frontend` jobs, plus the `docker` matrix)
+  // are green. Renovate PRs are opened by the Renovate GitHub App, so they
+  // trigger CI normally (no GITHUB_TOKEN problem). If the repo ever moves to
+  // a paid plan, add a ruleset on `main` requiring `Go build & test` and
+  // `Frontend type check` for defense-in-depth.
+  automerge: true,
+  platformAutomerge: false,
+
+  // Belt-and-braces: never merge a PR whose status checks haven't reported
+  // yet. Renovate's default is already to require green checks, but making
+  // it explicit means a future contributor can't silently weaken this by
+  // flipping `ignoreTests`.
+  ignoreTests: false,
+}
