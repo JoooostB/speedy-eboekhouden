@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useLayoutEffect } from "react";
 import {
   Box,
   Checkbox,
@@ -64,6 +64,61 @@ interface Props {
   onInvoiceUpload?: (file: File, bankLineId: number) => void;
   /** Whether this row has already been processed (show success state). */
   processed?: boolean;
+}
+
+/**
+ * Renders text truncated with an ellipsis, and wraps it in a tooltip
+ * exposing the full string when (and only when) it actually overflows.
+ * ResizeObserver keeps the overflow flag correct across viewport changes.
+ */
+function TruncatedText({
+  text,
+  variant,
+  color,
+  sx,
+}: {
+  text: string;
+  variant: "body2" | "caption";
+  color?: string;
+  sx?: object;
+}) {
+  const ref = useRef<HTMLElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setOverflowing(el.scrollWidth > el.clientWidth);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text]);
+
+  const node = (
+    <Typography
+      ref={ref}
+      variant={variant}
+      color={color}
+      sx={{
+        display: "block",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        ...sx,
+      }}
+    >
+      {text}
+    </Typography>
+  );
+
+  if (!overflowing) return node;
+
+  return (
+    <Tooltip title={text} arrow enterDelay={300} enterNextDelay={100}>
+      {node}
+    </Tooltip>
+  );
 }
 
 /**
@@ -301,30 +356,17 @@ export function InboxRow({
             }
           }}
         >
-          <Typography
+          <TruncatedText
+            text={item.omschrijving}
             variant="body2"
-            sx={{
-              fontWeight: 500,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {item.omschrijving}
-          </Typography>
+            sx={{ fontWeight: 500 }}
+          />
           {item.indicator && (
-            <Typography
+            <TruncatedText
+              text={item.indicator}
               variant="caption"
               color="text.secondary"
-              sx={{
-                display: "block",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {item.indicator}
-            </Typography>
+            />
           )}
         </Box>
 
