@@ -4,8 +4,8 @@ go 1.26.0
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.35.0
-	github.com/aws/aws-sdk-go-v2/credentials v1.20.1
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.109.1
+	github.com/aws/aws-sdk-go-v2/credentials v1.20.2
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.110.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-webauthn/webauthn v0.18.0
 	github.com/jackc/pgx/v5 v5.10.0
