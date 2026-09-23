@@ -3,7 +3,7 @@ module github.com/joooostb/speedy-eboekhouden
 go 1.26.0
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.74.0
+	github.com/anthropics/anthropic-sdk-go v1.75.0
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.5
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.2
 	github.com/gin-gonic/gin v1.12.0
