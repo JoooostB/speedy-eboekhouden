@@ -20,7 +20,9 @@ Bulk hour logging, AI-powered bank statement processing, invoice OCR with automa
 |---------|-------------|
 | **Bulk hour entry** | Select employees, project, activity, pick dates on a calendar, submit all at once |
 | **Bank statement processing** | View unprocessed lines, get AI-powered booking suggestions, process with one click |
-| **Invoice OCR** | Upload PDF invoices, Claude AI extracts supplier, amounts, VAT, ledger account |
+| **Invoice OCR** | Upload PDF, JPG or PNG invoices, Claude AI extracts supplier, amounts, VAT, ledger account |
+| **Document inbox (Mail & herken)** | Documents mailed to your e-boekhouden archive show up automatically; analyse them with Claude, book them against the matching bank line or as an open invoice, and Speedy renames and files them in your archive |
+| **Open-invoice matching** | Bank lines that pay an outstanding invoice are recognised and settled with one click |
 | **Transaction classification** | AI suggests grootboekrekening and BTW code based on Belastingdienst rules |
 | **Dashboard** | Overview of unprocessed bank statements, quick navigation to all features |
 | **Passkey authentication** | No passwords — login with Face ID, Touch ID, or security key |
