@@ -22,7 +22,7 @@ import { RelationPicker } from "../shared/RelationPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
 import { useLedgerAccounts } from "../../hooks/useLedgerAccounts";
 import { useVATCodes } from "../../hooks/useVATCodes";
-import { track } from "../../analytics";
+import { errorClass, track } from "../../analytics";
 
 interface Props {
   row: BankStatementRow;
@@ -146,7 +146,7 @@ export function ProcessDialog({ row, onClose, onProcessed }: Props) {
       track("Bank Statement Processed", { soort, aiUsed: aiResult ? "true" : "false" });
       onProcessed(row.id);
     } catch (err: any) {
-      track("Bank Statement Error", { reason: err.message || "unknown" });
+      track("Bank Statement Error", { reason: errorClass(err) });
       setError(err.message || "Verwerking mislukt");
     } finally {
       setSubmitting(false);

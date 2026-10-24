@@ -190,10 +190,12 @@ func (c *Client) apiDo(method, path string, payload json.RawMessage) (json.RawMe
 		return nil, ErrSessionExpired
 	}
 	if env, isErr := parseErrorEnvelope(body); isErr {
-		return nil, fmt.Errorf("e-Boekhouden: %s", envelopeMessage(env))
+		return nil, newEnvelopeError(path, resp.StatusCode, env, len(body))
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("request to %s returned %d: %s", path, resp.StatusCode, string(body))
+		// Status and length only: the body may be anything e-boekhouden
+		// renders and must not end up in an error that gets logged.
+		return nil, newStatusError(path, resp.StatusCode, len(body))
 	}
 	return json.RawMessage(body), nil
 }
@@ -236,11 +238,11 @@ func (c *Client) apiGetBinary(path string, maxBytes int64) (data []byte, content
 			return nil, "", "", ErrSessionExpired
 		}
 		if env, isErr := parseErrorEnvelope(data); isErr {
-			return nil, "", "", fmt.Errorf("e-Boekhouden: %s", envelopeMessage(env))
+			return nil, "", "", newEnvelopeError(path, resp.StatusCode, env, len(data))
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", "", fmt.Errorf("request to %s returned %d", path, resp.StatusCode)
+		return nil, "", "", newStatusError(path, resp.StatusCode, len(data))
 	}
 	if int64(len(data)) > maxBytes {
 		return nil, "", "", fmt.Errorf("file from %s exceeds %d bytes", path, maxBytes)

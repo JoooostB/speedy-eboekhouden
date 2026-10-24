@@ -18,7 +18,7 @@ import { RelationPicker } from "../shared/RelationPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
 import { useLedgerAccounts } from "../../hooks/useLedgerAccounts";
 import { useVATCodes } from "../../hooks/useVATCodes";
-import { track } from "../../analytics";
+import { errorClass, track } from "../../analytics";
 
 export function InvoiceProcessor() {
   const { eboekhoudenConnected } = useAuth();
@@ -73,7 +73,7 @@ export function InvoiceProcessor() {
       const match = ledgerAccounts.find((a) => a.code === inv.grootboekcode);
       if (match) setTegenRekening(match);
     } catch (err: any) {
-      track("Invoice Analyze Error", { reason: err.message || "unknown" });
+      track("Invoice Analyze Error", { reason: errorClass(err) });
       setError(err.message || "Factuuranalyse mislukt");
     } finally {
       setAnalyzing(false);
@@ -125,7 +125,7 @@ export function InvoiceProcessor() {
       track("Invoice Submitted");
       setSuccess({ mutNr: result.mutNr });
     } catch (err: any) {
-      track("Invoice Submit Error", { reason: err.message || "unknown" });
+      track("Invoice Submit Error", { reason: errorClass(err) });
       setError(err.message || "Factuur indienen mislukt");
     } finally {
       setSubmitting(false);

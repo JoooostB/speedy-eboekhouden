@@ -165,7 +165,9 @@ func (c *Client) MoveArchiveFiles(targetFolderID int, fileIDs []int) (moved []in
 		moved = []int{}
 	}
 	if len(res.ErrorMessages) > 0 {
-		return moved, fmt.Errorf("e-Boekhouden: %s", capMessage(joinRawMessages(res.ErrorMessages)))
+		// Typed so handlers can log it without the message, which may echo
+		// a file name.
+		return moved, &APIError{Path: "/v1/api/folder/bulk/update", Status: 200, Message: capMessage(joinRawMessages(res.ErrorMessages)), BodyLen: len(raw)}
 	}
 	if len(res.NotFoundIDs) > 0 {
 		return moved, fmt.Errorf("e-Boekhouden: files not found: %v", res.NotFoundIDs)

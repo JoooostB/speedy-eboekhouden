@@ -244,10 +244,10 @@ func (h *InvoiceHandler) writeAnalyzeError(c *gin.Context, sess *session.Session
 	case HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err):
 		// Response written: the frontend shows the reconnect prompt.
 	case errors.As(err, &readErr):
-		log.Printf("Claude invoice read error: %v", readErr.err)
+		log.Printf("Claude invoice read error: %s", errClass(readErr.err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": readErr.err.Error()})
 	default:
-		log.Printf("Invoice analyze error: %v", err)
+		log.Printf("Invoice analyze error: %s", errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "analyze_failed", "message": "Analyse mislukt. Probeer het opnieuw."})
 	}
 }
@@ -647,7 +647,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 
 	mutResp, err := client.CreateMutatie(invoiceMutPayload)
 	if err != nil {
-		log.Printf("SubmitFull CreateMutatie error: %v", err)
+		log.Printf("SubmitFull CreateMutatie error: %s", errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Factuur ontvangen mislukt: " + err.Error()})
 		return
 	}
@@ -657,12 +657,12 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		MutId int `json:"mutId"`
 	}
 	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
-		log.Printf("SubmitFull invoice unmarshal error: %v body=%s", jsonErr, string(mutResp))
+		log.Printf("SubmitFull invoice unmarshal error: %v (%d bytes)", jsonErr, len(mutResp))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden bij factuur ontvangen"})
 		return
 	}
 	if mutResult.MutNr == 0 {
-		log.Printf("SubmitFull invoice mutNr=0, body=%s", string(mutResp))
+		log.Printf("SubmitFull invoice mutNr=0 (%d bytes)", len(mutResp))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Factuur ontvangen niet aangemaakt — controleer de gegevens"})
 		return
 	}
@@ -734,17 +734,17 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 
 			payResp, err := client.CreateMutatie(paymentPayload)
 			if err != nil {
-				log.Printf("SubmitFull payment mutation error for invoice mutNr=%d: %v", mutResult.MutNr, err)
+				log.Printf("SubmitFull payment mutation error for invoice mutNr=%d: %s", mutResult.MutNr, errClass(err))
 				paymentWarning = "Factuur is geboekt, maar de afschriftregel kon niet worden gemarkeerd: " + err.Error()
 			} else {
 				var payResult struct {
 					MutNr int `json:"mutNr"`
 				}
 				if jsonErr := json.Unmarshal(payResp, &payResult); jsonErr != nil {
-					log.Printf("SubmitFull payment unmarshal error: %v body=%s", jsonErr, string(payResp))
+					log.Printf("SubmitFull payment unmarshal error: %v (%d bytes)", jsonErr, len(payResp))
 					paymentWarning = "Factuur is geboekt, maar het antwoord van e-Boekhouden voor de betaling was onverwacht. Controleer de afschriftregel handmatig."
 				} else if payResult.MutNr == 0 {
-					log.Printf("SubmitFull payment returned mutNr=0; body=%s", string(payResp))
+					log.Printf("SubmitFull payment returned mutNr=0 (%d bytes)", len(payResp))
 					paymentWarning = "Factuur is geboekt, maar de betalingsmutatie is niet aangemaakt — afschriftregel is mogelijk niet gemarkeerd. Controleer in e-Boekhouden."
 				} else {
 					paymentMutNr = payResult.MutNr
@@ -1053,7 +1053,7 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 
 	mutResp, err := client.CreateMutatie(mutPayload)
 	if err != nil {
-		log.Printf("SubmitReceipt CreateMutatie error: %v", err)
+		log.Printf("SubmitReceipt CreateMutatie error: %s", errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje boeken mislukt: " + err.Error()})
 		return
 	}
@@ -1063,12 +1063,12 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		MutId int `json:"mutId"`
 	}
 	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
-		log.Printf("SubmitReceipt unmarshal error: %v body=%s", jsonErr, string(mutResp))
+		log.Printf("SubmitReceipt unmarshal error: %v (%d bytes)", jsonErr, len(mutResp))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden"})
 		return
 	}
 	if mutResult.MutNr == 0 {
-		log.Printf("SubmitReceipt mutNr=0, body=%s", string(mutResp))
+		log.Printf("SubmitReceipt mutNr=0 (%d bytes)", len(mutResp))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje niet aangemaakt — controleer de gegevens"})
 		return
 	}

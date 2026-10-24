@@ -13,7 +13,7 @@ import {
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { api } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
-import { track } from "../../analytics";
+import { errorClass, track } from "../../analytics";
 
 /**
  * PasskeyLogin handles both login and registration.
@@ -61,7 +61,7 @@ export function PasskeyLogin() {
       track("Passkey Login");
       await refreshMe();
     } catch (err: any) {
-      track("Passkey Login Error", { reason: err.message || "unknown" });
+      track("Passkey Login Error", { reason: errorClass(err) });
       setError(translateError(err, "login"));
     } finally {
       setLoading(false);
@@ -88,7 +88,7 @@ export function PasskeyLogin() {
       track("Passkey Register");
       await refreshMe();
     } catch (err: any) {
-      track("Passkey Register Error", { reason: err.message || "unknown" });
+      track("Passkey Register Error", { reason: errorClass(err) });
       setError(translateError(err, "register"));
     } finally {
       setLoading(false);

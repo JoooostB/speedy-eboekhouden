@@ -26,14 +26,19 @@ const readInvoiceMaxTokens = 4096
 // indicator/omschrijving values.
 const classifyTransactionMaxTokens = 1024
 
-// truncateForLog clips a string to maxLen characters, suffixing
-// "...(truncated)" when clipped. Used to keep log lines compact while
-// preserving enough of the failing response to debug it.
-func truncateForLog(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+// jsonErrClass describes a json.Unmarshal failure for the log without any of
+// the decoded text: Claude's output is built from the user's documents and
+// bank lines and is never logged, not even as a preview. A syntax error is
+// reported by offset, a type error by field and expected type.
+func jsonErrClass(err error) string {
+	switch e := err.(type) {
+	case *json.SyntaxError:
+		return fmt.Sprintf("syntax error at offset %d", e.Offset)
+	case *json.UnmarshalTypeError:
+		return fmt.Sprintf("type error: field %q wants %s", e.Field, e.Type)
+	default:
+		return fmt.Sprintf("%T", err)
 	}
-	return s[:maxLen] + "...(truncated)"
 }
 
 const invoiceSystemPromptBase = `You are a Dutch bookkeeping assistant. You read purchase documents (PDF invoices, scanned or photographed receipts, credit notes) and extract structured data.
@@ -308,8 +313,8 @@ func (s *Service) ReadInvoice(ctx context.Context, apiKey string, mediaType stri
 	var invoice InvoiceData
 	cleaned := cleanJSON(text)
 	if err := json.Unmarshal([]byte(cleaned), &invoice); err != nil {
-		log.Printf("Claude ReadInvoice unmarshal failed: err=%v stopReason=%s responseLen=%d preview=%s",
-			err, msg.StopReason, len(cleaned), truncateForLog(cleaned, 500))
+		log.Printf("Claude ReadInvoice unmarshal failed: err=%s stopReason=%s responseLen=%d",
+			jsonErrClass(err), msg.StopReason, len(cleaned))
 		return nil, fmt.Errorf("Factuurgegevens konden niet worden verwerkt. Probeer het opnieuw of voer handmatig in.")
 	}
 
@@ -345,8 +350,8 @@ func (s *Service) ClassifyTransaction(ctx context.Context, apiKey string, req Cl
 	}
 
 	if string(msg.StopReason) == "max_tokens" {
-		log.Printf("Claude ClassifyTransaction hit max_tokens (limit=%d); response truncated for description=%q",
-			classifyTransactionMaxTokens, truncateForLog(req.Omschrijving, 80))
+		log.Printf("Claude ClassifyTransaction hit max_tokens (limit=%d); response truncated (descriptionLen=%d)",
+			classifyTransactionMaxTokens, len(req.Omschrijving))
 		return nil, fmt.Errorf("AI-suggestie kon niet worden voltooid. Probeer het opnieuw.")
 	}
 
@@ -359,8 +364,8 @@ func (s *Service) ClassifyTransaction(ctx context.Context, apiKey string, req Cl
 	var result ClassifyResult
 	cleaned := cleanJSON(text)
 	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
-		log.Printf("Claude ClassifyTransaction unmarshal failed: err=%v stopReason=%s responseLen=%d preview=%s",
-			err, msg.StopReason, len(cleaned), truncateForLog(cleaned, 500))
+		log.Printf("Claude ClassifyTransaction unmarshal failed: err=%s stopReason=%s responseLen=%d",
+			jsonErrClass(err), msg.StopReason, len(cleaned))
 		return nil, fmt.Errorf("AI-suggestie kon niet worden verwerkt. Probeer het opnieuw.")
 	}
 

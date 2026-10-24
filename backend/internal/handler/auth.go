@@ -282,11 +282,11 @@ func logoutEBoekhouden(token string) bool {
 		return false
 	}
 	if err := client.Logout(); err != nil {
-		log.Printf("Disconnect: e-boekhouden logout request failed: %T", err)
+		log.Printf("Disconnect: e-boekhouden logout request failed: %s", errClass(err))
 	}
 	valid, err := client.CheckAuth()
 	if err != nil {
-		log.Printf("Disconnect: e-boekhouden auth check failed: %T", err)
+		log.Printf("Disconnect: e-boekhouden auth check failed: %s", errClass(err))
 		return false
 	}
 	return !valid

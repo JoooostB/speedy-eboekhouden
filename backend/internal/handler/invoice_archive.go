@@ -274,7 +274,7 @@ func (h *InvoiceHandler) writeArchiveSourceError(c *gin.Context, sess *session.S
 	case HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err):
 		// Response written: the frontend shows the reconnect prompt.
 	default:
-		log.Printf("Submit: archive source check failed: %v", err)
+		log.Printf("Submit: archive source check failed: %s", errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Document controleren in e-Boekhouden mislukt"})
 	}
 }
@@ -336,7 +336,7 @@ func (h *InvoiceHandler) stageArchiveFile(client *eboekhouden.Client, src archiv
 	if folderID == 0 && h.r2 != nil {
 		id, err := h.findOrCreateArchiveFolder(client, datum)
 		if err != nil {
-			log.Printf("Archive folder error: %v", err)
+			log.Printf("Archive folder error: %s", errClass(err))
 		} else {
 			folderID = id
 		}
@@ -364,7 +364,7 @@ func uploadAndResolveArchiveFile(client *eboekhouden.Client, data []byte, folder
 	}
 	existing, err := client.ListArchiveFiles(folderID)
 	if err != nil {
-		log.Printf("Archive file list error before upload: %v", err)
+		log.Printf("Archive file list error before upload: %s", errClass(err))
 		return 0, ""
 	}
 	finalName := uniqueName(name, fileNameSet(existing))
@@ -375,12 +375,12 @@ func uploadAndResolveArchiveFile(client *eboekhouden.Client, data []byte, folder
 		"folderId":  folderID,
 	})
 	if _, err := client.UploadArchiveFile(payload); err != nil {
-		log.Printf("Archive upload error: %v", err)
+		log.Printf("Archive upload error: %s", errClass(err))
 		return 0, ""
 	}
 	files, err := client.ListArchiveFiles(folderID)
 	if err != nil {
-		log.Printf("Archive file list error after upload: %v", err)
+		log.Printf("Archive file list error after upload: %s", errClass(err))
 		return 0, ""
 	}
 	for _, f := range files {
@@ -405,7 +405,7 @@ func linkArchiveFile(client *eboekhouden.Client, fileID, mutNr int) bool {
 		"koppelType": "MUT",
 	})
 	if _, err := client.LinkFileToMutation(payload); err != nil {
-		log.Printf("File link error for file %d, mutNr %d: %v", fileID, mutNr, err)
+		log.Printf("File link error for file %d, mutNr %d: %s", fileID, mutNr, errClass(err))
 		return false
 	}
 	return true
@@ -439,7 +439,7 @@ func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhoude
 	if target == 0 {
 		id, err := h.findOrCreateArchiveFolder(client, datum)
 		if err != nil {
-			log.Printf("Submit: archive folder lookup failed for file %d: %v", src.fileID, err)
+			log.Printf("Submit: archive folder lookup failed for file %d: %s", src.fileID, errClass(err))
 			arch.warning = "Doelmap aanmaken mislukt, het bestand staat nog in de mailmap: " + err.Error()
 			return arch
 		}
@@ -447,7 +447,7 @@ func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhoude
 		// Fresh listing: the lookup may have created folders. Only the
 		// breadcrumb and the descendant check depend on it.
 		if folders, err = listArchiveFolders(client); err != nil {
-			log.Printf("Submit: folder listing failed for file %d: %v", src.fileID, err)
+			log.Printf("Submit: folder listing failed for file %d: %s", src.fileID, errClass(err))
 			folders = nil
 		}
 	}
@@ -463,7 +463,7 @@ func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhoude
 	}
 	if err != nil {
 		// Error class only: upstream rename/move messages may echo the file name.
-		log.Printf("Submit: archiving file %d failed: %T", src.fileID, err)
+		log.Printf("Submit: archiving file %d failed: %s", src.fileID, errClass(err))
 		arch.warning = archiveErrorMessage(err)
 		return arch
 	}

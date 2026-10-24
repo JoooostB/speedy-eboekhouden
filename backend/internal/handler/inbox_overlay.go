@@ -477,12 +477,12 @@ func fetchOpenPosts(client *eboekhouden.Client) (openPosts, error) {
 			if errors.Is(err, eboekhouden.ErrSessionExpired) {
 				return openPosts{}, err
 			}
-			log.Printf("Inbox: open post grid %s fetch failed: %T", side.soort, err)
+			log.Printf("Inbox: open post grid %s fetch failed: %s", side.soort, errClass(err))
 			continue
 		}
 		posts, err := eboekhouden.ParseOpenPostGrid(raw)
 		if err != nil {
-			log.Printf("Inbox: open post grid %s parse failed: %v", side.soort, err)
+			log.Printf("Inbox: open post grid %s parse failed: %s", side.soort, errClass(err))
 			continue
 		}
 		*side.dst = posts
@@ -502,7 +502,7 @@ func mailDocumentMatches(ctx context.Context, rdb *redis.Client, client *eboekho
 			return nil, err
 		}
 		if !errors.Is(err, errMailFolderNotConfigured) {
-			log.Printf("Inbox: mail folder listing failed, no document annotations: %T", err)
+			log.Printf("Inbox: mail folder listing failed, no document annotations: %s", errClass(err))
 		}
 		return nil, nil
 	}

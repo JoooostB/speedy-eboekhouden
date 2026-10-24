@@ -31,7 +31,7 @@ func (c *Client) GetProjects() (json.RawMessage, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("projects request returned %d: %s", resp.StatusCode, string(body))
+		return nil, newStatusError("/v1/api/project/selectlist", resp.StatusCode, len(body))
 	}
 
 	return json.RawMessage(body), nil

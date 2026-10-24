@@ -171,7 +171,7 @@ func (c *Client) SubmitHourEntry(entry HourEntry) error {
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("hour submission returned %d: %s", resp.StatusCode, string(body))
+		return newStatusError("/v1/api/uur", resp.StatusCode, len(body))
 	}
 
 	return nil

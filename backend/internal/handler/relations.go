@@ -112,12 +112,13 @@ func CreateRelation(c *gin.Context) {
 		return
 	}
 
-	log.Printf("CreateRelation: payload=%s", truncateForLog(string(body), 500))
+	// Size only: the payload is the relation (name, address, IBAN).
+	log.Printf("CreateRelation: payload %d bytes", len(body))
 
 	raw, err := client.CreateRelation(json.RawMessage(body))
 	if err != nil {
 		msg := err.Error()
-		log.Printf("CreateRelation upstream error: %v", err)
+		log.Printf("CreateRelation upstream error: %s", errClass(err))
 		// Errors prefixed "e-Boekhouden: " come from our parseErrorEnvelope
 		// detection — these are application-level validation errors from
 		// the upstream API, not gateway failures. Surfacing them as 400
@@ -133,14 +134,4 @@ func CreateRelation(c *gin.Context) {
 
 	log.Printf("CreateRelation: success")
 	c.Data(http.StatusOK, "application/json", raw)
-}
-
-// truncateForLog clips s to maxLen characters with an ellipsis suffix.
-// Used for log lines that include user payloads so they stay grep-able
-// without exploding when someone pastes a huge body.
-func truncateForLog(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "...(truncated)"
 }

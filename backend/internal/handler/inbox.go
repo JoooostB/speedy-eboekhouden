@@ -263,7 +263,7 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 	if len(lines) > 0 {
 		results, err = h.claude.ClassifyBatch(ctx, apiKey, entityType, lines)
 		if err != nil {
-			log.Printf("Claude API error for user %s: %v", sess.UserID, err)
+			log.Printf("Claude API error for user %s: %s", sess.UserID, errClass(err))
 			c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
 			return nil, nil, false
 		}
@@ -474,7 +474,7 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 	// Read invoice with Claude (no account list in inbox context — uses defaults)
 	invoice, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, "application/pdf", pdfBase64, nil)
 	if err != nil {
-		log.Printf("Claude API error for user %s: %v", sess.UserID, err)
+		log.Printf("Claude API error for user %s: %s", sess.UserID, errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
 		return
 	}
@@ -617,7 +617,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 			// Surface the real error message — the client now extracts the
 			// e-Boekhouden message from JSON error envelopes, so this is
 			// human-readable instead of just "Boeking mislukt".
-			log.Printf("CreateMutatie error for item %d: %v", item.ID, err)
+			log.Printf("CreateMutatie error for item %d: %s", item.ID, errClass(err))
 			results = append(results, result{ID: item.ID, Status: "error", Error: err.Error()})
 			continue
 		}
@@ -625,7 +625,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 			MutNr int `json:"mutNr"`
 		}
 		if jsonErr := json.Unmarshal(mutResp, &resp); jsonErr != nil {
-			log.Printf("CreateMutatie response unmarshal error for item %d: %v body=%s", item.ID, jsonErr, string(mutResp))
+			log.Printf("CreateMutatie response unmarshal error for item %d: %v (%d bytes)", item.ID, jsonErr, len(mutResp))
 			results = append(results, result{ID: item.ID, Status: "error", Error: "Onverwacht antwoord van e-Boekhouden"})
 			continue
 		}
@@ -633,7 +633,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		// a successful mutation always carries a non-zero mutNr. Anything
 		// else means nothing was actually booked.
 		if resp.MutNr == 0 {
-			log.Printf("CreateMutatie returned mutNr=0 for item %d, body=%s", item.ID, string(mutResp))
+			log.Printf("CreateMutatie returned mutNr=0 for item %d (%d bytes)", item.ID, len(mutResp))
 			results = append(results, result{ID: item.ID, Status: "error", Error: "Boeking niet aangemaakt — controleer de gegevens"})
 			continue
 		}
@@ -652,7 +652,8 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 					sample := truncate(meta.omschrijving, 200)
 					if upsertErr := h.db.UpsertLearned(c.Request.Context(), sess.UserID, signal,
 						item.Grootboekcode, item.BTWCode, soortName[item.Soort], sample); upsertErr != nil {
-						log.Printf("UpsertLearned error for user %s signal %s: %v", sess.UserID, signal, upsertErr)
+						// The signal is built from the bank description and IBAN; log the user only.
+						log.Printf("UpsertLearned error for user %s: %v", sess.UserID, upsertErr)
 					}
 				}
 			}

@@ -31,7 +31,7 @@ func (c *Client) GetEmployees() (json.RawMessage, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("employees request returned %d: %s", resp.StatusCode, string(body))
+		return nil, newStatusError("/v1/api/user/selectlist", resp.StatusCode, len(body))
 	}
 
 	return json.RawMessage(body), nil

@@ -176,16 +176,10 @@ func (s *Service) ClassifyBatch(ctx context.Context, apiKey, entityType string, 
 	var results []BatchClassifyResult
 	cleaned := cleanJSON(text)
 	if err := json.Unmarshal([]byte(cleaned), &results); err != nil {
-		// Capture the actual unmarshal error AND a sample of the response so
-		// future failures are debuggable. Without this we're flying blind:
-		// the prior code dropped both pieces of information.
-		preview := cleaned
-		const max = 500
-		if len(preview) > max {
-			preview = preview[:max] + "...(truncated)"
-		}
-		log.Printf("Claude batch classify unmarshal failed: err=%v stopReason=%s lines=%d responseLen=%d preview=%s",
-			err, msg.StopReason, len(lines), len(cleaned), preview)
+		// Error class and sizes only: the response is built from the user's
+		// bank lines and is never logged, not even as a preview.
+		log.Printf("Claude batch classify unmarshal failed: err=%s stopReason=%s lines=%d responseLen=%d",
+			jsonErrClass(err), msg.StopReason, len(lines), len(cleaned))
 		return nil, fmt.Errorf("AI-classificatie kon niet worden verwerkt")
 	}
 

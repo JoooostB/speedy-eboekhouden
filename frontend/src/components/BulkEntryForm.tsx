@@ -26,7 +26,7 @@ import { ActivitySelector } from "./ActivitySelector";
 import { HoursInput } from "./HoursInput";
 import { MonthCalendar } from "./MonthCalendar";
 import { SubmitResults } from "./SubmitResults";
-import { track } from "../analytics";
+import { errorClass, track } from "../analytics";
 
 export function BulkEntryForm() {
   const { employees, loading: empLoading } = useEmployees();
@@ -130,7 +130,7 @@ export function BulkEntryForm() {
         days: String(selectedDates.size),
       });
     } catch (err) {
-      track("Hours Submit Error", { reason: err instanceof Error ? err.message : "unknown" });
+      track("Hours Submit Error", { reason: errorClass(err) });
       setError(err instanceof Error ? err.message : "Submission failed");
     } finally {
       setSubmitting(false);

@@ -267,7 +267,7 @@ func (h *InvoiceHandler) writeDocumentsError(c *gin.Context, sess *session.Sessi
 	case errors.Is(err, errDocumentNotInMailFolder):
 		c.JSON(http.StatusNotFound, gin.H{"error": "Document niet gevonden in de mailmap"})
 	default:
-		log.Printf("Documents: e-boekhouden error: %v", err)
+		log.Printf("Documents: e-boekhouden error: %s", errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 	}
 }
@@ -464,7 +464,7 @@ func buildDocumentList(ctx context.Context, rdb *redis.Client, client *eboekhoud
 			return nil, 0, err
 		}
 		if err != nil {
-			log.Printf("Documents: import grid fetch failed, listing without matches: %v", err)
+			log.Printf("Documents: import grid fetch failed, listing without matches: %s", errClass(err))
 		} else {
 			for id, inv := range invoices {
 				if bankLineMatchable(inv) {
@@ -621,7 +621,7 @@ func (h *InvoiceHandler) AnalyzeDocument(c *gin.Context) {
 		if HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err) {
 			return
 		}
-		log.Printf("Documents: download failed for file %d: %v", id, err)
+		log.Printf("Documents: download failed for file %d: %s", id, errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Downloaden uit e-Boekhouden mislukt"})
 		return
 	}
@@ -711,7 +711,7 @@ func (h *InvoiceHandler) DocumentContent(c *gin.Context) {
 		if HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err) {
 			return
 		}
-		log.Printf("Documents: download failed for file %d: %v", id, err)
+		log.Printf("Documents: download failed for file %d: %s", id, errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Downloaden uit e-Boekhouden mislukt"})
 		return
 	}
@@ -964,7 +964,7 @@ func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 					if HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err) {
 						return
 					}
-					log.Printf("Documents: archive folder lookup failed for file %d: %v", id, err)
+					log.Printf("Documents: archive folder lookup failed for file %d: %s", id, errClass(err))
 					failed = append(failed, failedItem{ID: id, Error: "Doelmap aanmaken mislukt"})
 					continue
 				}
@@ -991,7 +991,7 @@ func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 				return
 			}
 			// Error class only: upstream rename/move messages may echo the file name.
-			log.Printf("Documents: archiving file %d failed: %T", id, err)
+			log.Printf("Documents: archiving file %d failed: %s", id, errClass(err))
 			failed = append(failed, failedItem{ID: id, Error: archiveErrorMessage(err)})
 			continue
 		}
@@ -1118,7 +1118,7 @@ func (h *InvoiceHandler) GetOpenPosts(c *gin.Context) {
 	}
 	posts, err := eboekhouden.ParseOpenPostGrid(raw)
 	if err != nil {
-		log.Printf("Documents: open post grid parse error: %v", err)
+		log.Printf("Documents: open post grid parse error: %s", errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden"})
 		return
 	}

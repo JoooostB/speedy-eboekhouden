@@ -164,8 +164,8 @@ func (s *WebAuthnService) FinishRegistration(ctx context.Context, challengeID st
 		UserPresent:    credential.Flags.UserPresent,
 		UserVerified:   credential.Flags.UserVerified,
 	}
-	log.Printf("Storing new credential for %s: id=%s (len=%d) BE=%t BS=%t",
-		entry.Email, hex.EncodeToString(credential.ID), len(credential.ID),
+	log.Printf("Storing new credential for user %s: id=%s (len=%d) BE=%t BS=%t",
+		dbUser.ID, hex.EncodeToString(credential.ID), len(credential.ID),
 		credential.Flags.BackupEligible, credential.Flags.BackupState)
 	if err := s.db.StoreCredential(ctx, dbCred); err != nil {
 		return nil, fmt.Errorf("storing credential: %w", err)
