@@ -153,6 +153,8 @@ export interface ClassifyResult {
   confidence: number;
 }
 
+export type InvoiceDocumentType = "factuur" | "bonnetje" | "creditnota" | "overig";
+
 export interface InvoiceData {
   leverancier: string;
   factuurnummer: string;
@@ -165,6 +167,13 @@ export interface InvoiceData {
   grootboekcode: string;
   btwCode: string;
   isReverseCharge: boolean;
+  /** What Claude decided the document is: "factuur", "bonnetje",
+   *  "creditnota" or "overig" (not a purchase document at all). Empty on
+   *  analyses cached before this field existed. */
+  documentType?: InvoiceDocumentType | "";
+  /** Short Dutch reason for documentType, mainly filled for "overig"
+   *  ("Algemene voorwaarden", "Logo/handtekening"). */
+  documentTypeReason?: string;
   /** True for bonnetjes (restaurant, supermarkt, tankstation) — book as
    *  "Geld uitgegeven" without a leverancier relation. */
   isReceipt: boolean;
@@ -226,15 +235,120 @@ export interface InvoiceAnalyzeResponse {
    *  match is fuzzy via approximate FX conversion — currencyConverted is
    *  true in that case, with invoiceCurrency / invoiceAmount carrying the
    *  original (non-EUR) values so the UI can show "32.80 CHF ≈ €34.50". */
-  matchedBankLine: {
-    id: number;
-    datum: string;
-    bedrag: number;
-    omschrijving: string;
-    currencyConverted?: boolean;
-    invoiceCurrency?: string;
-    invoiceAmount?: number;
-  } | null;
+  matchedBankLine: MatchedBankLine | null;
+  /** All unprocessed bank lines that could be the payment, best first.
+   *  matchedBankLine is the first of these (or null when there is none). */
+  bankLineCandidates?: BankLineCandidate[];
+}
+
+/** An unprocessed bank line proposed as the payment of an invoice. */
+export interface MatchedBankLine {
+  id: number;
+  datum: string;
+  bedrag: number;
+  omschrijving: string;
+  currencyConverted?: boolean;
+  invoiceCurrency?: string;
+  invoiceAmount?: number;
+}
+
+/** A ranked bank-line match; score orders the candidates (higher is better). */
+export interface BankLineCandidate extends MatchedBankLine {
+  score: number;
+}
+
+// Mail & herken documents (the administration's mail folder in the archive)
+
+/** Where a mail-folder document stands, in the backend's priority order.
+ *  - linked: already linked to a mutation in e-boekhouden
+ *  - ignored: hidden by the user in Speedy
+ *  - unsupported: an extension the analyser cannot read (XML/UBL, …)
+ *  - junk: a tiny unanalysed image (logo, signature, tracking pixel)
+ *  - duplicate: the same bytes were booked before
+ *  - not_invoice: analysed as "overig"
+ *  - matched: analysed and assigned to a bank line
+ *  - receipt_waiting: a bonnetje without a bank line yet
+ *  - unmatched: analysed, no bank line
+ *  - new: not analysed */
+export type MailDocumentStatus =
+  | "linked"
+  | "ignored"
+  | "unsupported"
+  | "junk"
+  | "duplicate"
+  | "not_invoice"
+  | "matched"
+  | "receipt_waiting"
+  | "unmatched"
+  | "new";
+
+/** Marker of an earlier booking of the same file bytes. */
+export interface InvoiceSubmittedMarker {
+  mutNr: number;
+  paymentMutNr?: number;
+  leverancier?: string;
+  factuur?: string;
+  bedragIncl?: number;
+  submittedAt: string;
+}
+
+/** One file in the mail folder, as GET /documents lists it. The analysis
+ *  fields are present once the document has been analysed. */
+export interface MailDocument {
+  id: number;
+  /** File name in e-boekhouden. */
+  naam: string;
+  /** Received timestamp as e-boekhouden sends it ("2026-10-24T15:43:35.67"). */
+  datum: string;
+  size: number;
+  /** Media type implied by the extension; "" when unsupported. */
+  mediaType: string;
+  koppelCount: number;
+  status: MailDocumentStatus;
+  /** Readable title: the file name before analysis, "Leverancier · datum ·
+   *  bedrag" after. */
+  title: string;
+  subtitle: string;
+  ignored: boolean;
+  documentType?: InvoiceDocumentType | "";
+  analyzedAt?: string;
+  /** The cached analyze response with the current bank-line assignment. */
+  analysis?: InvoiceAnalyzeResponse;
+  /** The bank line assigned to this document by the global assignment. */
+  match?: MatchedBankLine;
+  /** The document's own ranked candidate lines. */
+  candidates?: BankLineCandidate[];
+  alreadySubmitted?: InvoiceSubmittedMarker;
+}
+
+export interface MailFolderInfo {
+  id: number;
+  name: string;
+}
+
+export interface MailDocumentsResponse {
+  configured: boolean;
+  /** "missing" when a mail folder is configured but no longer exists. */
+  reason?: "missing";
+  folder?: MailFolderInfo;
+  documents?: MailDocument[];
+  ignoredCount?: number;
+}
+
+/** Response of POST /documents/:id/analyze: the analyze response plus the
+ *  list fields of the document. */
+export interface MailDocumentAnalyzeResponse extends InvoiceAnalyzeResponse {
+  archiveFileId: number;
+  title: string;
+  subtitle: string;
+  status: MailDocumentStatus;
+  analyzedAt: string;
+}
+
+/** Response of POST /documents/archive. */
+export interface ArchiveDocumentsResponse {
+  moved: Array<{ id: number; name: string; targetFolderId: number }>;
+  failed: Array<{ id: number; error: string }>;
 }
 
 /** InvoiceAnalyzeResponse plus client-side enrichments added by the inbox

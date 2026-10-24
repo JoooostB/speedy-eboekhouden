@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Autocomplete, Box, TextField, Typography } from "@mui/material";
-import { useArchiveFolders, type ArchiveFolderWithPath } from "../../hooks/useArchiveFolders";
+import { excludeFolderTree, useArchiveFolders, type ArchiveFolderWithPath } from "../../hooks/useArchiveFolders";
 import { CreateArchiveFolderDialog } from "./CreateArchiveFolderDialog";
 
 interface Props {
@@ -10,6 +10,12 @@ interface Props {
   disabled?: boolean;
   /** Helper text under the input; useful for explaining the opt-in nature. */
   helperText?: string;
+  /** Folders that may not be chosen, together with everything nested under
+   *  them (the mail folder, when moving a document out of it). They are
+   *  left out of the options and of the parent choice for a new folder. */
+  excludeFolderIds?: readonly number[];
+  /** Automatically focus the input when the picker mounts. */
+  autoFocus?: boolean;
 }
 
 // Sentinel value used as a special "create new" option in the autocomplete
@@ -46,8 +52,14 @@ export function ArchiveFolderPicker({
   label = "Archiefmap",
   disabled,
   helperText,
+  excludeFolderIds,
+  autoFocus,
 }: Props) {
-  const { folders, loading, error, refetch } = useArchiveFolders();
+  const { folders: allFolders, loading, error, refetch } = useArchiveFolders();
+  const folders = useMemo(
+    () => (excludeFolderIds && excludeFolderIds.length > 0 ? excludeFolderTree(allFolders, excludeFolderIds) : allFolders),
+    [allFolders, excludeFolderIds],
+  );
   const [createOpen, setCreateOpen] = useState(false);
   const [inputValue, setInputValue] = useState("");
   // Set after a successful create to "claim" the new folder once the
@@ -137,6 +149,7 @@ export function ArchiveFolderPicker({
             size="small"
             helperText={error ?? helperText}
             error={!!error}
+            autoFocus={autoFocus}
           />
         )}
         size="small"

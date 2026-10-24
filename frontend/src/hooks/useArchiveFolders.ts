@@ -55,6 +55,29 @@ export function enrichArchiveFolders(folders: ArchiveFolder[]): ArchiveFolderWit
 }
 
 /**
+ * Drops the folders in rootIds together with everything nested under them.
+ * The documents inbox uses this to keep the mail folder (and its subfolders)
+ * out of every "move to" choice: a file moved there would still be in the
+ * inbox. Bounded like buildArchiveFolderPath so a parentId cycle can't loop.
+ */
+export function excludeFolderTree<T extends ArchiveFolder>(folders: T[], rootIds: readonly number[]): T[] {
+  if (rootIds.length === 0) return folders;
+  const roots = new Set(rootIds);
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const isExcluded = (folder: ArchiveFolder): boolean => {
+    const seen = new Set<number>();
+    let current: ArchiveFolder | undefined = folder;
+    while (current && !seen.has(current.id)) {
+      if (roots.has(current.id)) return true;
+      seen.add(current.id);
+      current = current.parentId === 0 ? undefined : byId.get(current.parentId);
+    }
+    return false;
+  };
+  return folders.filter((f) => !isExcluded(f));
+}
+
+/**
  * Lowercase + strip everything that isn't a letter or digit. Used so
  * "Anthropic, PBC" and "anthropic" collapse to the same token "anthropic"
  * for fuzzy supplier→folder matching.

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Box,
   Typography,
@@ -14,16 +14,53 @@ import {
   Checkbox,
   Tooltip,
   Snackbar,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../../api/client";
 import { track } from "../../analytics";
 import { useAuth } from "../../context/AuthContext";
 import { useLedgerAccounts } from "../../hooks/useLedgerAccounts";
 import { useVATCodes } from "../../hooks/useVATCodes";
+import { useMailDocuments } from "../../hooks/useMailDocuments";
+import { inboxSubtitle, pendingDocumentCount } from "../../hooks/mailDocumentsModel";
 import type { InboxClassification, InboxCategory, InboxProcessResult, AnalyzedInvoice } from "../../api/types";
 import { InboxRow } from "./InboxRow";
 import { BatchApproveBar } from "./BatchApproveBar";
 import { InvoiceReviewDialog } from "./InvoiceReviewDialog";
+import { AiStatusAlert, type AiStatus } from "./AiStatusAlert";
+import { DocumentList } from "./DocumentList";
+
+/** The two lists of the inbox; the active one lives in ?lijst=. */
+type InboxTab = "afschriften" | "documenten";
+
+/** Tab label with its count in a small pill. */
+function TabLabel({ text, count }: { text: string; count: number | null }) {
+  return (
+    <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
+      {text}
+      {count !== null && (
+        <Box
+          component="span"
+          sx={{
+            px: 0.75,
+            minWidth: 20,
+            borderRadius: 999,
+            bgcolor: "action.selected",
+            fontSize: "0.75rem",
+            fontWeight: 600,
+            lineHeight: 1.7,
+            textAlign: "center",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {count}
+        </Box>
+      )}
+    </Box>
+  );
+}
 
 /**
  * Category filter tab configuration.
@@ -72,21 +109,26 @@ function getFirstName(name: string | undefined): string {
 }
 
 /**
- * BookkeepingInbox — the core "todo list" for unprocessed bank lines.
+ * BookkeepingInbox — the core "todo list" for unprocessed bank lines and
+ * for the documents in the Mail & herken folder.
  *
  * This replaces the old bank statement list + invoice upload with a unified
  * workflow. AI classifies every unprocessed bank line into one of four
  * categories (auto, review, invoice, manual) and the user works through
- * them toward inbox zero.
+ * them toward inbox zero. The "Documenten" tab (DocumentList) does the same
+ * for the files that arrive by mail.
  *
  * Layout:
- * - Greeting + summary bar with colored category badges
- * - Filter tabs to narrow by category
- * - List of InboxRow components with checkboxes for batch selection
- * - Floating BatchApproveBar when items are selected
+ * - Greeting + subtitle with both counts
+ * - Action buttons; summary bar with colored category badges (Afschriften)
+ * - Tabs "Afschriften {n}" / "Documenten {n}", state in ?lijst=
+ * - Afschriften: filter tabs, InboxRow list with checkboxes, BatchApproveBar
+ * - Documenten: DocumentList
  *
  * Accessibility:
  * - Semantic structure: <main> landmark (provided by Layout), h1 heading, <nav> for tabs
+ * - List tabs name their counts; both panels stay mounted and are hidden
+ *   with the hidden attribute so row state survives switching
  * - Filter tabs use aria-label and aria-controls to link to the list
  * - The list uses <ul> with role="list", each row is <li>
  * - "Select all" checkbox has descriptive aria-label
@@ -98,6 +140,9 @@ export function BookkeepingInbox() {
   const { user, eboekhoudenConnected } = useAuth();
   const { data: ledgerAccounts } = useLedgerAccounts();
   const { data: vatCodes } = useVATCodes();
+  const theme = useTheme();
+  const isXs = useMediaQuery(theme.breakpoints.down("sm"));
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [items, setItems] = useState<InboxClassification[]>([]);
   const [summary, setSummary] = useState<Record<InboxCategory, number>>({ auto: 0, review: 0, invoice: 0, manual: 0 });
@@ -110,11 +155,17 @@ export function BookkeepingInbox() {
   const [analyzingInvoices, setAnalyzingInvoices] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [reviewInvoices, setReviewInvoices] = useState<AnalyzedInvoice[] | null>(null);
-  const [apiKeyStatus, setApiKeyStatus] = useState<{ status: string; message?: string } | null>(null);
+  const [apiKeyStatus, setApiKeyStatus] = useState<AiStatus | null>(null);
   // Snackbar shown after rows are processed so the user gets explicit
   // feedback that something happened — without this, processed rows just
   // vanish silently because we render activeItems.
   const [snackbar, setSnackbar] = useState<{ message: string; severity: "success" | "warning" } | null>(null);
+
+  // The documents inbox loads on the same trigger as the bank lines.
+  const documents = useMailDocuments(eboekhoudenConnected);
+  const { state: docState, ...docActions } = documents;
+  const docsKnown = docState.loaded || docState.error !== null;
+  const docCount = pendingDocumentCount(docState.documents);
 
   const firstName = getFirstName(user?.name);
 
@@ -340,6 +391,36 @@ export function BookkeepingInbox() {
   const allVisibleSelected = activeItems.length > 0 && activeItems.every((i) => selected.has(i.id));
   const someVisibleSelected = activeItems.some((i) => selected.has(i.id));
 
+  // Active list. ?lijst=documenten|afschriften wins; without it Afschriften
+  // is the default, except that once both lists are known and there are no
+  // bank lines but there are documents, Documenten opens. That decision is
+  // made once per visit so a tab never jumps while the user works.
+  const lijstParam = searchParams.get("lijst");
+  const explicitTab: InboxTab | null =
+    lijstParam === "documenten" ? "documenten" : lijstParam === "afschriften" ? "afschriften" : null;
+  const tab: InboxTab = explicitTab ?? "afschriften";
+  const autoTabDecided = useRef(false);
+  useEffect(() => {
+    if (autoTabDecided.current || explicitTab || !eboekhoudenConnected) return;
+    if (loading || classifying || !docsKnown) return;
+    autoTabDecided.current = true;
+    if (totalActive === 0 && docCount > 0) {
+      setSearchParams({ lijst: "documenten" }, { replace: true });
+    }
+  }, [explicitTab, eboekhoudenConnected, loading, classifying, docsKnown, totalActive, docCount, setSearchParams]);
+
+  const setTab = useCallback(
+    (next: InboxTab) => {
+      setSearchParams((prev) => {
+        const params = new URLSearchParams(prev);
+        params.set("lijst", next);
+        return params;
+      });
+      track("Inbox Tab", { tab: next });
+    },
+    [setSearchParams],
+  );
+
   // Not connected state
   if (!eboekhoudenConnected) {
     return (
@@ -391,9 +472,9 @@ export function BookkeepingInbox() {
               : "Inbox wordt geladen..."
             : classifying && items.length > 0
               ? "Vernieuwen…"
-              : totalActive === 0
-                ? "Je inbox is leeg. Alles is verwerkt!"
-                : `${totalActive} ${totalActive === 1 ? "afschriftregel" : "afschriftregels"} om te verwerken`}
+              : !docsKnown && totalActive === 0
+                ? "Inbox wordt geladen..."
+                : inboxSubtitle(totalActive, docsKnown ? docCount : 0)}
         </Typography>
       </Box>
 
@@ -457,10 +538,10 @@ export function BookkeepingInbox() {
           <Button
             variant="outlined"
             size="small"
-            onClick={() => loadInbox(true)}
-            disabled={classifying}
+            onClick={() => (tab === "documenten" ? void docActions.reload() : loadInbox(true))}
+            disabled={tab === "documenten" ? docState.refreshing : classifying}
             startIcon={
-              classifying ? (
+              (tab === "documenten" ? docState.refreshing : classifying) ? (
                 <CircularProgress size={16} color="inherit" aria-hidden="true" />
               ) : (
                 /* Refresh icon */
@@ -486,8 +567,8 @@ export function BookkeepingInbox() {
           </Button>
         </Box>
 
-        {/* Right: summary badges */}
-        {!loading && totalActive > 0 && (
+        {/* Right: summary badges (bank lines only) */}
+        {tab === "afschriften" && !loading && totalActive > 0 && (
           <Box
             sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}
             role="status"
@@ -518,52 +599,71 @@ export function BookkeepingInbox() {
         )}
       </Box>
 
-      {/* AI status banner — context-dependent based on API key status */}
-      {!loading && totalActive > 0 && summary.auto === 0 && summary.review === 0 && summary.invoice === 0 && apiKeyStatus && (
-        <Alert
-          severity={apiKeyStatus.status === "no_credits" ? "warning" : apiKeyStatus.status === "active" ? "info" : "info"}
-          sx={{ mb: 3 }}
-          action={
-            apiKeyStatus.status === "not_configured" ? (
-              <Button color="inherit" size="small" href="/app/instellingen" sx={{ fontWeight: 600 }}>
-                Instellen
-              </Button>
-            ) : apiKeyStatus.status === "no_credits" ? (
-              <Button
-                color="inherit" size="small"
-                href="https://console.anthropic.com/settings/plans"
-                target="_blank" rel="noopener noreferrer"
-                sx={{ fontWeight: 600 }}
-              >
-                Tegoed opwaarderen
-              </Button>
-            ) : undefined
-          }
-        >
-          <AlertTitle sx={{ fontWeight: 600 }}>
-            {apiKeyStatus.status === "not_configured" && "AI-classificatie is niet actief"}
-            {apiKeyStatus.status === "no_credits" && "AI-tegoed is op"}
-            {apiKeyStatus.status === "invalid" && "API-sleutel is ongeldig"}
-            {apiKeyStatus.status === "active" && "AI is beschikbaar — klik op 'Vernieuwen' om te classificeren"}
-            {apiKeyStatus.status === "error" && "AI-status kon niet worden gecontroleerd"}
-          </AlertTitle>
-          {apiKeyStatus.status === "not_configured" && (
-            "Met een Anthropic API-sleutel classificeert Speedy je afschriftregels automatisch. Bankkosten, abonnementen en leveranciersbetalingen worden herkend en met een klik verwerkt."
-          )}
-          {apiKeyStatus.status === "no_credits" && (
-            "Je API-sleutel is geldig, maar je tegoed bij Anthropic is op. Waardeer je tegoed op om AI-classificatie te hervatten."
-          )}
-          {apiKeyStatus.status === "invalid" && (
-            "Controleer je API-sleutel in de instellingen."
-          )}
-        </Alert>
-      )}
+      {/* List tabs: bank lines and mail-folder documents */}
+      <Tabs
+        value={tab}
+        onChange={(_, value: InboxTab) => setTab(value)}
+        variant={isXs ? "fullWidth" : "standard"}
+        aria-label="Inboxlijsten"
+        sx={{
+          mb: 3,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+          minHeight: 44,
+          "& .MuiTabs-indicator": { height: 3, borderRadius: "3px 3px 0 0" },
+          "& .MuiTab-root": {
+            minHeight: 44,
+            textTransform: "none",
+            fontWeight: 500,
+            fontSize: "0.9375rem",
+            "&.Mui-selected": { fontWeight: 600 },
+          },
+        }}
+      >
+        <Tab
+          value="afschriften"
+          id="inbox-tab-afschriften"
+          aria-controls="inbox-panel-afschriften"
+          aria-label={`Afschriften, ${totalActive} om te verwerken`}
+          label={<TabLabel text="Afschriften" count={loading && items.length === 0 ? null : totalActive} />}
+        />
+        <Tab
+          value="documenten"
+          id="inbox-tab-documenten"
+          aria-controls="inbox-panel-documenten"
+          aria-label={docsKnown ? `Documenten, ${docCount} om te verwerken` : "Documenten"}
+          label={<TabLabel text="Documenten" count={docsKnown ? docCount : null} />}
+        />
+      </Tabs>
 
       {/* Invoice analyze error */}
       {analyzeError && (
         <Alert severity="error" sx={{ mb: 3 }} onClose={() => setAnalyzeError(null)}>
           {analyzeError}
         </Alert>
+      )}
+
+      {/* Documenten panel — kept mounted so its state survives a switch */}
+      <Box
+        role="tabpanel"
+        id="inbox-panel-documenten"
+        aria-labelledby="inbox-tab-documenten"
+        hidden={tab !== "documenten"}
+      >
+        <DocumentList state={docState} actions={docActions} aiStatus={apiKeyStatus} />
+      </Box>
+
+      {/* Afschriften panel */}
+      <Box
+        role="tabpanel"
+        id="inbox-panel-afschriften"
+        aria-labelledby="inbox-tab-afschriften"
+        hidden={tab !== "afschriften"}
+      >
+
+      {/* AI status banner — context-dependent based on API key status */}
+      {!loading && totalActive > 0 && summary.auto === 0 && summary.review === 0 && summary.invoice === 0 && apiKeyStatus && (
+        <AiStatusAlert status={apiKeyStatus} variant="bank" sx={{ mb: 3 }} />
       )}
 
       {/* Invoice review dialog — shown after PDFs are analyzed */}
@@ -712,11 +812,28 @@ export function BookkeepingInbox() {
         </>
       )}
 
-      {/* Empty state — inbox zero. Belt-and-suspenders against the race we
-          hit before: NEVER show the celebration while a load or
-          classification is still in flight, otherwise the user sees "all
-          caught up" while Claude is still working through their backlog. */}
-      {!loading && !classifying && totalActive === 0 && (
+      {/* Bank lines done, documents left — point at the other tab instead
+          of celebrating too early. */}
+      {!loading && !classifying && totalActive === 0 && docsKnown && docCount > 0 && (
+        <Paper variant="outlined" sx={{ borderRadius: 2, p: 4, textAlign: "center", mt: 3 }}>
+          <Typography variant="body1" sx={{ fontWeight: 600 }} gutterBottom>
+            Alle afschriftregels zijn verwerkt
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {docCount === 1 ? "Er staat nog 1 document" : `Er staan nog ${docCount} documenten`} in je mailmap.
+          </Typography>
+          <Button variant="outlined" size="small" onClick={() => setTab("documenten")} sx={{ fontWeight: 600 }}>
+            Bekijk documenten
+          </Button>
+        </Paper>
+      )}
+
+      {/* Empty state — inbox zero, only when both lists are empty.
+          Belt-and-suspenders against the race we hit before: NEVER show
+          the celebration while a load or classification is still in
+          flight, otherwise the user sees "all caught up" while Claude is
+          still working through their backlog. */}
+      {!loading && !classifying && totalActive === 0 && docsKnown && docCount === 0 && (
         <Paper
           variant="outlined"
           sx={{
@@ -752,7 +869,7 @@ export function BookkeepingInbox() {
             Inbox zero!
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Alle bankafschriften zijn verwerkt. Kom later terug of klik op Vernieuwen.
+            Alle afschriftregels en documenten zijn verwerkt. Kom later terug of klik op Vernieuwen.
           </Typography>
         </Paper>
       )}
@@ -770,6 +887,9 @@ export function BookkeepingInbox() {
 
       {/* Bottom padding to prevent batch bar from covering last row */}
       {selectedItems.length > 0 && <Box sx={{ height: 80 }} aria-hidden="true" />}
+
+      </Box>
+      {/* End of Afschriften panel */}
 
       {/* Feedback toast — visible long enough to be noticed, dismissible,
           announced to screen readers via the underlying Alert role. */}
