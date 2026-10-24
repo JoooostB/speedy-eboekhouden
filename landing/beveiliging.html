@@ -116,6 +116,7 @@
                         </div>
                     </div>
                     <p>Het resulterende sessie-token van e-boekhouden wordt <strong>versleuteld</strong> (AES-256-GCM) opgeslagen: in je Speedy-sessie in Redis, die na 30 minuten inactiviteit verloopt, en in PostgreSQL, zodat je na een nieuwe passkey-login niet opnieuw met e-boekhouden hoeft te verbinden. Die kopie wordt gewist zodra e-boekhouden de sessie ongeldig verklaart. Je wachtwoord wordt nergens bewaard.</p>
+                    <p>Je kunt de verbinding ook zelf beëindigen met <strong>Verbinding verbreken</strong> (in de app, via het verbindingslabel of Instellingen). Speedy meldt je dan af bij e-boekhouden, wist het token uit Redis en PostgreSQL en verwijdert alle tijdelijk opgeslagen gegevens van die administratie (analyses, suggesties, duplicaatmarkeringen en de negeerlijst). Alleen je geleerde boekingen blijven staan; die verwijder je apart via Instellingen. De app zegt eerlijk of e-boekhouden het afmelden heeft bevestigd.</p>
                     <div class="sec-check">
                         <span class="sec-check-icon">&#10003;</span>
                         <span>Wachtwoord wordt nooit opgeslagen</span>
@@ -127,6 +128,10 @@
                     <div class="sec-check">
                         <span class="sec-check-icon">&#10003;</span>
                         <span>MFA-code wordt nooit opgeslagen</span>
+                    </div>
+                    <div class="sec-check">
+                        <span class="sec-check-icon">&#10003;</span>
+                        <span>Verbinding op elk moment zelf te verbreken, inclusief afmelden bij e-boekhouden en wissen van de tijdelijke gegevens</span>
                     </div>
                 </div>
             </div>
@@ -181,7 +186,8 @@
                             <span>Geen transactiehistorie; van een terugkerende betaling blijft alleen de geleerde boekingsregel hierboven over</span>
                         </div>
                     </div>
-                    <p>Je administratie zelf wordt <em>on-the-fly</em> opgehaald bij e-boekhouden.nl en direct naar je browser gestuurd. Wat Speedy daarnaast tijdelijk bewaart, zijn de uitkomsten van AI-analyses in Redis; zie 'AI-functies &amp; API-sleutel'. Die verlopen vanzelf.</p>
+                    <p>Je administratie zelf wordt <em>on-the-fly</em> opgehaald bij e-boekhouden.nl en direct naar je browser gestuurd. Wat Speedy daarnaast tijdelijk bewaart, zijn de uitkomsten van AI-analyses in Redis; zie 'AI-functies &amp; API-sleutel'. Die verlopen vanzelf en worden direct gewist als je de verbinding verbreekt.</p>
+                    <p>Ook onze serverlogs bevatten geen boekhoudgegevens. Er worden alleen technische id's, statuscodes, lengtes en foutklassen gelogd: geen antwoorden van e-boekhouden of Claude, geen leveranciers, bedragen, omschrijvingen of bestandsnamen.</p>
                 </div>
             </div>
 
@@ -248,9 +254,9 @@
                 <div class="sec-card-body">
                     <p>De AI-functies (factuur- en documentherkenning, boekingsuggesties) gebruiken de Claude API van Anthropic. Hiervoor heb je een eigen API-sleutel nodig. Een document of afschriftregel gaat alleen naar Claude als jij een analyse of classificatie start, nooit automatisch.</p>
                     <p>Je API-sleutel wordt <strong>versleuteld opgeslagen</strong> (AES-256-GCM) en alleen ontsleuteld op het moment dat een AI-aanroep wordt gedaan. De sleutel wordt nooit gelogd, nooit naar derden gestuurd (alleen naar api.anthropic.com), en kan op elk moment worden verwijderd via Instellingen.</p>
-                    <p>Van een analyse bewaart Speedy de <strong>uitkomst</strong> (leverancier, factuurnummer, datum, bedragen en de voorgestelde grootboekrekening) tijdelijk in Redis, zodat een tweede analyse van hetzelfde bestand geen nieuwe AI-aanroep kost: 7 dagen voor een geüpload bestand, 30 dagen voor een document uit je mailmap, 1 uur voor de classificatie van je afschriftregels. Na het boeken blijft 90 dagen een markering staan (leverancier, factuurnummer, bedrag, mutatienummer) waarmee Speedy een dubbele boeking van hetzelfde bestand herkent. Nergens anders wordt een analyse opgeslagen.</p>
+                    <p>Van een analyse bewaart Speedy de <strong>uitkomst</strong> (leverancier, factuurnummer, datum, bedragen en de voorgestelde grootboekrekening) tijdelijk in Redis, zodat een tweede analyse van hetzelfde bestand geen nieuwe AI-aanroep kost: 7 dagen voor een geüpload bestand, 30 dagen voor een document uit je mailmap, 1 uur voor de classificatie van je afschriftregels. Na het boeken blijft 90 dagen een markering staan waarmee Speedy een dubbele boeking van hetzelfde bestand herkent; die bevat alleen de mutatienummers en het tijdstip van boeken, niets over de factuur zelf. Nergens anders wordt een analyse opgeslagen, en alles hiervan wordt gewist zodra je de verbinding met e-boekhouden verbreekt.</p>
                     <p><strong>Documenten uit je mailmap (Mail &amp; herken)</strong> leest Speedy rechtstreeks uit je eigen e-boekhouden-archief. Ze worden niet naar andere opslag gekopieerd: bij een analyse gaat het bestand vanuit het geheugen naar Claude, en na het boeken wordt het in e-boekhouden hernoemd en verplaatst. Negeer je een document, dan bewaart Speedy alleen het bestands-id.</p>
-                    <p><strong>Bestanden die je zelf uploadt</strong> worden, als objectopslag (Cloudflare R2) is geconfigureerd, daar bewaard zodat ze na je controle in je e-boekhouden-archief geplaatst kunnen worden. Speedy verwijdert die kopie niet automatisch.</p>
+                    <p><strong>Bestanden die je zelf uploadt</strong> worden evenmin bewaard. Ze gaan vanuit het geheugen van de server naar Claude en blijven verder in je browser; bij het boeken stuurt je browser het bestand nogmaals mee, zodat het in je e-boekhouden-archief geplaatst kan worden. Speedy schrijft geen documenten naar objectopslag; Cloudflare R2 wordt alleen voor profielfoto's gebruikt.</p>
                 </div>
             </div>
 
@@ -338,6 +344,10 @@
                 <div class="sec-arch-note">
                     <span class="sec-arch-note-icon">&#128274;</span>
                     Sessie verloopt na 30 min inactiviteit
+                </div>
+                <div class="sec-arch-note">
+                    <span class="sec-arch-note-icon">&#128274;</span>
+                    Verbinding verbreken meldt je af bij e-boekhouden en wist token en tijdelijke gegevens
                 </div>
             </div>
         </div>

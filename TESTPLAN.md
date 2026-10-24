@@ -81,6 +81,23 @@ Manual acceptance test plan covering all features. Run through this after `docke
 - [ ] After successful connection: dialog closes, chip updates to "Verbonden"
 - [ ] "Annuleren" closes the dialog without connecting
 
+### 6a. Verbinding verbreken (disconnect)
+
+Live-only: the automated tests cover the handler against a fake e-boekhouden; what e-boekhouden really does with the logout can only be seen with a real account.
+
+- [ ] While connected, the chip "Gekoppeld" and the user menu offer "Verbinding met e-Boekhouden verbreken"; Instellingen shows the section "Verbinding met e-Boekhouden" with the same button
+- [ ] The confirmation dialog opens with focus on "Annuleren" and lists: afmelden bij e-Boekhouden, token verwijderd, tijdelijk opgeslagen analyses/suggesties/duplicaatmarkeringen/negeerlijst verwijderd, geleerde boekingen blijven, opnieuw verbinden kan altijd
+- [ ] Before confirming: analyse at least one document and classify the inbox, so Redis holds `doc:analysis:*`, `inbox:classify:*` and (after a booking) `invoice:submitted:*` keys for your user id
+- [ ] Confirm. `POST /api/v1/eboekhouden/disconnect` answers `{"status":"ok","ebLoggedOut":…,"purgedKeys":n}` with `n` > 0 (devtools). Note the value of `ebLoggedOut` here: ______
+- [ ] Snackbar: "Verbinding verbroken en afgemeld bij e-Boekhouden" when `ebLoggedOut` is true, otherwise "Verbinding in Speedy verbroken. e-Boekhouden laat de sessie zelf verlopen."
+- [ ] The chip reads "Niet gekoppeld", the inbox shows the connect prompt, `GET /api/v1/documents` answers 412
+- [ ] Redis: `docker compose exec redis redis-cli --scan --pattern '*<userId>*'` lists only `session:*` (if any); no `inbox:classify`, `invoice:*` or `doc:*` keys for this user. Other users' keys are untouched
+- [ ] PostgreSQL: `user_settings.eb_token_enc` is NULL for this user
+- [ ] **Live-only:** open secure.e-boekhouden.nl in the browser where you were logged in before the disconnect. Record whether that session is also logged out (expected when e-boekhouden sessions are per account; not when they are per cookie): ______
+- [ ] A Speedy login in another browser (second session of the same user) no longer has a working e-boekhouden connection: the first bookkeeping call gets 412 and the reconnect prompt
+- [ ] Reconnect: the document list loads again and is analysed afresh (no cache hits in the backend log)
+- [ ] Backend log for the whole flow shows only `Disconnect: …` lines with error classes at most; never a token, a name or an e-mail address
+
 ## 7. Bulk Hour Entry (Uren)
 
 - [ ] Navigate to /uren

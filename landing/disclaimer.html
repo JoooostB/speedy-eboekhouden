@@ -109,9 +109,11 @@
                 <ul>
                     <li><strong>Inloggegevens</strong> (e-mailadres en wachtwoord): worden direct doorgestuurd naar e-boekhouden.nl en niet opgeslagen.</li>
                     <li><strong>MFA-codes</strong>: worden direct doorgestuurd naar e-boekhouden.nl en niet opgeslagen.</li>
-                    <li><strong>Sessie-token</strong>: wordt versleuteld (AES-256-GCM) bewaard in Redis en in PostgreSQL, zodat je verbinding met e-boekhouden.nl een nieuwe login overleeft, en wordt gewist zodra e-boekhouden.nl de sessie ongeldig verklaart.</li>
+                    <li><strong>Sessie-token</strong>: wordt versleuteld (AES-256-GCM) bewaard in Redis en in PostgreSQL, zodat je verbinding met e-boekhouden.nl een nieuwe login overleeft, en wordt gewist zodra e-boekhouden.nl de sessie ongeldig verklaart of zodra jij de verbinding verbreekt. Bij het verbreken meldt Speedy je ook af bij e-boekhouden.nl.</li>
                     <li><strong>Je administratie</strong> (medewerkers, projecten, afschriften, mutaties, relaties, archief): wordt on-the-fly opgehaald bij e-boekhouden.nl en direct naar je browser gestuurd, niet opgeslagen.</li>
-                    <li><strong>AI-analyses en geleerde boekingen</strong>: de uitkomst van een analyse die jij start (leverancier, factuurnummer, datum, bedragen) wordt tijdelijk in Redis bewaard, maximaal 90 dagen; de grootboekrekening en BTW-code die je voor terugkerende betalingen kiest, worden per account in PostgreSQL bewaard en zijn via Instellingen te verwijderen.</li>
+                    <li><strong>AI-analyses en geleerde boekingen</strong>: de uitkomst van een analyse die jij start (leverancier, factuurnummer, datum, bedragen) wordt tijdelijk in Redis bewaard, maximaal 30 dagen; de markering waarmee Speedy een dubbele boeking herkent (alleen mutatienummers en tijdstip) maximaal 90 dagen. Al deze tijdelijke gegevens worden gewist zodra je de verbinding met e-boekhouden.nl verbreekt. De grootboekrekening en BTW-code die je voor terugkerende betalingen kiest, worden per account in PostgreSQL bewaard en zijn via Instellingen te verwijderen.</li>
+                    <li><strong>Geüploade bestanden</strong>: worden in het geheugen verwerkt en niet in objectopslag bewaard; alleen een profielfoto die je zelf instelt gaat naar objectopslag.</li>
+                    <li><strong>Logbestanden</strong>: bevatten geen boekhoudgegevens, alleen technische id's, statuscodes en foutklassen.</li>
                 </ul>
                 <p>Speedy e-Boekhouden bewaart accountgegevens, versleutelde sleutels en tokens en geleerde boekingen in een PostgreSQL-database, en sessies en tijdelijke caches in Redis. Zie onze <a href="/beveiliging">beveiligingspagina</a> voor een volledig technisch overzicht.</p>
             </div>
@@ -144,7 +146,7 @@
                 <p>Door gebruik te maken van Speedy e-Boekhouden verklaar je dat je deze disclaimer en voorwaarden hebt gelezen, begrepen en geaccepteerd. Indien je niet akkoord gaat met (een deel van) deze voorwaarden, dien je het gebruik van Speedy e-Boekhouden onmiddellijk te staken.</p>
             </div>
 
-            <p class="sec-legal-date">Laatst bijgewerkt: 1 april 2026</p>
+            <p class="sec-legal-date">Laatst bijgewerkt: 24 oktober 2026</p>
         </div>
     </div>
 </section>

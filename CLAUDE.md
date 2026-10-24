@@ -15,7 +15,7 @@ Five services behind a single nginx entry point, plus two optional external serv
 - **`backend/`** — Go 1.26 + Gin API server. Handles auth, proxies calls to e-boekhouden.nl, integrates the Claude API.
 - **`postgres`** — PostgreSQL 18 (`postgres:18-alpine` in docker-compose and `deploy/base`). Accounts, passkeys, encrypted credentials and tokens, learned classifications. See Security Model for the full list.
 - **`redis`** — Redis (`redis:8-alpine` in docker-compose, `redis:7-alpine` in `deploy/base`). Sessions, rate-limit counters and the AI caches. See "Redis keys".
-- **Cloudflare R2** (optional, `R2_*` env) — avatars and files uploaded through `/invoices/analyze`. Not used for mail-folder documents.
+- **Cloudflare R2** (optional, `R2_*` env) — avatars only. No document is ever written to it (see Security Model).
 - **SMTP** (optional, `SMTP_*` env) — welcome and passkey-recovery e-mails.
 
 ```
@@ -42,7 +42,7 @@ Frontend routes (`App.tsx`): `/` is the bookkeeping inbox (`BookkeepingInbox`, t
 - **Redis for sessions and caches.** Sessions have a 30-minute sliding TTL. AI results are cached per user with TTLs (see "Redis keys"); nothing in Redis is needed for correctness, only for cost and speed.
 - **Encryption.** Anthropic API keys, the e-boekhouden token and the optional SOAP/REST credentials are AES-256-GCM encrypted with the server-side `ENCRYPTION_KEY` before storage.
 - **Claude API integration.** Invoice/document reading uses Claude Sonnet 4.5 (vision/PDF, also JPG and PNG). Bank-line classification uses Claude Haiku 4.5. Users provide their own API key; Claude is only called when the user triggers it (classify, analyse, "Alles analyseren"), never automatically on connect.
-- **One analysis core.** `analyzeBytes` in `handler/invoice.go` serves both `/invoices/analyze` (upload) and `/documents/:id/analyze` (mail folder). The mail-folder path runs with `skipR2: true`: the file already lives in e-boekhouden, so it is never copied to R2 and the response carries no `uploadKey`/`pdfUrl`.
+- **One analysis core.** `analyzeBytes` in `handler/invoice.go` serves both `/invoices/analyze` (upload) and `/documents/:id/analyze` (mail folder). Neither path keeps a copy of the file: an upload stays in the browser and is inlined as `pdfBase64` when booked, a mail-folder document already lives in e-boekhouden. `uploadKey` and `pdfUrl` in the response are always empty and only kept for the shape.
 - **Mail folder by id, never by name.** The "Mail & herken" folder is `menhFolderId` from `GET /v1/api/folder/0/header`. Its name and path are the user's business ("Inbox" for one user, anything for the next).
 - **Raw JSON passthrough.** The backend does not deserialize most e-boekhouden API responses; it passes `json.RawMessage` to the frontend with `c.Data()`. Exceptions: the import grid and the open-post grid (column-indexed, parsed into named rows), the archive file list and folder header (typed in `eboekhouden/archive.go`), and the documents endpoints (built server-side).
 - **Frontend builds in containers only.** There is no local Node.js setup. All `npm install`, `npm run build`, `tsc` and `vitest` runs happen inside Docker. Never run npm locally.
@@ -84,11 +84,11 @@ Frontend routes (`App.tsx`): `/` is the bookkeeping inbox (`BookkeepingInbox`, t
 | `src/hooks/useArchiveFolders.ts` | Folder tree with paths, `findArchiveFolderForSupplier` |
 | `src/utils/runWithConcurrency.ts` | Abortable concurrency helper used by "Alles analyseren" |
 | `src/components/auth/`, `onboarding/`, `settings/`, `shared/` | Passkey login/register/recovery, setup wizard, settings (API key, SOAP/REST, passkeys, "Geleerde boekingen", avatar), pickers (ledger, relation, VAT, archive folder) |
-| `src/components/` | Layout (tabs "Inbox", "Uren"), BulkEntryForm, EBoekhoudenConnectDialog; `Dashboard.tsx` is no longer routed |
+| `src/components/` | Layout (tabs "Inbox", "Uren"; the connection chip connects when disconnected and opens the disconnect confirmation when connected), BulkEntryForm, EBoekhoudenConnectDialog, EBoekhoudenDisconnectDialog (texts and outcome rule in `ebDisconnect.ts`, tested); `Dashboard.tsx` is no longer routed |
 | `src/hooks/` | Data fetching hooks (employees, projects, activities, ledger accounts, VAT codes) |
 | `src/context/` | AuthContext (two-level: Speedy account + e-boekhouden connection) |
-| `src/api/` | API client (`client.ts`, incl. `requestBlob` for document content) + TypeScript types (`MailDocument`, `MailDocumentStatus`, `OpenPostGridItem`, `SubmitArchiveOutcome`, …) |
-| `src/analytics.ts` | `track()` wrapper around Plausible (counts and flags only, never bookkeeping data) |
+| `src/api/` | API client (`client.ts`, incl. `requestBlob` for document content) + TypeScript types (`MailDocument`, `MailDocumentStatus`, `OpenPostGridItem`, `SubmitArchiveOutcome`, `EBDisconnectResponse`, …) |
+| `src/analytics.ts` | `track()` wrapper around Plausible: `sanitizeTrackProps` lets only enum-like tokens, counts and flags through, `errorClass()` turns an error into a token; `analytics.test.ts` scans every call site for `.message`, names, amounts and descriptions |
 
 Unit tests (vitest) sit next to the modules: `*.test.ts` in `components/inbox/`, `hooks/` and `utils/`.
 
@@ -120,7 +120,7 @@ Statuses in priority order (`documentStatus` in `documents_status.go`): `linked`
 
 Both responses always carry `archived, linked, renamed, moved` and, when set, `archiveName, targetFolderId, targetFolderPath, archiveWarning`. A failed rename/move never fails the booking: the mutation stands and `archiveWarning` says what state the file is in (rename failed → untouched in the mail folder; move failed → renamed, still in the mail folder, linked, so "Alles opruimen" can finish it).
 
-`GET /inbox/summary` includes `documentsCount` (mail-folder files that are not ignored, not linked and readable). `POST /inbox/classify` returns the cached classification base with two overlays recomputed on every response, cache hit or not: bank lines paying an open post become factuurbetaling suggestions (`openPostMatch`, `relatieId`, `factuurnummer`), and lines that are the assigned payment of an analysed document carry `documentMatch {fileId, title}`.
+`GET /inbox/summary` includes `documentsCount`: the mail-folder files whose status is not `linked`, `ignored`, `unsupported` or `junk` (`countOpenDocuments`, the same rules as the Documents tab). `POST /inbox/classify` returns the cached classification base with two overlays recomputed on every response, cache hit or not: bank lines paying an open post become factuurbetaling suggestions (`openPostMatch`, `relatieId`, `factuurnummer`), and lines that are the assigned payment of an analysed document carry `documentMatch {fileId, title}`.
 
 ## e-Boekhouden Endpoints Learned for This Feature
 
@@ -176,12 +176,14 @@ Rules: only `[A-Za-z0-9._-]`; `_` is **exclusively** the field separator, so `sp
 | `ratelimit:{register\|login\|ebauth}:{ip}` | 15 min / 5 min / 5 min | request counters |
 | `inbox:classify:{userID}` | 1 h | cached bank-line classification base: per line id, date, amount, description, suggested ledger/VAT code, soort, confidence (overlays are never cached) |
 | `invoice:analyze:v{v}:{userID}:{sha256(file)}:{accountsHash}` | 7 days | `InvoiceData` of an analysed upload (supplier, number, dates, amounts, suggestion) |
-| `invoice:submitted:{userID}:{sha256(file)}` | 90 days | duplicate marker: `mutNr, paymentMutNr, leverancier, factuur, bedragIncl, submittedAt`. Deliberately not versioned. |
+| `invoice:submitted:{userID}:{sha256(file)}` | 90 days | duplicate marker: `mutNr, paymentMutNr, submittedAt` and nothing else (entries written before Step 10 carry more fields; they are ignored and never echoed). Deliberately not versioned. |
 | `doc:analysis:v{v}:{userID}:{fileID}` | 30 days | `{pdfHash, analyzedAt, response}` — the full analyze response of a mail-folder document |
 | `doc:analyzing:{userID}:{fileID}` | 120 s | lock while an analysis runs (released on return with a fresh context) |
 | `doc:ignored:{userID}` | none | set of ignored file ids |
 
 `forgetDocument` drops `doc:analysis` (current version only) and the ignore flag when a file leaves the mail folder (moved or deleted). WebAuthn challenges and pending MFA state live in process memory, not Redis.
+
+`userCachePatterns` in `handler/userdata.go` lists the SCAN pattern of every family above except `session:*` and `ratelimit:*`; `POST /eboekhouden/disconnect` purges them with SCAN (never KEYS). `TestUserCachePatternsCoverKeyBuilders` fails as soon as a key builder is added without a pattern, and `TestUserCachePatternsAreScopedToTheUser` guards against a pattern that would reach another user's keys.
 
 ## Common Pitfalls
 
@@ -196,9 +198,11 @@ Rules: only `[A-Za-z0-9._-]`; `_` is **exclusively** the field separator, so `sp
 9. **Factuurbetaling regels (soort 3/4) have no `tegenRekening`, `inEx` or BTW split.** e-boekhouden finds the open invoice through `relatieId` + `factuur` and silently refuses the payment when those fields are present. `buildFactuurbetalingRegel` is the one place that builds this shape.
 10. **Credit notes carry positive amounts.** `BedragInclBTW` is positive for every document type; `documentType: "creditnota"` carries the sign. The matcher looks for incoming bank lines for a creditnota and outgoing for factuur/bonnetje; `SubmitFull` only uses `documentType` for the archive name.
 11. **The analysis cache keys include `invoicePromptVersion`.** Bump it when the invoice prompt's output schema changes; `invoice:submitted` is intentionally unversioned so duplicates booked before a bump are still recognised.
-12. **Mail-folder documents are never uploaded to R2.** `analyzeOptions{skipR2: true}`: R2 never deletes objects and a presigned URL must not end up in a 30-day cache. Only `/invoices/analyze` (uploads) and avatars touch R2.
+12. **Documents are never written to R2.** Only avatars go there. The analyser keeps no copy of an upload (the review dialog always inlines it as `pdfBase64` when booking) and mail-folder documents stay in e-boekhouden. `uploadKey` on submit is a legacy field for a session that analysed before Step 10; do not reintroduce an upload at analyse time.
 13. **Status and overlays are recomputed on every request.** Only the classification base and the document analyses are cached; the open-post overlay, the document↔bank-line assignment and the statuses are derived fresh. Do not cache `matchedBankLine`/`documentMatch`.
-14. **Log ids and error classes, not content.** Never log file names, supplier names, amounts or descriptions; upstream rename/move errors may echo the file name, so log `%T` there.
+14. **Log ids and error classes, not content.** The policy lives in `handler/logging.go`: log e-boekhouden and Claude errors through `errClass(err)` (session-expired sentinel, or `APIError` path/status/code/length), never with `%v`; never log response bodies, Claude output, file names, supplier names, amounts, descriptions or e-mail addresses. `eboekhouden.APIError` never embeds a body, and the error of a request whose path carries user input (relation search, KvK) is not logged at all.
+15. **Every new per-user Redis key needs a purge pattern.** Add it to `userCachePatterns` next to the key builder, or `TestUserCachePatternsCoverKeyBuilders` fails. `Disconnect` must keep clearing the token even when the logout or the purge fails.
+16. **Analytics props are enum-like tokens, counts and flags.** `track()` drops anything else at runtime and `analytics.test.ts` scans the call sites; use `errorClass(err)`, never `err.message`.
 
 ## Running Locally
 
@@ -282,17 +286,19 @@ A change is done when all of this is green:
 
 ## Security Model
 
-This is critical context: the security page (`landing/beveiliging.html`) and the disclaimer make specific claims that must stay truthful. Verify against the migrations and handlers before changing either.
+This is critical context: the security page (`landing/beveiliging.html`), the disclaimer and the README's Security section make specific claims that must stay truthful. Verify against the migrations and handlers before changing any of them.
 
 - **e-Boekhouden credentials are never stored.** Password and MFA code are forwarded to e-boekhouden.nl and discarded within the request handler.
-- **The e-boekhouden auth token is stored, encrypted.** AES-256-GCM in the Redis session (30-minute sliding TTL) and in PostgreSQL `user_settings.eb_token_enc`, from where `LoginFinish` restores it at the next passkey login. It is cleared by `POST /eboekhouden/disconnect`, by a failed keepalive, and whenever a handler sees `ErrSessionExpired`. Note: the frontend currently has no button that calls `/eboekhouden/disconnect`.
+- **The e-boekhouden auth token is stored, encrypted.** AES-256-GCM in the Redis session (30-minute sliding TTL) and in PostgreSQL `user_settings.eb_token_enc`, from where `LoginFinish` restores it at the next passkey login. It is cleared by a failed keepalive, whenever a handler sees `ErrSessionExpired`, and by "Verbinding verbreken".
+- **Disconnect flow** (`POST /eboekhouden/disconnect`, `EBoekhoudenAuthHandler.Disconnect`): (1) best-effort `Logout()` (GET `/bh/uitloggen.asp` on the login host with the token cookie) followed by `CheckAuth()` (POST `/v1/api/auth` without body), whose `valid:false` decides `ebLoggedOut`; (2) clear the token from the session and PostgreSQL and drop a pending MFA login; (3) purge the user's caches with SCAN over `userCachePatterns`, reported as `purgedKeys`. Steps 1 and 3 never prevent step 2. The frontend (connection chip, user menu, Instellingen) shows a confirmation dialog that lists exactly this, and the snackbar only says "afgemeld bij e-Boekhouden" when `ebLoggedOut` is true. Learned classifications are not purged (preferences; Instellingen → Geleerde boekingen). Other sessions of the same user lose their connection on their next bookkeeping call (412).
 - **Passkey-only Speedy auth.** No passwords. PostgreSQL holds public keys, credential flags (`backup_eligible` etc., so synced passkeys work) and the WebAuthn user handle.
 - **PostgreSQL stores** (`internal/database/migrations/`): `users` (email, name, `avatar_key`, `webauthn_handle`), `passkey_credentials`, `teams` and `team_members`, `user_settings` (encrypted Anthropic key, encrypted e-boekhouden token, encrypted SOAP credentials, encrypted REST token, `preferences` JSON), `recovery_tokens` (SHA-256 hash only, 15-minute expiry, single use), `learned_classifications` (per user: a signal built from the normalised bank description plus counterparty IBAN, the chosen `grootboekcode`, `btw_code`, `soort`, a count and one `sample_omschrijving`; the user can list and delete these under Instellingen → Geleerde boekingen). No mutations, relations, balances or bank statements.
-- **Redis stores** the keys listed under "Redis keys". The AI caches contain bookkeeping data: supplier names, invoice numbers, amounts, bank-line descriptions and the chosen ledger codes, for 1 hour (classification), 7 days (upload analysis), 30 days (mail-folder analysis) or 90 days (duplicate markers). `doc:ignored` holds file ids only and has no TTL. Everything is scoped per user id.
-- **R2 (when configured) stores** avatars under `avatars/{uuid}.{ext}` (served from `R2_PUBLIC_URL`) and files analysed through `/invoices/analyze` under `uploads/{uuid}/document.{ext}` so SubmitFull/SubmitReceipt can fetch them by `uploadKey`. The application never deletes these upload objects; any retention has to come from a bucket lifecycle rule. Mail-folder documents are never written to R2.
+- **Redis stores** the keys listed under "Redis keys". The AI caches contain bookkeeping data: supplier names, invoice numbers, amounts, bank-line descriptions and the chosen ledger codes, for 1 hour (classification), 7 days (upload analysis) or 30 days (mail-folder analysis). The duplicate marker (90 days) holds `mutNr`, `paymentMutNr` and `submittedAt` only. `doc:ignored` holds file ids only and has no TTL. Everything is scoped per user id and deleted by "Verbinding verbreken"; nothing in Redis is needed for correctness.
+- **R2 (when configured) stores avatars only**, under `avatars/{uuid}.{ext}` (served from `R2_PUBLIC_URL`). No document is written to R2: the analyser keeps no copy of an upload (the browser inlines it as `pdfBase64` when booking) and mail-folder documents stay in e-boekhouden. `prepareUploadSource` can still read a legacy `uploadKey` for a session that analysed before Step 10; objects from before that date are not deleted by the application (bucket lifecycle rule).
 - **Claude receives** a document only when the user starts an analysis or classification, only with the user's own key, over HTTPS to api.anthropic.com. The key is decrypted per call and never logged.
+- **Logs** follow the policy in `handler/logging.go`: ids, statuses, byte lengths, stop reasons and error classes (`errClass`), never response bodies, Claude output, names, amounts, descriptions, file names or e-mail addresses. `eboekhouden.APIError` never embeds a response body.
 - **Cookies are HttpOnly + SameSite=Lax**, and Secure when `COOKIE_SECURE=true` (production). Session ids are random UUIDs.
 - **All traffic to e-boekhouden.nl is HTTPS** (`secure.e-boekhouden.nl`, `secure20.e-boekhouden.nl`) with no HTTP fallback.
 - **Rate limiting** per IP on the auth endpoints (see Key Technical Decisions for the numbers), disabled in local dev.
-- **File size limits:** 10 MB for uploads (`MaxMultipartMemory`, `maxInvoiceFileSize`) and for mail-folder downloads (`DownloadArchiveFile` cap).
-- **Analytics:** Plausible (self-hosted, cookieless) is loaded on the landing pages and in the app; `track()` sends event names with counts/flags only. Never add bookkeeping data to an event.
+- **File size limits:** 10 MB for uploads (`MaxMultipartMemory`, `maxInvoiceFileSize`) and for mail-folder downloads (`DownloadArchiveFile` cap); nginx accepts 16 MB on `/api/` so an inlined 10 MB upload fits.
+- **Analytics:** Plausible (self-hosted, cookieless) is loaded on the landing pages and in the app; `track()` only forwards enum-like tokens, counts and flags (`sanitizeTrackProps`) and `errorClass()` replaces error messages. `analytics.test.ts` scans every call site. Never add bookkeeping data to an event.
