@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -35,8 +36,8 @@ func truncateForLog(s string, maxLen int) string {
 	return s[:maxLen] + "...(truncated)"
 }
 
-const invoiceSystemPromptBase = `You are a Dutch bookkeeping assistant. You read PDF invoices and extract structured data.
-Extract the following fields from the invoice. Use Dutch accounting conventions.
+const invoiceSystemPromptBase = `You are a Dutch bookkeeping assistant. You read purchase documents (PDF invoices, scanned or photographed receipts, credit notes) and extract structured data.
+Extract the following fields from the document. Use Dutch accounting conventions.
 Return ONLY valid JSON, no explanation or markdown.
 
 Fields to extract:
@@ -111,7 +112,13 @@ Fields to extract:
   NOT EU (use BU_EU_INK only when rule 2 above confirms reverse charge): UK / GB (post-Brexit),
   Switzerland (CH), Norway (NO), Iceland (IS), Liechtenstein, Turkey, USA, Canada, Australia, Japan.
 - isReverseCharge: boolean — true if this is a reverse charge invoice (verlegde BTW). Set to true when btwCode is VERL_INK, VERL_INK_L9, BU_EU_INK, or BI_EU_INK.
-- isReceipt: boolean — true when this document is a bonnetje (kassabon, kwitantie, till slip) rather than a formal factuur. Set isReceipt=true when ANY of these apply:
+- documentType: exactly one of "factuur", "bonnetje", "creditnota", "overig". Decide this FIRST, before extracting amounts:
+  * "factuur": a formal purchase invoice — a supplier, an amount due and usually a factuurnummer, addressed to the recipient.
+  * "bonnetje": a receipt / till slip (kassabon, kwitantie). Apply the isReceipt rules below; documentType="bonnetje" and isReceipt=true MUST always go together.
+  * "creditnota": a credit invoice / credit note — the document says "creditnota", "creditfactuur" or "credit note", or the totals are negative. Report bedragExclBtw, bedragInclBtw and btwBedrag as POSITIVE numbers (absolute values); documentType carries the sign.
+  * "overig": NOT a purchase invoice, receipt or credit note. Examples: algemene voorwaarden / terms and conditions, a logo, signature or other image without amounts, a newsletter or marketing mail, an offerte / quote / proposal, an order confirmation, packing slip or payment reminder without an amount due, a bank statement, a contract. For "overig": fill leverancier/datum when visible, set all amounts to 0, btwCode to GEEN, isReceipt to false and confidence to at most 0.3.
+- documentTypeReason: short Dutch string (max 60 chars) explaining the documentType. REQUIRED when documentType is "overig" ("Algemene voorwaarden", "Logo/handtekening", "Offerte", "Nieuwsbrief", "Orderbevestiging zonder bedrag"); also fill it for "creditnota" ("Creditnota op factuur 2026-0042"). Empty string for a regular factuur or bonnetje.
+- isReceipt: boolean — true when this document is a bonnetje (kassabon, kwitantie, till slip) rather than a formal factuur. Must equal (documentType == "bonnetje"). Set isReceipt=true when ANY of these apply:
   * The supplier is a restaurant, cafe, bar, lunchroom, take-away, snackbar, koffiehuis, bakery, slijterij, supermarkt, kruidenier, tankstation, parkeergarage, parkeerplaats, kiosk, food truck, or any horeca establishment
   * The document looks like a thermal till receipt: no formal addressee, no factuurnummer (or only a transaction/till number), no payment terms — just date, items, totals
   * bedragInclBtw is below 100 EUR AND there is no proper company invoice metadata (no leverancier address, no KvK/BTW number for the buyer, no factuurnummer)
@@ -195,15 +202,67 @@ func NewService() *Service {
 	return &Service{}
 }
 
-// ReadInvoice sends a PDF to Claude for structured data extraction.
+// ErrUnsupportedMediaType is returned by ReadInvoice when the file is not a
+// PDF, JPEG or PNG. The message is Dutch and generic on purpose so handlers
+// can pass it straight to the UI without leaking the offending media type.
+var ErrUnsupportedMediaType = errors.New("Bestandstype niet ondersteund")
+
+// normalizeMediaType reduces a Content-Type style value to a bare, lowercase
+// media type: parameters ("; charset=binary") are dropped and the common
+// non-standard "image/jpg" is mapped to "image/jpeg". Browsers, mail clients
+// and e-boekhouden are not consistent here, so callers should never compare
+// the raw string.
+func normalizeMediaType(mediaType string) string {
+	mt, _, _ := strings.Cut(mediaType, ";")
+	mt = strings.ToLower(strings.TrimSpace(mt))
+	if mt == "image/jpg" {
+		return "image/jpeg"
+	}
+	return mt
+}
+
+// buildInvoiceContentBlock wraps a base64-encoded file in the Claude content
+// block that matches its media type: a document block for PDFs, an image
+// block for JPEG/PNG. Anything else returns ErrUnsupportedMediaType before a
+// single token is spent.
+func buildInvoiceContentBlock(mediaType, base64Data string) (anthropic.ContentBlockParamUnion, error) {
+	switch normalizeMediaType(mediaType) {
+	case "application/pdf":
+		return anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
+			Data: base64Data,
+		}), nil
+	case "image/jpeg":
+		return anthropic.NewImageBlock(anthropic.Base64ImageSourceParam{
+			Data:      base64Data,
+			MediaType: anthropic.Base64ImageSourceMediaTypeImageJPEG,
+		}), nil
+	case "image/png":
+		return anthropic.NewImageBlock(anthropic.Base64ImageSourceParam{
+			Data:      base64Data,
+			MediaType: anthropic.Base64ImageSourceMediaTypeImagePNG,
+		}), nil
+	default:
+		return anthropic.ContentBlockParamUnion{}, ErrUnsupportedMediaType
+	}
+}
+
+// ReadInvoice sends a PDF, JPEG or PNG to Claude for structured data
+// extraction. mediaType selects the content block (see
+// buildInvoiceContentBlock); base64Data is the standard-base64 file body.
 // If accounts is provided, Claude will only suggest codes from that list.
+// The result is normalised with NormalizeDocumentType before it is returned.
 //
 // Errors are logged in English with full diagnostics (the actual unmarshal
 // error, the response stop reason, and a preview of Claude's output) so
 // production failures are debuggable from logs alone. The returned error
 // is a clean Dutch message safe to surface in the UI — never the raw
 // Claude response, which used to leak through the previous error format.
-func (s *Service) ReadInvoice(ctx context.Context, apiKey string, pdfBase64 string, accounts []LedgerAccountInfo) (*InvoiceData, error) {
+func (s *Service) ReadInvoice(ctx context.Context, apiKey string, mediaType string, base64Data string, accounts []LedgerAccountInfo) (*InvoiceData, error) {
+	fileBlock, err := buildInvoiceContentBlock(mediaType, base64Data)
+	if err != nil {
+		return nil, err
+	}
+
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 	prompt := buildInvoicePrompt(accounts)
 
@@ -221,10 +280,8 @@ func (s *Service) ReadInvoice(ctx context.Context, apiKey string, pdfBase64 stri
 		},
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(
-				anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
-					Data: pdfBase64,
-				}),
-				anthropic.NewTextBlock("Lees deze factuur en extraheer de gegevens als JSON."),
+				fileBlock,
+				anthropic.NewTextBlock("Lees dit document en extraheer de gegevens als JSON."),
 			),
 		},
 	})
@@ -233,13 +290,13 @@ func (s *Service) ReadInvoice(ctx context.Context, apiKey string, pdfBase64 stri
 	}
 
 	// Detect truncation explicitly. Unlike batch classification we can't
-	// split a single PDF response into halves, so we surface a specific
-	// Dutch error that tells the user the invoice was too complex —
+	// split a single document response into halves, so we surface a
+	// specific Dutch error that tells the user the invoice was too complex —
 	// usually means there's a way to simplify (fewer line items, shorter
 	// description) or the prompt itself needs tightening.
 	if string(msg.StopReason) == "max_tokens" {
 		log.Printf("Claude ReadInvoice hit max_tokens (limit=%d); response is truncated", readInvoiceMaxTokens)
-		return nil, fmt.Errorf("Factuur te complex voor automatische verwerking. Voer de gegevens handmatig in of probeer een andere PDF.")
+		return nil, fmt.Errorf("Factuur te complex voor automatische verwerking. Voer de gegevens handmatig in of probeer een ander bestand.")
 	}
 
 	text := extractText(msg)
@@ -256,6 +313,7 @@ func (s *Service) ReadInvoice(ctx context.Context, apiKey string, pdfBase64 stri
 		return nil, fmt.Errorf("Factuurgegevens konden niet worden verwerkt. Probeer het opnieuw of voer handmatig in.")
 	}
 
+	NormalizeDocumentType(&invoice)
 	return &invoice, nil
 }
 

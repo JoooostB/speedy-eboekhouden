@@ -169,6 +169,9 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		if cached, err := h.redis.Get(c.Request.Context(), cacheKey).Bytes(); err == nil {
 			var cachedInvoice claude.InvoiceData
 			if json.Unmarshal(cached, &cachedInvoice) == nil {
+				// Entries cached before documentType existed have it empty;
+				// derive it from isReceipt so the response shape is stable.
+				claude.NormalizeDocumentType(&cachedInvoice)
 				invoice = &cachedInvoice
 				cacheHit = true
 				log.Printf("Invoice analyze cache HIT for user %s pdfHash=%s", sess.UserID, pdfHash[:16])
@@ -176,7 +179,7 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		}
 	}
 	if invoice == nil {
-		fresh, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, pdfBase64, accounts)
+		fresh, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, "application/pdf", pdfBase64, accounts)
 		if err != nil {
 			log.Printf("Claude invoice read error: %v", err)
 			c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
@@ -282,13 +285,13 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 					if hit {
 						id, _ := toInt(row["id"])
 						matchedBankLine = &gin.H{
-							"id":                 id,
-							"datum":              toString(row["mutDatum"]),
-							"bedrag":             bedrag,
-							"omschrijving":       toString(row["mutOmschrijving"]),
-							"currencyConverted":  fxConverted,
-							"invoiceCurrency":    strings.ToUpper(invoice.Currency),
-							"invoiceAmount":      invoice.BedragInclBTW,
+							"id":                id,
+							"datum":             toString(row["mutDatum"]),
+							"bedrag":            bedrag,
+							"omschrijving":      toString(row["mutOmschrijving"]),
+							"currencyConverted": fxConverted,
+							"invoiceCurrency":   strings.ToUpper(invoice.Currency),
+							"invoiceAmount":     invoice.BedragInclBTW,
 						}
 						break
 					}
@@ -333,10 +336,10 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		// pdfHash is echoed back so SubmitFull can write the submission
 		// marker without rehashing the PDF (which we'd otherwise need to
 		// re-download from R2). The frontend treats it as opaque.
-		"pdfHash":         pdfHash,
+		"pdfHash": pdfHash,
 		// cachedAnalysis lets the UI surface a small "eerder geanalyseerd"
 		// hint so the user knows why the result feels familiar.
-		"cachedAnalysis":  cacheHit,
+		"cachedAnalysis": cacheHit,
 	}
 	// alreadySubmitted is set when the same PDF (by content hash) was
 	// previously booked successfully via SubmitFull. The dialog renders a
@@ -1203,10 +1206,15 @@ func (h *InvoiceHandler) Submit(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", raw)
 }
 
+// getAPIKey returns the user's decrypted Anthropic key, or an error when
+// none is configured. GetSettings returns defaults (no error) for a user
+// without a settings row, so the HasAnthropicKey check must produce its own
+// error — returning ("", nil) here used to let Analyze call Claude with an
+// empty key.
 func (h *InvoiceHandler) getAPIKey(c *gin.Context, userID string) (string, error) {
 	settings, err := h.db.GetSettings(c.Request.Context(), userID)
 	if err != nil || !settings.HasAnthropicKey {
-		return "", err
+		return "", fmt.Errorf("no API key")
 	}
 	decrypted, err := crypto.Decrypt(h.encKey, settings.AnthropicKeyEnc)
 	if err != nil {

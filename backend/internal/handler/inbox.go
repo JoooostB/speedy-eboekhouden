@@ -375,7 +375,7 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 	pdfBase64 := base64.StdEncoding.EncodeToString(pdfBytes)
 
 	// Read invoice with Claude (no account list in inbox context — uses defaults)
-	invoice, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, pdfBase64, nil)
+	invoice, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, "application/pdf", pdfBase64, nil)
 	if err != nil {
 		log.Printf("Claude API error for user %s: %v", sess.UserID, err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
@@ -576,7 +576,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 				"omschrijving": item.Omschrijving,
 			},
 			"mutatieRegels": []map[string]any{regel},
-			"importId":       item.ID,
+			"importId":      item.ID,
 		})
 
 		mutResp, err := client.CreateMutatie(mutPayload)
