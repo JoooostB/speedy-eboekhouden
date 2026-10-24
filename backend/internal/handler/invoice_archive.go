@@ -145,6 +145,21 @@ func isFolderWithin(folders []archiveFolder, folderID, ancestorID int) bool {
 	return false
 }
 
+// mailFolderTargetError says why targetID cannot receive a document that
+// leaves the mail folder: it is the mail folder itself (errTargetIsMailFolder)
+// or lies inside it (errTargetInMailFolder). nil when it is neither. A nil
+// listing places nothing inside the mail folder, so only the identity check
+// remains.
+func mailFolderTargetError(folders []archiveFolder, targetID, mailFolderID int) error {
+	switch {
+	case targetID == mailFolderID:
+		return errTargetIsMailFolder
+	case isFolderWithin(folders, targetID, mailFolderID):
+		return errTargetInMailFolder
+	}
+	return nil
+}
+
 // validateTargetFolder checks an explicit target folder for a mail-folder
 // document: it must exist, must not be deleted and must be neither the mail
 // folder nor one of its descendants.
@@ -155,12 +170,8 @@ func validateTargetFolder(folders []archiveFolder, targetID, mailFolderID int) e
 		return errTargetFolderMissing
 	case f.IsDeleted:
 		return errTargetFolderDeleted
-	case targetID == mailFolderID:
-		return errTargetIsMailFolder
-	case isFolderWithin(folders, targetID, mailFolderID):
-		return errTargetInMailFolder
 	}
-	return nil
+	return mailFolderTargetError(folders, targetID, mailFolderID)
 }
 
 // archiveFolderPath is the breadcrumb of a folder, "Facturen / 2026 / 10

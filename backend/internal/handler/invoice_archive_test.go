@@ -950,3 +950,103 @@ func TestSubmitReceiptRefusesTwoSources(t *testing.T) {
 		t.Errorf("nothing may be booked, got %v", writes)
 	}
 }
+
+// --- POST /documents/archive: target folder rules -----------------------------
+
+func TestArchiveDocumentsExplicitTargetFolder(t *testing.T) {
+	tests := []struct {
+		name    string
+		target  int
+		wantErr string // "" means the move is accepted
+	}{
+		{"ok", 202, ""},
+		{"root folder ok", 200, ""},
+		{"mail folder", 100, "De mailmap kan geen doelmap zijn"},
+		{"direct child of mail folder", 101, "Een submap van de mailmap kan geen doelmap zijn"},
+		{"deep descendant of mail folder", 102, "Een submap van de mailmap kan geen doelmap zijn"},
+		{"deleted", 300, "Doelmap bestaat niet meer"},
+		{"missing", 999, "Doelmap niet gevonden"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake, h, client := submitTestEnv(t)
+			status, resp := callSubmit(t, h.ArchiveDocuments, client, map[string]any{"fileIds": []int{501}, "targetFolderId": tc.target})
+			if tc.wantErr != "" {
+				if status != http.StatusBadRequest || resp["error"] != tc.wantErr {
+					t.Fatalf("status %d, response %v, want 400 %q", status, resp, tc.wantErr)
+				}
+				if writes := fake.writes(); len(writes) != 0 {
+					t.Errorf("nothing may change, got %v", writes)
+				}
+				return
+			}
+			if status != http.StatusOK {
+				t.Fatalf("status %d: %v", status, resp)
+			}
+			moved, _ := resp["moved"].([]any)
+			failed, _ := resp["failed"].([]any)
+			if len(moved) != 1 || len(failed) != 0 {
+				t.Fatalf("moved %v, failed %v", moved, failed)
+			}
+			if got := moved[0].(map[string]any)["targetFolderId"]; got != float64(tc.target) {
+				t.Errorf("targetFolderId = %v, want %d", got, tc.target)
+			}
+			if _, ok := fake.call(http.MethodPost, "/v1/api/folder/bulk/update/"+strconv.Itoa(tc.target)); !ok {
+				t.Errorf("no move to %d, writes %v", tc.target, fake.writes())
+			}
+		})
+	}
+}
+
+func TestArchiveDocumentsAutoFolder(t *testing.T) {
+	tests := []struct {
+		name       string
+		mailFolder int
+		wantMoved  int
+		wantFailed string
+	}{
+		// The file was received on 2026-10-24 and has no analysis, so it goes to Facturen/2026/10 Oktober (202).
+		{"month folder outside the mail folder", 100, 202, ""},
+		// With "Facturen" as the mail folder that month folder lies inside it.
+		{"month folder inside the mail folder", 200, 0, "Een submap van de mailmap kan geen doelmap zijn"},
+		// With "10 Oktober" itself as the mail folder the auto target is the mail folder.
+		{"month folder is the mail folder", 202, 0, "De mailmap kan geen doelmap zijn"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake, h, client := submitTestEnv(t)
+			fake.menh = tc.mailFolder
+			fake.files[tc.mailFolder] = append(fake.files[tc.mailFolder], fake.files[100]...)
+			if tc.mailFolder != 100 {
+				delete(fake.files, 100)
+			}
+
+			status, resp := callSubmit(t, h.ArchiveDocuments, client, map[string]any{"fileIds": []int{501}})
+			if status != http.StatusOK {
+				t.Fatalf("status %d: %v", status, resp)
+			}
+			moved, _ := resp["moved"].([]any)
+			failed, _ := resp["failed"].([]any)
+			if tc.wantFailed != "" {
+				if len(moved) != 0 || len(failed) != 1 {
+					t.Fatalf("moved %v, failed %v", moved, failed)
+				}
+				if got := failed[0].(map[string]any)["error"]; got != tc.wantFailed {
+					t.Errorf("error = %v, want %q", got, tc.wantFailed)
+				}
+				for _, w := range fake.writes() {
+					if strings.Contains(w, "filename") || strings.Contains(w, "bulk/update") {
+						t.Errorf("unexpected write %s", w)
+					}
+				}
+				return
+			}
+			if len(moved) != 1 || len(failed) != 0 {
+				t.Fatalf("moved %v, failed %v", moved, failed)
+			}
+			if got := moved[0].(map[string]any)["targetFolderId"]; got != float64(tc.wantMoved) {
+				t.Errorf("targetFolderId = %v, want %d", got, tc.wantMoved)
+			}
+		})
+	}
+}

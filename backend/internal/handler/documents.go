@@ -874,9 +874,12 @@ func archiveNameFor(file eboekhouden.ArchiveFile, inv *claude.InvoiceData, now t
 //
 // Body {fileIds:[…], targetFolderId?}. Without targetFolderId each file goes
 // to Facturen/<jaar>/<maand> for its date (findOrCreateArchiveFolder). The
-// mail folder itself is never a target. Response {moved:[{id, name,
-// targetFolderId}], failed:[{id, error}]}; a failure of one file does not
-// stop the others.
+// target must exist outside the mail folder: an explicit target is checked
+// with validateTargetFolder before anything moves (400, the same messages as
+// SubmitFull), and an automatically chosen folder that turns out to be the
+// mail folder or one of its subfolders fails that file. Response
+// {moved:[{id, name, targetFolderId}], failed:[{id, error}]}; a failure of
+// one file does not stop the others.
 func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 	sess := session.FromContext(c)
 	client := session.ClientFromContext(c)
@@ -908,9 +911,18 @@ func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 		h.writeDocumentsError(c, sess, err)
 		return
 	}
-	if req.TargetFolderID != 0 && req.TargetFolderID == menh {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "De mailmap kan geen doelmap zijn"})
+	// The directory listing serves the target check: an explicit target
+	// now, the automatically chosen month folders below.
+	folders, err := listArchiveFolders(client)
+	if err != nil {
+		h.writeDocumentsError(c, sess, err)
 		return
+	}
+	if req.TargetFolderID != 0 {
+		if err := validateTargetFolder(folders, req.TargetFolderID, menh); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	byID := make(map[int]eboekhouden.ArchiveFile, len(files))
 	for _, f := range files {
@@ -958,10 +970,18 @@ func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 				}
 				monthFolders[month] = folderID
 				target = folderID
+				// The lookup may have created folders; the descendant check
+				// below needs them. A failed refresh keeps the old listing,
+				// which only loses the check for folders created just now.
+				if fresh, err := listArchiveFolders(client); err == nil {
+					folders = fresh
+				}
 			}
 		}
-		if target == menh {
-			failed = append(failed, failedItem{ID: id, Error: "De mailmap kan geen doelmap zijn"})
+		// Same rule as SubmitFull: a folder in the mail folder's subtree
+		// would keep the file in the inbox, so it is never a target.
+		if err := mailFolderTargetError(folders, target, menh); err != nil {
+			failed = append(failed, failedItem{ID: id, Error: err.Error()})
 			continue
 		}
 
