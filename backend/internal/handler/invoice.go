@@ -203,12 +203,25 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		filename = header.Filename
 	}
 
-	resp, err := h.analyzeBytes(c, sess, data, mediaType, filename)
+	resp, err := h.analyzeBytes(c, sess, data, mediaType, filename, analyzeOptions{})
 	if err != nil {
 		h.writeAnalyzeError(c, sess, err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// analyzeOptions tunes analyzeBytes for its callers. The zero value is the
+// upload flow's behaviour.
+type analyzeOptions struct {
+	// skipR2 leaves the file out of R2, so the response carries no uploadKey
+	// and no pdfUrl. The document inbox sets it: its files already live in
+	// e-boekhouden, R2 never deletes objects, and a presigned URL must not
+	// end up in a 30-day cache.
+	skipR2 bool
+	// refresh bypasses the invoice:analyze cache read (the result is still
+	// written), so a forced re-analysis really asks Claude again.
+	refresh bool
 }
 
 // writeUnsupportedMediaType answers 415 for a file that is not a PDF, JPG or PNG.
@@ -249,7 +262,7 @@ func (h *InvoiceHandler) writeAnalyzeError(c *gin.Context, sess *session.Session
 //     document with Claude,
 //   - flags an earlier booking of the same bytes (duplicate marker),
 //   - parks the file in R2 so SubmitFull/SubmitReceipt can fetch it by
-//     uploadKey,
+//     uploadKey (unless opts.skipR2),
 //   - looks up the supplier relation and ranks the candidate bank lines.
 //
 // It writes nothing to the response. The returned gin.H is the
@@ -258,7 +271,7 @@ func (h *InvoiceHandler) writeAnalyzeError(c *gin.Context, sess *session.Session
 // eboekhouden.ErrSessionExpired and *claudeReadError. e-boekhouden lookups
 // that fail for any other reason are best-effort and leave their part of the
 // response empty, as the endpoint always did.
-func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData, data []byte, mediaType, filename string) (gin.H, error) {
+func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData, data []byte, mediaType, filename string, opts analyzeOptions) (gin.H, error) {
 	ctx := c.Request.Context()
 
 	ext := documentExtension(mediaType)
@@ -310,7 +323,7 @@ func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData,
 	cacheKey := invoiceAnalysisCacheKey(sess.UserID, data, accounts)
 	var invoice *claude.InvoiceData
 	cacheHit := false
-	if h.redis != nil {
+	if h.redis != nil && !opts.refresh {
 		if cached, err := h.redis.Get(ctx, cacheKey).Bytes(); err == nil {
 			var cachedInvoice claude.InvoiceData
 			if json.Unmarshal(cached, &cachedInvoice) == nil {
@@ -364,7 +377,7 @@ func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData,
 	// and SubmitReceipt read it back by key.
 	var uploadKey string
 	var pdfURL string
-	if h.r2 != nil {
+	if h.r2 != nil && !opts.skipR2 {
 		uploadKey = fmt.Sprintf("uploads/%s/document.%s", uuid.New().String(), ext)
 		h.r2.Upload(ctx, uploadKey, data, mediaType)
 		// Generate a signed URL (15 min TTL) — never expose raw public URLs for financial docs
@@ -442,16 +455,23 @@ func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData,
 	// to book it again — typical case is accidentally re-uploading from
 	// an archive folder that's already been processed.
 	if alreadySubmitted != nil {
-		resp["alreadySubmitted"] = gin.H{
-			"mutNr":        alreadySubmitted.MutNr,
-			"paymentMutNr": alreadySubmitted.PaymentMutNr,
-			"leverancier":  alreadySubmitted.Leverancier,
-			"factuur":      alreadySubmitted.Factuur,
-			"bedragIncl":   alreadySubmitted.BedragIncl,
-			"submittedAt":  alreadySubmitted.SubmittedAt.Format(time.RFC3339),
-		}
+		resp["alreadySubmitted"] = submittedMarkerJSON(alreadySubmitted)
 	}
 	return resp, nil
+}
+
+// submittedMarkerJSON renders the duplicate marker the way the analyze
+// response has always done; the document inbox reuses it so both flows
+// describe an earlier booking identically.
+func submittedMarkerJSON(m *invoiceSubmittedMarker) gin.H {
+	return gin.H{
+		"mutNr":        m.MutNr,
+		"paymentMutNr": m.PaymentMutNr,
+		"leverancier":  m.Leverancier,
+		"factuur":      m.Factuur,
+		"bedragIncl":   m.BedragIncl,
+		"submittedAt":  m.SubmittedAt.Format(time.RFC3339),
+	}
 }
 
 // SubmitFull handles POST /api/v1/invoices/submit-full

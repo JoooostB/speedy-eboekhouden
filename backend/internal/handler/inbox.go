@@ -258,6 +258,14 @@ func (h *InboxHandler) DashboardSummary(c *gin.Context) {
 			client = nil
 		}
 
+		// Mail-folder documents still to handle (not ignored, not linked,
+		// readable). Best-effort: a failure leaves the field out.
+		if client != nil {
+			if n, err := countOpenMailDocuments(c.Request.Context(), h.redis, client, sess.UserID); err == nil {
+				summary["documentsCount"] = n
+			}
+		}
+
 		// Check for cached classifications summary
 		cacheKey := fmt.Sprintf("inbox:classify:%s", sess.UserID)
 		if cached, err := h.redis.Get(c.Request.Context(), cacheKey).Bytes(); err == nil {

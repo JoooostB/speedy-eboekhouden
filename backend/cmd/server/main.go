@@ -228,6 +228,17 @@ func main() {
 				eb.POST("/invoices/submit", invoiceHandler.Submit)
 				eb.POST("/invoices/submit-full", invoiceHandler.SubmitFull)
 				eb.POST("/invoices/submit-receipt", invoiceHandler.SubmitReceipt)
+
+				// Document inbox (Mail & herken folder)
+				eb.GET("/documents", invoiceHandler.ListDocuments)
+				eb.POST("/documents/setup", invoiceHandler.SetupMailFolder)
+				eb.POST("/documents/archive", invoiceHandler.ArchiveDocuments)
+				eb.POST("/documents/:id/analyze", invoiceHandler.AnalyzeDocument)
+				eb.GET("/documents/:id/content", invoiceHandler.DocumentContent)
+				eb.POST("/documents/:id/ignore", invoiceHandler.IgnoreDocument)
+				eb.DELETE("/documents/:id/ignore", invoiceHandler.UnignoreDocument)
+				eb.DELETE("/documents/:id", invoiceHandler.DeleteDocument)
+				eb.GET("/openposts", invoiceHandler.GetOpenPosts)
 			}
 		}
 	}
