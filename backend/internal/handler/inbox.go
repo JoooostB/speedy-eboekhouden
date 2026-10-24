@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/joooostb/speedy-eboekhouden/internal/claude"
 	"github.com/joooostb/speedy-eboekhouden/internal/crypto"
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
@@ -479,13 +478,6 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 		return
 	}
 
-	// Upload PDF to R2
-	var uploadKey string
-	if h.r2 != nil {
-		uploadKey = fmt.Sprintf("uploads/%s/document.pdf", uuid.New().String())
-		h.r2.Upload(c.Request.Context(), uploadKey, pdfBytes, "application/pdf")
-	}
-
 	// Verify match between invoice and bank line
 	amountMatch := false
 	amountDiff := 0.0
@@ -495,8 +487,10 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"invoice":     invoice,
-		"uploadKey":   uploadKey,
+		"invoice": invoice,
+		// No copy of the file is kept (see analyzeBytes); the field stays
+		// for the response shape.
+		"uploadKey":   "",
 		"bankLineId":  bankLineID,
 		"amountMatch": amountMatch,
 		"amountDiff":  amountDiff,

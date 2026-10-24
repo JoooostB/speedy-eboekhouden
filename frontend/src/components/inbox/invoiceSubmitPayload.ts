@@ -10,7 +10,8 @@ import type {
  * from what the review dialog has at submit time. Two document sources exist:
  *
  *  - an upload: the file was analysed through /invoices/analyze and is sent
- *    again inline as pdfBase64 (with folderId) or referenced by uploadKey;
+ *    again inline as pdfBase64 (folderId says where it is archived); uploadKey
+ *    is a legacy field, empty since the analyser stores nothing;
  *  - a Mail & herken document (archiveFileId): nothing is sent but the id,
  *    the backend links, renames and moves the file; targetFolderId says
  *    where, omitted means Facturen/<jaar>/<maand>.

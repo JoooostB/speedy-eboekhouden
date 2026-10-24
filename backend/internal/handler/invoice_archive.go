@@ -232,9 +232,12 @@ func prepareMailFolderSource(client *eboekhouden.Client, fileID, targetFolderID 
 }
 
 // prepareUploadSource decodes the inlined document or fetches it from R2 by
-// its upload key. As before, an undecodable body or a failed R2 download is
-// logged and the booking goes on without an archive file; bytes that are not
-// a PDF, JPG or PNG are refused, as the analyser refuses them.
+// its upload key. The upload key is legacy: since Step 10 the analyser stores
+// nothing in R2, so only a client that analysed before that deploy can still
+// send one; the path stays until no such session can exist. As before, an
+// undecodable body or a failed R2 download is logged and the booking goes on
+// without an archive file; bytes that are not a PDF, JPG or PNG are refused,
+// as the analyser refuses them.
 func (h *InvoiceHandler) prepareUploadSource(ctx context.Context, in archiveSourceInput) (archiveSource, error) {
 	var data []byte
 	switch {
@@ -322,9 +325,11 @@ func (o archiveOutcome) addTo(resp gin.H) {
 // stageArchiveFile makes sure the booking has an archive file to link. A
 // mail-folder document already has its id. An upload goes into the folder the
 // user picked, or into Facturen/<jaar>/<maand> when none was picked and R2 is
-// configured (the legacy flow); without either, nothing is archived, which is
-// an explicit opt-out for self-hosted clients. The upload is best-effort: a
-// failure is logged and leaves fileID 0.
+// configured; without either, nothing is archived, which is an explicit
+// opt-out for self-hosted clients. The bytes always arrive inline now (the
+// analyser stores nothing in R2); "R2 configured" merely still marks the
+// hosted deployment that archives by default, as it always did. The upload
+// is best-effort: a failure is logged and leaves fileID 0.
 func (h *InvoiceHandler) stageArchiveFile(client *eboekhouden.Client, src archiveSource, pickedFolderID int, datum time.Time, name string) archiveOutcome {
 	if src.fromMailFolder() {
 		return archiveOutcome{fileID: src.fileID, name: src.file.Naam}

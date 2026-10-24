@@ -631,7 +631,7 @@ func (h *InvoiceHandler) AnalyzeDocument(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.analyzeBytes(c, sess, data, mediaType, file.Naam, analyzeOptions{skipR2: true, refresh: force})
+	resp, err := h.analyzeBytes(c, sess, data, mediaType, file.Naam, analyzeOptions{refresh: force})
 	if err != nil {
 		h.writeAnalyzeError(c, sess, err)
 		return

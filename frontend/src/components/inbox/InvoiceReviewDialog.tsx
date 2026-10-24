@@ -377,13 +377,14 @@ export function InvoiceReviewDialog({
         continue;
       }
 
-      // Encode the original File as base64 once per invoice so the backend can
-      // place it in the archive without R2 round-tripping. Only sent when the
-      // user has picked a destination folder — otherwise the backend skips
-      // archive upload entirely. A mail-folder document is never inlined: the
-      // backend already has the file and only needs its id.
+      // Encode the original File as base64 once per invoice: the analyser
+      // keeps no copy of an upload (nothing goes to R2), so the inline bytes
+      // are the only way the backend can archive it. Always sent for an
+      // upload; whether it is archived, and where, follows folderId. A
+      // mail-folder document is never inlined: the backend already has the
+      // file and only needs its id.
       let pdfBase64: string | undefined;
-      if (!archiveSource && inv.archiveFolder && inv.source.localFile) {
+      if (!archiveSource && inv.source.localFile) {
         try {
           pdfBase64 = await fileToBase64(inv.source.localFile);
         } catch (err: any) {
@@ -738,9 +739,6 @@ export function InvoiceReviewDialog({
                         {new Date(inv.source.alreadySubmitted.submittedAt).toLocaleDateString("nl-NL")}
                       </strong>{" "}
                       als mutatie nr <strong>{inv.source.alreadySubmitted.mutNr}</strong>
-                      {inv.source.alreadySubmitted.factuur
-                        ? ` (factuur ${inv.source.alreadySubmitted.factuur})`
-                        : ""}
                       . Controleer of je deze opnieuw wilt boeken — het levert anders een dubbele
                       mutatie op in e-Boekhouden.
                     </Typography>

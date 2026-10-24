@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/joooostb/speedy-eboekhouden/internal/claude"
 	"github.com/joooostb/speedy-eboekhouden/internal/crypto"
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
@@ -96,15 +95,14 @@ func invoiceSubmittedMarkerKey(userID, pdfHash string) string {
 	return fmt.Sprintf("invoice:submitted:%s:%s", userID, pdfHash)
 }
 
-// invoiceSubmittedMarker is the value we cache against the submission key.
-// Kept small — the analyze endpoint just needs enough to render a Dutch
-// warning ("Deze factuur is al eerder geboekt op X als mutatie nr Y").
+// invoiceSubmittedMarker is the value we cache against the submission key:
+// only what the UI shows ("Zelfde bestand geboekt op 3 okt (mutatie 1234)").
+// Nothing about the invoice itself is kept. Markers written before Step 10
+// also carry leverancier, factuur and bedragIncl; encoding/json ignores those
+// fields on read and submittedMarkerJSON never echoes them.
 type invoiceSubmittedMarker struct {
 	MutNr        int       `json:"mutNr"`
 	PaymentMutNr int       `json:"paymentMutNr,omitempty"`
-	Leverancier  string    `json:"leverancier,omitempty"`
-	Factuur      string    `json:"factuur,omitempty"`
-	BedragIncl   float64   `json:"bedragIncl,omitempty"`
 	SubmittedAt  time.Time `json:"submittedAt"`
 }
 
@@ -213,11 +211,6 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 // analyzeOptions tunes analyzeBytes for its callers. The zero value is the
 // upload flow's behaviour.
 type analyzeOptions struct {
-	// skipR2 leaves the file out of R2, so the response carries no uploadKey
-	// and no pdfUrl. The document inbox sets it: its files already live in
-	// e-boekhouden, R2 never deletes objects, and a presigned URL must not
-	// end up in a 30-day cache.
-	skipR2 bool
 	// refresh bypasses the invoice:analyze cache read (the result is still
 	// written), so a forced re-analysis really asks Claude again.
 	refresh bool
@@ -260,9 +253,11 @@ func (h *InvoiceHandler) writeAnalyzeError(c *gin.Context, sess *session.Session
 //   - serves the analysis from the per-user Redis cache or reads the
 //     document with Claude,
 //   - flags an earlier booking of the same bytes (duplicate marker),
-//   - parks the file in R2 so SubmitFull/SubmitReceipt can fetch it by
-//     uploadKey (unless opts.skipR2),
 //   - looks up the supplier relation and ranks the candidate bank lines.
+//
+// It keeps no copy of the file: an upload stays in the browser, which inlines
+// it as pdfBase64 when booking, and a mail-folder document already lives in
+// e-boekhouden. Nothing is written to R2.
 //
 // It writes nothing to the response. The returned gin.H is the
 // InvoiceAnalyzeResponse body; errors are typed so callers can map them with
@@ -371,21 +366,6 @@ func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData,
 		}
 	}
 
-	// Store the file temporarily in R2 for later submission. The key carries
-	// the real extension and the object its real content type; SubmitFull
-	// and SubmitReceipt read it back by key.
-	var uploadKey string
-	var pdfURL string
-	if h.r2 != nil && !opts.skipR2 {
-		uploadKey = fmt.Sprintf("uploads/%s/document.%s", uuid.New().String(), ext)
-		h.r2.Upload(ctx, uploadKey, data, mediaType)
-		// Generate a signed URL (15 min TTL) — never expose raw public URLs for financial docs
-		signed, err := h.r2.GeneratePresignedURL(ctx, uploadKey)
-		if err == nil {
-			pdfURL = signed
-		}
-	}
-
 	// Search for matching relation
 	var matchedRelation *gin.H
 	if invoice.Leverancier != "" && ebClient != nil {
@@ -430,9 +410,13 @@ func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData,
 	}
 
 	resp := gin.H{
-		"invoice":         invoice,
-		"uploadKey":       uploadKey,
-		"pdfUrl":          pdfURL,
+		"invoice": invoice,
+		// uploadKey and pdfUrl are always empty since Step 10: the analyser
+		// keeps no copy of the file (nothing goes to R2). They stay in the
+		// response so older clients keep parsing it; the booking carries the
+		// bytes inline (pdfBase64) or names a mail-folder file (archiveFileId).
+		"uploadKey":       "",
+		"pdfUrl":          "",
 		"matchedBankLine": matchedBankLine,
 		// bankLineCandidates is the full ranking (best first, at most three)
 		// so the UI can offer a choice. Always an array, never null.
@@ -466,9 +450,6 @@ func submittedMarkerJSON(m *invoiceSubmittedMarker) gin.H {
 	return gin.H{
 		"mutNr":        m.MutNr,
 		"paymentMutNr": m.PaymentMutNr,
-		"leverancier":  m.Leverancier,
-		"factuur":      m.Factuur,
-		"bedragIncl":   m.BedragIncl,
 		"submittedAt":  m.SubmittedAt.Format(time.RFC3339),
 	}
 }
@@ -773,9 +754,6 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		marker := invoiceSubmittedMarker{
 			MutNr:        mutResult.MutNr,
 			PaymentMutNr: paymentMutNr,
-			Leverancier:  req.Leverancier,
-			Factuur:      req.Factuurnummer,
-			BedragIncl:   req.BedragIncl,
 			SubmittedAt:  time.Now(),
 		}
 		if body, mErr := json.Marshal(marker); mErr == nil {

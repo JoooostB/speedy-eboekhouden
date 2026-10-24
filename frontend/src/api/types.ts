@@ -209,9 +209,12 @@ export interface ArchiveFolder {
 export interface InvoiceAnalyzeResponse {
   invoice: InvoiceData;
   filename: string;
+  /** Always empty since Step 10: the analyser keeps no copy of the file
+   *  (nothing goes to R2). Kept so the response shape stays stable; a
+   *  booking carries the file inline (pdfBase64) or names a mail-folder
+   *  file (archiveFileId). */
   uploadKey: string;
-  /** Public CDN URL for the uploaded PDF (from R2). Empty when R2 is not
-   *  configured — the frontend then falls back to localPdfUrl. */
+  /** Always empty, see uploadKey; the preview uses localPdfUrl. */
   pdfUrl: string;
   /** SHA-256 of the uploaded PDF — echoed back to SubmitFull so the
    *  backend can write a duplicate-detection marker post-booking. */
@@ -222,14 +225,7 @@ export interface InvoiceAnalyzeResponse {
   /** Set when this exact PDF was previously booked successfully. The UI
    *  shows a prominent warning so the user can avoid creating a duplicate
    *  mutation. */
-  alreadySubmitted?: {
-    mutNr: number;
-    paymentMutNr?: number;
-    leverancier?: string;
-    factuur?: string;
-    bedragIncl?: number;
-    submittedAt: string;
-  };
+  alreadySubmitted?: InvoiceSubmittedMarker;
   matchedRelation: {
     id: number;
     code: string;
@@ -293,13 +289,12 @@ export type MailDocumentStatus =
   | "unmatched"
   | "new";
 
-/** Marker of an earlier booking of the same file bytes. */
+/** Marker of an earlier booking of the same file bytes. Deliberately minimal:
+ *  the mutation numbers and the time of booking, nothing about the invoice
+ *  itself ("Zelfde bestand geboekt op 3 okt (mutatie 1234)"). */
 export interface InvoiceSubmittedMarker {
   mutNr: number;
   paymentMutNr?: number;
-  leverancier?: string;
-  factuur?: string;
-  bedragIncl?: number;
   submittedAt: string;
 }
 
@@ -434,13 +429,15 @@ export interface InvoiceSubmitFullRequest {
   relatieId: number;
   tegenRekeningId: number;
   rekeningId: number;
-  /** R2 key of the analysed upload. Absent for a mail-folder document. */
+  /** Legacy: the R2 key of an upload analysed before Step 10. The analyser
+   *  no longer stores files, so this is empty. Absent for a mail-folder
+   *  document. */
   uploadKey?: string;
   /** Accepted by the backend for compatibility; the archive name follows
    *  the naming convention. Absent for a mail-folder document. */
   filename?: string;
-  /** Base64-encoded PDF; alternative to uploadKey for clients that don't use
-   *  R2. The backend prefers pdfBase64 when both are present. */
+  /** The uploaded document inlined as base64: the way an upload reaches the
+   *  archive. The backend prefers it over uploadKey when both are present. */
   pdfBase64?: string;
   /** Archive folder ID picked by the user. When omitted the backend either
    *  auto-creates Facturen/year/month (if R2 is configured) or skips
