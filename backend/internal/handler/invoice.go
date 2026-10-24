@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -39,6 +40,25 @@ const invoiceAnalysisCacheTTL = 7 * 24 * time.Hour
 // duplicate bookings even at long delays.
 const invoiceSubmittedMarkerTTL = 90 * 24 * time.Hour
 
+// invoicePromptVersion is part of the analysis cache key. Bump it whenever
+// the invoice prompt or the InvoiceData shape changes in a way old cached
+// answers cannot be normalised into. Version 2 added documentType: entries
+// written by the version-1 prompt can never yield "overig" or "creditnota",
+// and waiting for the 7-day TTL to roll them out is too slow. The
+// invoice:submitted marker is deliberately NOT versioned: it must keep
+// recognising files booked before a bump.
+const invoicePromptVersion = "2"
+
+// importGridFetchLimit is the page size used whenever a handler needs the
+// whole unprocessed import grid at once (bank-line matching, bank-account
+// lookup for a booking, batch classification). One page of 2000 covers any
+// realistic backlog; nobody here pages further.
+const importGridFetchLimit = 2000
+
+// maxInvoiceFileSize is the upload limit for a document to analyse (10 MB),
+// matching the security page's claim.
+const maxInvoiceFileSize = 10 << 20
+
 // invoicePDFContentHash returns a stable hex-encoded SHA-256 of the raw
 // PDF bytes. Used as the canonical key for invoice-level caching so a
 // re-upload of the exact same file produces identical analysis results
@@ -54,7 +74,8 @@ func invoicePDFContentHash(pdfBytes []byte) string {
 // per PDF hash, and per ledger-account-set hash because the suggested
 // grootboekcode is a function of the available accounts — re-running an
 // analyze after the user adds/removes an account should produce a fresh
-// suggestion rather than reusing the stale one.
+// suggestion rather than reusing the stale one. The prompt version sits
+// right after the prefix so a bump bypasses every entry of the old prompt.
 func invoiceAnalysisCacheKey(userID string, pdfBytes []byte, accounts []claude.LedgerAccountInfo) string {
 	pdfHash := invoicePDFContentHash(pdfBytes)
 	// Stable ordering — sort accounts by code so callers passing the same
@@ -65,7 +86,7 @@ func invoiceAnalysisCacheKey(userID string, pdfBytes []byte, accounts []claude.L
 	}
 	sort.Strings(codes)
 	accountsHash := sha256.Sum256([]byte(strings.Join(codes, ",")))
-	return fmt.Sprintf("invoice:analyze:%s:%s:%s", userID, pdfHash, hex.EncodeToString(accountsHash[:8]))
+	return fmt.Sprintf("invoice:analyze:v%s:%s:%s:%s", invoicePromptVersion, userID, pdfHash, hex.EncodeToString(accountsHash[:8]))
 }
 
 // invoiceSubmittedMarkerKey returns the Redis key for the "this PDF has
@@ -90,30 +111,67 @@ type invoiceSubmittedMarker struct {
 
 // InvoiceHandler handles invoice processing with Claude.
 type InvoiceHandler struct {
-	claude *claude.Service
-	db     *database.DB
-	encKey crypto.AESKey
-	r2     *storage.Client
-	redis  *redis.Client
+	claude   *claude.Service
+	db       *database.DB
+	encKey   crypto.AESKey
+	r2       *storage.Client
+	redis    *redis.Client
+	sessions *session.Store
 }
 
-// NewInvoiceHandler creates a new invoice handler.
-func NewInvoiceHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, r2 *storage.Client, redisClient *redis.Client) *InvoiceHandler {
-	return &InvoiceHandler{claude: claudeSvc, db: db, encKey: encKey, r2: r2, redis: redisClient}
+// NewInvoiceHandler creates a new invoice handler. sessions is used to clear
+// a stale e-boekhouden token when an analysis runs into an expired session;
+// it may be nil (see HandleEBoekhoudenSessionExpired).
+func NewInvoiceHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, r2 *storage.Client, redisClient *redis.Client, sessions *session.Store) *InvoiceHandler {
+	return &InvoiceHandler{claude: claudeSvc, db: db, encKey: encKey, r2: r2, redis: redisClient, sessions: sessions}
 }
 
-// Analyze handles POST /api/v1/invoices/analyze — reads a PDF via Claude.
-// Returns extracted data for the user to review. Does NOT create any mutation.
+// errNoAPIKey is returned by analyzeBytes when the user has not configured
+// an Anthropic API key. Wrappers answer 400 no_api_key.
+var errNoAPIKey = errors.New("no Anthropic API key configured")
+
+// claudeReadError wraps a Claude failure other than an unsupported media
+// type. Wrappers answer 502 claude_error with the upstream message, as the
+// analyze endpoint always has.
+type claudeReadError struct{ err error }
+
+func (e *claudeReadError) Error() string { return e.err.Error() }
+func (e *claudeReadError) Unwrap() error { return e.err }
+
+// detectDocumentMediaType sniffs the media type from the file's own bytes
+// (never from the client-supplied header) and reports whether it is one the
+// invoice reader accepts: application/pdf, image/png or image/jpeg.
+func detectDocumentMediaType(data []byte) (string, bool) {
+	switch mt := http.DetectContentType(data); mt {
+	case "application/pdf", "image/png", "image/jpeg":
+		return mt, true
+	}
+	return "", false
+}
+
+// documentExtension maps a supported media type to the file extension used
+// for R2 keys and default filenames: pdf, jpg or png. Unsupported types
+// yield "".
+func documentExtension(mediaType string) string {
+	switch mediaType {
+	case "application/pdf":
+		return "pdf"
+	case "image/jpeg":
+		return "jpg"
+	case "image/png":
+		return "png"
+	}
+	return ""
+}
+
+// Analyze handles POST /api/v1/invoices/analyze — reads an uploaded PDF, JPG
+// or PNG via Claude and returns the extracted data for the user to review.
+// Does NOT create any mutation. It is a thin multipart wrapper around
+// analyzeBytes.
 func (h *InvoiceHandler) Analyze(c *gin.Context) {
 	sess := session.FromContext(c)
 	if sess == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
-		return
-	}
-
-	apiKey, err := h.getAPIKey(c, sess.UserID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Stel eerst een Anthropic API-sleutel in"})
 		return
 	}
 
@@ -124,24 +182,106 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 	}
 	defer file.Close()
 
-	const maxFileSize = 10 << 20
-	pdfBytes, err := io.ReadAll(io.LimitReader(file, maxFileSize+1))
+	data, err := io.ReadAll(io.LimitReader(file, maxInvoiceFileSize+1))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read file"})
 		return
 	}
-	if len(pdfBytes) > maxFileSize {
+	if len(data) > maxInvoiceFileSize {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "bestand is te groot (max 10 MB)"})
 		return
 	}
 
-	pdfBase64 := base64.StdEncoding.EncodeToString(pdfBytes)
+	mediaType, ok := detectDocumentMediaType(data)
+	if !ok {
+		writeUnsupportedMediaType(c)
+		return
+	}
 
-	// Fetch the user's actual ledger accounts so Claude only suggests valid codes
+	filename := "document." + documentExtension(mediaType)
+	if header != nil && header.Filename != "" {
+		filename = header.Filename
+	}
+
+	resp, err := h.analyzeBytes(c, sess, data, mediaType, filename)
+	if err != nil {
+		h.writeAnalyzeError(c, sess, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// writeUnsupportedMediaType answers 415 for a file that is not a PDF, JPG or PNG.
+func writeUnsupportedMediaType(c *gin.Context) {
+	c.JSON(http.StatusUnsupportedMediaType, gin.H{
+		"error":   "unsupported_media_type",
+		"message": "Bestandstype niet ondersteund. Upload een PDF, JPG of PNG.",
+	})
+}
+
+// writeAnalyzeError maps an analyzeBytes error onto the HTTP response. It is
+// kept apart from analyzeBytes so other endpoints can reuse the core together
+// with this exact mapping.
+func (h *InvoiceHandler) writeAnalyzeError(c *gin.Context, sess *session.SessionData, err error) {
+	var readErr *claudeReadError
+	switch {
+	case errors.Is(err, errNoAPIKey):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Stel eerst een Anthropic API-sleutel in"})
+	case errors.Is(err, claude.ErrUnsupportedMediaType):
+		writeUnsupportedMediaType(c)
+	case HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err):
+		// Response written: the frontend shows the reconnect prompt.
+	case errors.As(err, &readErr):
+		log.Printf("Claude invoice read error: %v", readErr.err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": readErr.err.Error()})
+	default:
+		log.Printf("Invoice analyze error: %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "analyze_failed", "message": "Analyse mislukt. Probeer het opnieuw."})
+	}
+}
+
+// analyzeBytes is the analysis core shared by Analyze and, later, the
+// document inbox. Starting from the file bytes it:
+//
+//   - loads the user's ledger accounts (Claude only suggests codes from that
+//     list) and takes the crediteuren account id from the same response,
+//   - serves the analysis from the per-user Redis cache or reads the
+//     document with Claude,
+//   - flags an earlier booking of the same bytes (duplicate marker),
+//   - parks the file in R2 so SubmitFull/SubmitReceipt can fetch it by
+//     uploadKey,
+//   - looks up the supplier relation and ranks the candidate bank lines.
+//
+// It writes nothing to the response. The returned gin.H is the
+// InvoiceAnalyzeResponse body; errors are typed so callers can map them with
+// writeAnalyzeError: errNoAPIKey, claude.ErrUnsupportedMediaType,
+// eboekhouden.ErrSessionExpired and *claudeReadError. e-boekhouden lookups
+// that fail for any other reason are best-effort and leave their part of the
+// response empty, as the endpoint always did.
+func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData, data []byte, mediaType, filename string) (gin.H, error) {
+	ctx := c.Request.Context()
+
+	ext := documentExtension(mediaType)
+	if ext == "" {
+		return nil, claude.ErrUnsupportedMediaType
+	}
+
+	apiKey, err := h.getAPIKey(c, sess.UserID)
+	if err != nil {
+		return nil, errNoAPIKey
+	}
+
+	// Fetch the user's actual ledger accounts so Claude only suggests valid
+	// codes. The crediteuren account the frontend needs comes from the same
+	// rows (first account in category CRED).
 	var accounts []claude.LedgerAccountInfo
+	var crediteurenId int
 	ebClient := session.ClientFromContext(c)
 	if ebClient != nil {
 		raw, err := ebClient.GetActiveLedgerAccounts()
+		if errors.Is(err, eboekhouden.ErrSessionExpired) {
+			return nil, err
+		}
 		if err == nil {
 			var accs []map[string]any
 			if json.Unmarshal(raw, &accs) == nil {
@@ -151,22 +291,27 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 					if code != "" && omschr != "" {
 						accounts = append(accounts, claude.LedgerAccountInfo{Code: code, Omschrijving: omschr})
 					}
+					if cat, _ := a["rekeningCategorie"].(string); crediteurenId == 0 && strings.EqualFold(cat, "CRED") {
+						if id, ok := a["id"].(float64); ok {
+							crediteurenId = int(id)
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// Content-addressed analysis cache: hash the PDF bytes + the user's
+	// Content-addressed analysis cache: hash the file bytes + the user's
 	// ledger accounts (because the suggested grootboekcode is a function
 	// of the available accounts) and check Redis before calling Claude.
-	// A second upload of the same PDF returns the same JSON instantly,
+	// A second upload of the same file returns the same JSON instantly,
 	// instead of re-classifying with non-deterministic outputs.
-	pdfHash := invoicePDFContentHash(pdfBytes)
-	cacheKey := invoiceAnalysisCacheKey(sess.UserID, pdfBytes, accounts)
+	pdfHash := invoicePDFContentHash(data)
+	cacheKey := invoiceAnalysisCacheKey(sess.UserID, data, accounts)
 	var invoice *claude.InvoiceData
 	cacheHit := false
 	if h.redis != nil {
-		if cached, err := h.redis.Get(c.Request.Context(), cacheKey).Bytes(); err == nil {
+		if cached, err := h.redis.Get(ctx, cacheKey).Bytes(); err == nil {
 			var cachedInvoice claude.InvoiceData
 			if json.Unmarshal(cached, &cachedInvoice) == nil {
 				// Entries cached before documentType existed have it empty;
@@ -179,17 +324,18 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		}
 	}
 	if invoice == nil {
-		fresh, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, "application/pdf", pdfBase64, accounts)
+		fresh, err := h.claude.ReadInvoice(ctx, apiKey, mediaType, base64.StdEncoding.EncodeToString(data), accounts)
 		if err != nil {
-			log.Printf("Claude invoice read error: %v", err)
-			c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
-			return
+			if errors.Is(err, claude.ErrUnsupportedMediaType) {
+				return nil, err
+			}
+			return nil, &claudeReadError{err: err}
 		}
 		invoice = fresh
 		// Best-effort cache write — failures are logged but never fail the request.
 		if h.redis != nil {
 			if body, err := json.Marshal(invoice); err == nil {
-				if setErr := h.redis.Set(c.Request.Context(), cacheKey, body, invoiceAnalysisCacheTTL).Err(); setErr != nil {
+				if setErr := h.redis.Set(ctx, cacheKey, body, invoiceAnalysisCacheTTL).Err(); setErr != nil {
 					log.Printf("Invoice analyze cache write error: %v", setErr)
 				}
 			}
@@ -197,13 +343,13 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 	}
 
 	// Duplicate-upload detection: if the user previously booked the same
-	// PDF (same content hash) we surface the prior mutNr + datum in the
+	// file (same content hash) we surface the prior mutNr + datum in the
 	// response so the dialog can warn before they accidentally book it
 	// again. Scoped per user via the submission marker key.
 	var alreadySubmitted *invoiceSubmittedMarker
 	if h.redis != nil {
 		markerKey := invoiceSubmittedMarkerKey(sess.UserID, pdfHash)
-		if raw, err := h.redis.Get(c.Request.Context(), markerKey).Bytes(); err == nil {
+		if raw, err := h.redis.Get(ctx, markerKey).Bytes(); err == nil {
 			var marker invoiceSubmittedMarker
 			if json.Unmarshal(raw, &marker) == nil {
 				alreadySubmitted = &marker
@@ -213,14 +359,16 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		}
 	}
 
-	// Store PDF temporarily in R2 for later submission
+	// Store the file temporarily in R2 for later submission. The key carries
+	// the real extension and the object its real content type; SubmitFull
+	// and SubmitReceipt read it back by key.
 	var uploadKey string
 	var pdfURL string
 	if h.r2 != nil {
-		uploadKey = fmt.Sprintf("uploads/%s/document.pdf", uuid.New().String())
-		h.r2.Upload(c.Request.Context(), uploadKey, pdfBytes, "application/pdf")
+		uploadKey = fmt.Sprintf("uploads/%s/document.%s", uuid.New().String(), ext)
+		h.r2.Upload(ctx, uploadKey, data, mediaType)
 		// Generate a signed URL (15 min TTL) — never expose raw public URLs for financial docs
-		signed, err := h.r2.GeneratePresignedURL(c.Request.Context(), uploadKey)
+		signed, err := h.r2.GeneratePresignedURL(ctx, uploadKey)
 		if err == nil {
 			pdfURL = signed
 		}
@@ -228,101 +376,45 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 
 	// Search for matching relation
 	var matchedRelation *gin.H
-	if invoice.Leverancier != "" {
-		client := session.ClientFromContext(c)
-		if client != nil {
-			raw, err := client.SearchRelations(invoice.Leverancier)
-			if err == nil {
-				var relations []map[string]any
-				if json.Unmarshal(raw, &relations) == nil && len(relations) > 0 {
-					r := relations[0]
-					matchedRelation = &gin.H{
-						"id":      r["id"],
-						"code":    r["code"],
-						"bedrijf": r["bedrijf"],
-					}
-				}
-			}
+	if invoice.Leverancier != "" && ebClient != nil {
+		raw, err := ebClient.SearchRelations(invoice.Leverancier)
+		if errors.Is(err, eboekhouden.ErrSessionExpired) {
+			return nil, err
 		}
-	}
-
-	// Try to match against unprocessed bank statement lines.
-	//
-	// For EUR invoices the bedrag matches the bank line within 2 cents.
-	// For non-EUR invoices (Tesla Supercharger receipts in CHF, foreign
-	// hotels, USD/GBP SaaS) we convert the invoice total to an approximate
-	// EUR value and match within a wider tolerance to absorb the FX margin
-	// the user's bank applied. The matched bank line carries the user's
-	// real EUR amount — the FX estimate is only used to FIND the right
-	// line, not to book any number. We surface the fuzzy match to the
-	// frontend via "currencyConverted" so the user knows to verify.
-	var matchedBankLine *gin.H
-	if invoice.BedragInclBTW > 0 {
-		client := session.ClientFromContext(c)
-		if client != nil {
-			raw, err := client.GetImportGrid(0, 500)
-			if err == nil {
-				rows, _, _ := eboekhouden.ParseImportGrid(raw)
-
-				eurEstimate, fxConverted := convertToEUR(invoice.BedragInclBTW, invoice.Currency)
-				for _, row := range rows {
-					bedrag, _ := toFloat(row["mutBedrag"])
-					if bedrag >= 0 {
-						continue // we only match outgoing payments to invoices
-					}
-					absBedrag := abs(bedrag)
-
-					var hit bool
-					if !fxConverted {
-						// EUR: tight 2-cent tolerance to avoid false positives
-						hit = abs(absBedrag-invoice.BedragInclBTW) < 0.02
-					} else {
-						// Non-EUR: relative tolerance around the FX estimate
-						diff := abs(absBedrag - eurEstimate)
-						hit = diff/eurEstimate < currencyMatchTolerance
-					}
-
-					if hit {
-						id, _ := toInt(row["id"])
-						matchedBankLine = &gin.H{
-							"id":                id,
-							"datum":             toString(row["mutDatum"]),
-							"bedrag":            bedrag,
-							"omschrijving":      toString(row["mutOmschrijving"]),
-							"currencyConverted": fxConverted,
-							"invoiceCurrency":   strings.ToUpper(invoice.Currency),
-							"invoiceAmount":     invoice.BedragInclBTW,
-						}
-						break
-					}
-				}
-			}
-		}
-	}
-
-	filename := "document.pdf"
-	if header != nil && header.Filename != "" {
-		filename = header.Filename
-	}
-
-	// Find crediteuren account ID by category for the frontend
-	var crediteurenId int
-	if ebClient != nil {
-		raw, err := ebClient.GetActiveLedgerAccounts()
 		if err == nil {
-			var fullAccs []map[string]any
-			if json.Unmarshal(raw, &fullAccs) == nil {
-				for _, fa := range fullAccs {
-					cat, _ := fa["rekeningCategorie"].(string)
-					if strings.EqualFold(cat, "CRED") {
-						if id, ok := fa["id"].(float64); ok {
-							crediteurenId = int(id)
-						}
-						break
-					}
+			var relations []map[string]any
+			if json.Unmarshal(raw, &relations) == nil && len(relations) > 0 {
+				r := relations[0]
+				matchedRelation = &gin.H{
+					"id":      r["id"],
+					"code":    r["code"],
+					"bedrijf": r["bedrijf"],
 				}
 			}
 		}
+	}
+
+	// Rank the unprocessed bank statement lines that could be this
+	// document's payment (see rankBankLineMatches for eligibility, the
+	// tolerances and the score). For non-EUR invoices the amount test goes
+	// through an approximate FX conversion; the candidate carries the user's
+	// real EUR amount and the estimate only serves to FIND the line, never
+	// to book a number. The frontend sees currencyConverted so it can ask
+	// the user to verify.
+	candidates := []BankLineCandidate{}
+	if ebClient != nil && bankLineMatchable(invoice) {
+		raw, err := ebClient.GetImportGrid(0, importGridFetchLimit)
+		if errors.Is(err, eboekhouden.ErrSessionExpired) {
+			return nil, err
+		}
+		if err == nil {
+			rows, _, _ := eboekhouden.ParseImportGrid(raw)
+			candidates = rankBankLineMatches(invoice, rows, nil)
+		}
+	}
+	var matchedBankLine map[string]any
+	if len(candidates) > 0 {
+		matchedBankLine = candidates[0].legacyJSON()
 	}
 
 	resp := gin.H{
@@ -330,18 +422,21 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		"uploadKey":       uploadKey,
 		"pdfUrl":          pdfURL,
 		"matchedBankLine": matchedBankLine,
-		"filename":        filename,
-		"matchedRelation": matchedRelation,
-		"crediteurenId":   crediteurenId,
+		// bankLineCandidates is the full ranking (best first, at most three)
+		// so the UI can offer a choice. Always an array, never null.
+		"bankLineCandidates": candidates,
+		"filename":           filename,
+		"matchedRelation":    matchedRelation,
+		"crediteurenId":      crediteurenId,
 		// pdfHash is echoed back so SubmitFull can write the submission
-		// marker without rehashing the PDF (which we'd otherwise need to
+		// marker without rehashing the file (which we'd otherwise need to
 		// re-download from R2). The frontend treats it as opaque.
 		"pdfHash": pdfHash,
 		// cachedAnalysis lets the UI surface a small "eerder geanalyseerd"
 		// hint so the user knows why the result feels familiar.
 		"cachedAnalysis": cacheHit,
 	}
-	// alreadySubmitted is set when the same PDF (by content hash) was
+	// alreadySubmitted is set when the same file (by content hash) was
 	// previously booked successfully via SubmitFull. The dialog renders a
 	// loud Dutch warning so the user can decide whether they really want
 	// to book it again — typical case is accidentally re-uploading from
@@ -356,7 +451,7 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 			"submittedAt":  alreadySubmitted.SubmittedAt.Format(time.RFC3339),
 		}
 	}
-	c.JSON(http.StatusOK, resp)
+	return resp, nil
 }
 
 // SubmitFull handles POST /api/v1/invoices/submit-full
@@ -476,7 +571,8 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	//
 	// Folder selection: prefer the explicit user choice (FolderID from the
 	// frontend picker); when zero AND R2 is in play, keep the legacy auto
-	// "Inkoopfacturen/jaar/maand" behavior so R2 deployments don't regress.
+	// "Facturen/<jaar>/<NN Maand>" behavior (findOrCreateArchiveFolder) so R2
+	// deployments don't regress.
 	// Self-hosted clients without R2 that omit FolderID skip archiving — an
 	// explicit opt-out, not a silent failure.
 	var archiefFileId int
@@ -589,7 +685,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		// "Betaling X Y" string because it's literally what shows up on
 		// the bank statement.
 		bankLineOmschrijving := ""
-		raw, err := client.GetImportGrid(0, 500)
+		raw, err := client.GetImportGrid(0, importGridFetchLimit)
 		if err == nil {
 			rows, _, _ := eboekhouden.ParseImportGrid(raw)
 			for _, row := range rows {
@@ -837,7 +933,7 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	// in the same administration (e.g. savings, investment).
 	bankAccountId := 0
 	if req.ImportId > 0 {
-		raw, err := client.GetImportGrid(0, 500)
+		raw, err := client.GetImportGrid(0, importGridFetchLimit)
 		if err == nil {
 			rows, _, _ := eboekhouden.ParseImportGrid(raw)
 			for _, row := range rows {

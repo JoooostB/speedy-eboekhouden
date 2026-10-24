@@ -83,7 +83,7 @@ func main() {
 	settingsHandler := handler.NewSettingsHandler(db, encKey)
 	passkeySettingsHandler := handler.NewPasskeySettingsHandler(db)
 	learnedSettingsHandler := handler.NewLearnedSettingsHandler(db)
-	invoiceHandler := handler.NewInvoiceHandler(claudeSvc, db, encKey, r2Client, redisClient)
+	invoiceHandler := handler.NewInvoiceHandler(claudeSvc, db, encKey, r2Client, redisClient, store)
 	avatarHandler := handler.NewAvatarHandler(r2Client, db)
 	classifyHandler := handler.NewClassifyHandler(claudeSvc, db, encKey)
 	inboxHandler := handler.NewInboxHandler(claudeSvc, db, encKey, redisClient, r2Client, store)

@@ -98,7 +98,7 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 	}
 
 	// Fetch unprocessed lines
-	raw, err := client.GetImportGrid(0, 2000)
+	raw, err := client.GetImportGrid(0, importGridFetchLimit)
 	if err != nil {
 		if h.handleEBError(c, sess, err) {
 			return
@@ -459,7 +459,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		datum        string
 	}
 	bankLineMetaByID := make(map[int]bankLineMeta)
-	if gridRaw, gridErr := client.GetImportGrid(0, 2000); gridErr == nil {
+	if gridRaw, gridErr := client.GetImportGrid(0, importGridFetchLimit); gridErr == nil {
 		if rows, _, parseErr := eboekhouden.ParseImportGrid(gridRaw); parseErr == nil {
 			for _, row := range rows {
 				id, _ := toInt(row["id"])
