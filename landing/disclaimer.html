@@ -109,10 +109,11 @@
                 <ul>
                     <li><strong>Inloggegevens</strong> (e-mailadres en wachtwoord): worden direct doorgestuurd naar e-boekhouden.nl en niet opgeslagen.</li>
                     <li><strong>MFA-codes</strong>: worden direct doorgestuurd naar e-boekhouden.nl en niet opgeslagen.</li>
-                    <li><strong>Sessie-token</strong>: wordt tijdelijk in het werkgeheugen (RAM) bewaard en automatisch verwijderd na 30 minuten inactiviteit of bij uitloggen.</li>
-                    <li><strong>Medewerkerslijsten, projecten en activiteiten</strong>: worden on-the-fly opgehaald bij e-boekhouden.nl en direct naar je browser gestuurd, niet opgeslagen of gecachet.</li>
+                    <li><strong>Sessie-token</strong>: wordt versleuteld (AES-256-GCM) bewaard in Redis en in PostgreSQL, zodat je verbinding met e-boekhouden.nl een nieuwe login overleeft, en wordt gewist zodra e-boekhouden.nl de sessie ongeldig verklaart.</li>
+                    <li><strong>Je administratie</strong> (medewerkers, projecten, afschriften, mutaties, relaties, archief): wordt on-the-fly opgehaald bij e-boekhouden.nl en direct naar je browser gestuurd, niet opgeslagen.</li>
+                    <li><strong>AI-analyses en geleerde boekingen</strong>: de uitkomst van een analyse die jij start (leverancier, factuurnummer, datum, bedragen) wordt tijdelijk in Redis bewaard, maximaal 90 dagen; de grootboekrekening en BTW-code die je voor terugkerende betalingen kiest, worden per account in PostgreSQL bewaard en zijn via Instellingen te verwijderen.</li>
                 </ul>
-                <p>Speedy e-Boekhouden heeft <strong>geen database</strong> en schrijft geen gegevens naar schijf. Zie onze <a href="/beveiliging">beveiligingspagina</a> voor een volledig technisch overzicht.</p>
+                <p>Speedy e-Boekhouden bewaart accountgegevens, versleutelde sleutels en tokens en geleerde boekingen in een PostgreSQL-database, en sessies en tijdelijke caches in Redis. Zie onze <a href="/beveiliging">beveiligingspagina</a> voor een volledig technisch overzicht.</p>
             </div>
 
             <div class="sec-legal-block">
