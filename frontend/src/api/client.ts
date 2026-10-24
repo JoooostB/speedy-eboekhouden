@@ -25,6 +25,8 @@ import type {
   MeResponse,
   Mutatie,
   OpenPost,
+  OpenPostGridItem,
+  OpenPostSoort,
   Relation,
   RestCostCenter,
   RestInvoicesResponse,
@@ -516,6 +518,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ entityType }),
     });
+  },
+
+  // Open posts from the web-UI grid (needs only the e-boekhouden session)
+  getOpenPosts(soort: OpenPostSoort) {
+    return request<OpenPostGridItem[]>(`/openposts?soort=${encodeURIComponent(soort)}`);
   },
 
   // SOAP API endpoints

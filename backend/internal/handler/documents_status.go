@@ -18,7 +18,7 @@ const (
 	docStatusLinked         = "linked"          // already linked to a mutation in e-boekhouden
 	docStatusIgnored        = "ignored"         // hidden by the user in Speedy
 	docStatusUnsupported    = "unsupported"     // extension the analyser cannot read (XML/UBL, …)
-	docStatusJunk           = "junk"            // tiny image: logo, signature, tracking pixel
+	docStatusJunk           = "junk"            // tiny unanalysed image: logo, signature, tracking pixel
 	docStatusDuplicate      = "duplicate"       // the same bytes were booked before
 	docStatusNotInvoice     = "not_invoice"     // analysed as "overig"
 	docStatusMatched        = "matched"         // analysed and assigned to a bank line
@@ -27,8 +27,9 @@ const (
 	docStatusNew            = "new"             // not analysed
 )
 
-// junkImageMaxSize is the size below which an image is treated as junk
-// without spending an AI call: no readable receipt or invoice fits in it.
+// junkImageMaxSize is the size below which an unanalysed image is treated as
+// junk without spending an AI call: no readable receipt or invoice fits in it.
+// Once the user forces an analysis the result speaks for itself.
 const junkImageMaxSize = 15 * 1024
 
 // docStatusInput collects everything documentStatus looks at.
@@ -61,7 +62,7 @@ func documentStatus(in docStatusInput) string {
 		return docStatusIgnored
 	case in.MediaType == "":
 		return docStatusUnsupported
-	case strings.HasPrefix(in.MediaType, "image/") && in.Size < junkImageMaxSize:
+	case in.Analysis == nil && strings.HasPrefix(in.MediaType, "image/") && in.Size < junkImageMaxSize:
 		return docStatusJunk
 	case in.AlreadySubmitted:
 		return docStatusDuplicate

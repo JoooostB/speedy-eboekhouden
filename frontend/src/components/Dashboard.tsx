@@ -23,6 +23,7 @@ import { api } from "../api/client";
 import { track } from "../analytics";
 import { useAuth } from "../context/AuthContext";
 import type { InboxSummary, InboxCategory } from "../api/types";
+import { toInboxProcessItem } from "./inbox/inboxBooking";
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -109,20 +110,9 @@ export function Dashboard() {
       const autoItems = res.classifications.filter((c) => c.category === "auto");
 
       if (autoItems.length > 0) {
-        const soortCodes: Record<string, number> = {
-          FactuurOntvangen: 1, FactuurVerstuurd: 2,
-          FactuurbetalingOntvangen: 3, FactuurbetalingVerstuurd: 4,
-          GeldOntvangen: 5, GeldUitgegeven: 6, Memoriaal: 7,
-        };
-        const items = autoItems.map((item: any) => ({
-          id: item.id,
-          grootboekId: item.grootboekId || 0,
-          soort: soortCodes[item.soort] || 6,
-          grootboekcode: item.grootboekcode,
-          btwCode: item.btwCode,
-          omschrijving: item.aiOmschrijving || item.omschrijving,
-          bedrag: Math.abs(item.bedrag),
-        }));
+        // Shared payload builder: open-post matches are "auto" too and need
+        // their relation and invoice number to reach the backend.
+        const items = autoItems.map((item) => toInboxProcessItem(item));
 
         await api.processInboxBatch(items);
         track("Inbox Auto Process", { count: String(autoItems.length) });

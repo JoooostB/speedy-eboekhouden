@@ -4,6 +4,7 @@ import type { InboxClassification, InboxProcessItem, InboxProcessResult, LedgerA
 import { api } from "../../api/client";
 import { track } from "../../analytics";
 import { BookingConfirmDialog } from "./BookingConfirmDialog";
+import { toInboxProcessItem } from "./inboxBooking";
 
 interface Props {
   selected: InboxClassification[];
@@ -38,22 +39,9 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
     setResults(null);
     setDialogError(null);
 
-    // Map MutatieSoort names to numeric codes for the API
-    const soortCodes: Record<string, number> = {
-      FactuurOntvangen: 1, FactuurVerstuurd: 2,
-      FactuurbetalingOntvangen: 3, FactuurbetalingVerstuurd: 4,
-      GeldOntvangen: 5, GeldUitgegeven: 6, Memoriaal: 7,
-    };
-
-    const items: InboxProcessItem[] = editedItems.map((item) => ({
-      id: item.id,
-      grootboekId: item.grootboekId,
-      soort: soortCodes[item.soort] || 6,
-      grootboekcode: item.grootboekcode,
-      btwCode: item.btwCode,
-      omschrijving: item.aiOmschrijving || item.omschrijving,
-      bedrag: Math.abs(item.bedrag),
-    }));
+    // Shared payload builder: a factuurbetaling row (open-post match) carries
+    // its relation and invoice number through to the backend.
+    const items: InboxProcessItem[] = editedItems.map((item) => toInboxProcessItem(item));
 
     try {
       // Process in chunks of 20 to show meaningful progress

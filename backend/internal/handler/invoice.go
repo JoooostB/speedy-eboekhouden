@@ -783,7 +783,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	// Invalidate inbox classification cache so "Vernieuwen" fetches fresh data
 	sess := session.FromContext(c)
 	if sess != nil && h.redis != nil {
-		h.redis.Del(c.Request.Context(), fmt.Sprintf("inbox:classify:%s", sess.UserID))
+		h.redis.Del(c.Request.Context(), inboxClassifyKey(sess.UserID))
 	}
 
 	// Write the duplicate-detection marker so a future re-upload of this
@@ -1120,7 +1120,7 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	// Invalidate inbox cache so the bank line disappears from the inbox view.
 	sess := session.FromContext(c)
 	if sess != nil && h.redis != nil {
-		h.redis.Del(c.Request.Context(), fmt.Sprintf("inbox:classify:%s", sess.UserID))
+		h.redis.Del(c.Request.Context(), inboxClassifyKey(sess.UserID))
 	}
 
 	c.JSON(http.StatusOK, gin.H{

@@ -104,6 +104,9 @@ type mailDocument struct {
 	Match            map[string]any      `json:"match,omitempty"`
 	Candidates       []BankLineCandidate `json:"candidates,omitempty"`
 	AlreadySubmitted gin.H               `json:"alreadySubmitted,omitempty"`
+	// matchedLineID is the id of the bank line in Match, 0 without one. The
+	// bank-line inbox reads it to annotate the line with this document.
+	matchedLineID int
 }
 
 // archiveFolder is one entry of GET /v1/api/folder/directory.
@@ -324,7 +327,7 @@ func (h *InvoiceHandler) ListDocuments(c *gin.Context) {
 		return
 	}
 
-	docs, ignoredCount, err := h.buildDocumentList(ctx, client, sess.UserID, files)
+	docs, ignoredCount, err := buildDocumentList(ctx, h.redis, client, sess.UserID, files, fetchImportGridRows(client))
 	if err != nil {
 		h.writeDocumentsError(c, sess, err)
 		return
@@ -339,16 +342,16 @@ func (h *InvoiceHandler) ListDocuments(c *gin.Context) {
 
 // loadDocumentAnalyses fetches the cached analyses for fileIDs in one round
 // trip. Missing or unreadable entries are absent from the result.
-func (h *InvoiceHandler) loadDocumentAnalyses(ctx context.Context, userID string, fileIDs []int) map[int]*documentAnalysisEntry {
+func loadDocumentAnalyses(ctx context.Context, rdb *redis.Client, userID string, fileIDs []int) map[int]*documentAnalysisEntry {
 	entries := make(map[int]*documentAnalysisEntry)
-	if h.redis == nil || len(fileIDs) == 0 {
+	if rdb == nil || len(fileIDs) == 0 {
 		return entries
 	}
 	keys := make([]string, len(fileIDs))
 	for i, id := range fileIDs {
 		keys[i] = documentAnalysisKey(userID, id)
 	}
-	values, err := h.redis.MGet(ctx, keys...).Result()
+	values, err := rdb.MGet(ctx, keys...).Result()
 	if err != nil {
 		log.Printf("Documents: analysis cache read error: %v", err)
 		return entries
@@ -368,16 +371,16 @@ func (h *InvoiceHandler) loadDocumentAnalyses(ctx context.Context, userID string
 
 // loadSubmittedMarkers fetches the invoice:submitted markers for the given
 // content hashes in one round trip, keyed by hash.
-func (h *InvoiceHandler) loadSubmittedMarkers(ctx context.Context, userID string, hashes []string) map[string]*invoiceSubmittedMarker {
+func loadSubmittedMarkers(ctx context.Context, rdb *redis.Client, userID string, hashes []string) map[string]*invoiceSubmittedMarker {
 	markers := make(map[string]*invoiceSubmittedMarker)
-	if h.redis == nil || len(hashes) == 0 {
+	if rdb == nil || len(hashes) == 0 {
 		return markers
 	}
 	keys := make([]string, len(hashes))
 	for i, hash := range hashes {
 		keys[i] = invoiceSubmittedMarkerKey(userID, hash)
 	}
-	values, err := h.redis.MGet(ctx, keys...).Result()
+	values, err := rdb.MGet(ctx, keys...).Result()
 	if err != nil {
 		return markers
 	}
@@ -394,19 +397,47 @@ func (h *InvoiceHandler) loadSubmittedMarkers(ctx context.Context, userID string
 	return markers
 }
 
+// gridRowsSource supplies the import-grid rows a document list is matched
+// against. buildDocumentList calls it at most once, and only when an analysed
+// document can match a bank line at all.
+type gridRowsSource func() ([]map[string]any, error)
+
+// fetchImportGridRows is the gridRowsSource that fetches and parses the
+// import grid from e-boekhouden.
+func fetchImportGridRows(client *eboekhouden.Client) gridRowsSource {
+	return func() ([]map[string]any, error) {
+		raw, err := client.GetImportGrid(0, importGridFetchLimit)
+		if err != nil {
+			return nil, err
+		}
+		rows, _, err := eboekhouden.ParseImportGrid(raw)
+		return rows, err
+	}
+}
+
+// staticGridRows is the gridRowsSource for rows the caller already has, so a
+// request that fetched the grid for its own purposes does not fetch it twice.
+func staticGridRows(rows []map[string]any) gridRowsSource {
+	return func() ([]map[string]any, error) { return rows, nil }
+}
+
 // buildDocumentList turns the mail-folder listing into mailDocuments: cached
-// analyses and duplicate markers from Redis, candidate bank lines from one
-// import-grid fetch (skipped when no analysed document can match), and the
+// analyses and duplicate markers from Redis, candidate bank lines from the
+// grid rows (fetched only when an analysed document can match), and the
 // global assignment so no bank line is offered to two documents. Only an
 // expired e-boekhouden session is returned as an error; a failed grid fetch
 // just leaves the documents unmatched.
-func (h *InvoiceHandler) buildDocumentList(ctx context.Context, client *eboekhouden.Client, userID string, files []eboekhouden.ArchiveFile) ([]mailDocument, int, error) {
+//
+// GET /documents and the bank-line inbox (ClassifyBatch) both build their
+// view from this function, so the two sides always agree on which document
+// belongs to which bank line.
+func buildDocumentList(ctx context.Context, rdb *redis.Client, client *eboekhouden.Client, userID string, files []eboekhouden.ArchiveFile, grid gridRowsSource) ([]mailDocument, int, error) {
 	ids := make([]int, len(files))
 	for i, f := range files {
 		ids[i] = f.ID
 	}
-	ignored := ignoredDocuments(ctx, h.redis, userID)
-	entries := h.loadDocumentAnalyses(ctx, userID, ids)
+	ignored := ignoredDocuments(ctx, rdb, userID)
+	entries := loadDocumentAnalyses(ctx, rdb, userID, ids)
 
 	invoices := make(map[int]*claude.InvoiceData, len(entries))
 	var hashes []string
@@ -424,17 +455,17 @@ func (h *InvoiceHandler) buildDocumentList(ctx context.Context, client *eboekhou
 			needGrid = true
 		}
 	}
-	markers := h.loadSubmittedMarkers(ctx, userID, hashes)
+	markers := loadSubmittedMarkers(ctx, rdb, userID, hashes)
 
 	candidates := make(map[int][]BankLineCandidate)
 	if needGrid {
-		raw, err := client.GetImportGrid(0, importGridFetchLimit)
+		rows, err := grid()
 		if errors.Is(err, eboekhouden.ErrSessionExpired) {
 			return nil, 0, err
 		}
 		if err != nil {
 			log.Printf("Documents: import grid fetch failed, listing without matches: %v", err)
-		} else if rows, _, perr := eboekhouden.ParseImportGrid(raw); perr == nil {
+		} else {
 			for id, inv := range invoices {
 				if bankLineMatchable(inv) {
 					candidates[id] = rankBankLineMatches(inv, rows, nil)
@@ -473,6 +504,7 @@ func (h *InvoiceHandler) buildDocumentList(ctx context.Context, client *eboekhou
 			var matchPtr *BankLineCandidate
 			if hasMatch {
 				doc.Match = match.legacyJSON()
+				doc.matchedLineID = match.ID
 				matchPtr = &match
 			}
 			doc.Analysis = withFreshMatches(entry.Response, matchPtr, candidates[f.ID])
@@ -579,7 +611,7 @@ func (h *InvoiceHandler) AnalyzeDocument(c *gin.Context) {
 	cacheKey := documentAnalysisKey(sess.UserID, id)
 	if force {
 		h.redis.Del(ctx, cacheKey)
-	} else if entry := h.loadDocumentAnalyses(ctx, sess.UserID, []int{id})[id]; entry != nil {
+	} else if entry := loadDocumentAnalyses(ctx, h.redis, sess.UserID, []int{id})[id]; entry != nil {
 		c.JSON(http.StatusOK, h.documentAnalysisResponse(ctx, sess.UserID, file, entry))
 		return
 	}
@@ -634,7 +666,7 @@ func (h *InvoiceHandler) documentAnalysisResponse(ctx context.Context, userID st
 	hasMatch := resp["matchedBankLine"] != nil
 	alreadySubmitted := false
 	if entry.PdfHash != "" {
-		alreadySubmitted = len(h.loadSubmittedMarkers(ctx, userID, []string{entry.PdfHash})) > 0
+		alreadySubmitted = len(loadSubmittedMarkers(ctx, h.redis, userID, []string{entry.PdfHash})) > 0
 	}
 	ignored := ignoredDocuments(ctx, h.redis, userID)[file.ID]
 	title, subtitle := documentTitle(file, inv)
@@ -887,7 +919,7 @@ func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 	for _, f := range files {
 		byID[f.ID] = f
 	}
-	entries := h.loadDocumentAnalyses(ctx, sess.UserID, ids)
+	entries := loadDocumentAnalyses(ctx, h.redis, sess.UserID, ids)
 
 	type movedItem struct {
 		ID             int    `json:"id"`

@@ -342,6 +342,26 @@ export interface OpenPost {
   vervalDatum?: string;
 }
 
+/** One outstanding invoice from GET /openposts (the open-post grid of the
+ *  e-boekhouden web UI, no SOAP needed). Dutch field names as e-boekhouden
+ *  sends them; teOntvangen is the amount still open. */
+export interface OpenPostGridItem {
+  mutDatum: string;
+  sBedrag: number;
+  mutFactuur: string;
+  mutNr: number;
+  relatieCode: string;
+  relatieId: number;
+  bedrijf: string;
+  sBetaald: number;
+  teOntvangen: number;
+  vervaldatum: string;
+  mutOmschrijving: string;
+  mutSoort: number;
+}
+
+export type OpenPostSoort = "Crediteur" | "Debiteur";
+
 export interface Saldo {
   code: string;
   omschrijving: string;
@@ -434,6 +454,22 @@ export interface InboxClassification {
   /** True when this row was filled in from the user's learned classification
    *  memory rather than a fresh Claude call. The UI shows a small badge. */
   learned?: boolean;
+  /** Relation of the open invoice this line pays (open-post match only). */
+  relatieId?: number;
+  /** Company name of that relation, for labels and the confirm dialog. */
+  relatieNaam?: string;
+  /** Invoice number of the open invoice this line pays. */
+  factuurnummer?: string;
+  /** True when the suggestion comes from an outstanding invoice in
+   *  e-boekhouden: the line is booked as a factuurbetaling on it. */
+  openPostMatch?: boolean;
+  /** The analysed mail-folder document whose payment this line is. */
+  documentMatch?: InboxDocumentMatch;
+}
+
+export interface InboxDocumentMatch {
+  fileId: number;
+  title: string;
 }
 
 export interface LearnedClassification {
