@@ -203,6 +203,25 @@ func TestStripLegalForms(t *testing.T) {
 	}
 }
 
+func TestArchiveMediaType(t *testing.T) {
+	tests := map[string]string{
+		"factuur.pdf":    "application/pdf",
+		"bon.JPG":        "image/jpeg",
+		"scan.jpeg":      "image/jpeg",
+		"scan.png":       "image/png",
+		"ubl.xml":        "xml", // unsupported: the bare extension is kept
+		"archive.ZIP":    "ZIP",
+		"noext":          "",
+		".hidden":        "",
+		"my.invoice.pdf": "application/pdf",
+	}
+	for name, want := range tests {
+		if got := archiveMediaType(name); got != want {
+			t.Errorf("archiveMediaType(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestUniqueName(t *testing.T) {
 	existing := map[string]bool{
 		"2026-09-30_coolblue_2026-0042.pdf":   true,

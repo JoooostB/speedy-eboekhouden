@@ -11,7 +11,6 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -475,13 +474,17 @@ func submittedMarkerJSON(m *invoiceSubmittedMarker) gin.H {
 }
 
 // SubmitFull handles POST /api/v1/invoices/submit-full
-// This is the complete chain: archive upload → mutation → file link.
+// This is the complete chain: archive file → mutation → file link → (for a
+// mail-folder document) rename and move. See invoice_archive.go for the
+// archive phases.
 func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
+	sess := session.FromContext(c)
 	client := session.ClientFromContext(c)
-	if client == nil {
+	if sess == nil || client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
 		return
 	}
+	ctx := c.Request.Context()
 
 	var req struct {
 		// Invoice details (from Claude + user review)
@@ -500,18 +503,30 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		TegenRekeningId int `json:"tegenRekeningId"` // cost account
 		RekeningId      int `json:"rekeningId"`      // crediteuren account
 
-		// PDF reference. Two sources are supported and PdfBase64 wins when
-		// both are provided so a client can opt out of R2 entirely:
-		//   - PdfBase64: PDF inlined as base64 (self-hosted, no R2 needed)
+		// Document source. Three are supported; at most one may be given
+		// together with ArchiveFileId:
+		//   - PdfBase64: document inlined as base64 (self-hosted, no R2 needed);
+		//     wins over UploadKey when both are present
 		//   - UploadKey: R2 object key from a prior /invoices/analyze call
-		UploadKey string `json:"uploadKey"`
-		PdfBase64 string `json:"pdfBase64,omitempty"`
-		Filename  string `json:"filename"`
+		//   - ArchiveFileId: a file that already sits in the Mail & herken
+		//     folder; nothing is uploaded, the file is linked, renamed and
+		//     moved to TargetFolderId (or Facturen/<jaar>/<maand> when 0)
+		// Filename is accepted for compatibility but no longer used: the
+		// archive name follows archiveFileName.
+		UploadKey      string `json:"uploadKey"`
+		PdfBase64      string `json:"pdfBase64,omitempty"`
+		Filename       string `json:"filename"`
+		ArchiveFileId  int    `json:"archiveFileId,omitempty"`
+		TargetFolderId int    `json:"targetFolderId,omitempty"`
+		// DocumentType only influences the archive name: "creditnota" or
+		// (default) "factuur".
+		DocumentType string `json:"documentType,omitempty"`
 
-		// FolderID is the e-boekhouden archive folder the user picked. When
-		// zero we fall back to the legacy findOrCreateArchiveFolder behavior
-		// (only relevant for R2 deployments — self-hosted clients should
-		// always send a FolderID or skip archiving entirely).
+		// FolderID is the e-boekhouden archive folder the user picked for an
+		// upload. When zero we fall back to the legacy
+		// findOrCreateArchiveFolder behavior (only relevant for R2
+		// deployments — self-hosted clients should always send a FolderID or
+		// skip archiving entirely).
 		FolderID int `json:"folderId,omitempty"`
 
 		// Optional: bank statement line to mark as processed
@@ -583,54 +598,28 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		req.BTWCode = "HOOG_INK_21"
 	}
 
-	// Step 1: Upload PDF to e-boekhouden digitaal archief.
-	//
-	// PDF source: prefer the inlined PdfBase64 from the client (no R2 required)
-	// and fall back to an R2 download keyed by UploadKey for backward compat
-	// with deployments that still use the analyze→R2→submit flow.
-	//
-	// Folder selection: prefer the explicit user choice (FolderID from the
-	// frontend picker); when zero AND R2 is in play, keep the legacy auto
-	// "Facturen/<jaar>/<NN Maand>" behavior (findOrCreateArchiveFolder) so R2
-	// deployments don't regress.
-	// Self-hosted clients without R2 that omit FolderID skip archiving — an
-	// explicit opt-out, not a silent failure.
-	var archiefFileId int
-	var pdfBytes []byte
-	if req.PdfBase64 != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(req.PdfBase64); err != nil {
-			log.Printf("SubmitFull: invalid pdfBase64: %v", err)
-		} else {
-			pdfBytes = decoded
-		}
-	} else if req.UploadKey != "" && h.r2 != nil {
-		if downloaded, _, err := h.r2.Download(c.Request.Context(), req.UploadKey); err != nil {
-			log.Printf("R2 download error for %s: %v", req.UploadKey, err)
-		} else {
-			pdfBytes = downloaded
-		}
+	// Step 1: Resolve the document and stage the archive file. Every check
+	// that can fail the request happens here, before anything is booked; the
+	// upload itself stays best-effort as it always was.
+	src, err := h.prepareArchiveSource(ctx, client, archiveSourceInput{
+		archiveFileID:  req.ArchiveFileId,
+		targetFolderID: req.TargetFolderId,
+		pdfBase64:      req.PdfBase64,
+		uploadKey:      req.UploadKey,
+	})
+	if err != nil {
+		h.writeArchiveSourceError(c, sess, err)
+		return
 	}
-	if len(pdfBytes) > 0 {
-		folderID := req.FolderID
-		if folderID == 0 && h.r2 != nil {
-			datum, _ := time.Parse("2006-01-02", req.Datum)
-			if datum.IsZero() {
-				datum = time.Now()
-			}
-			if id, err := h.findOrCreateArchiveFolder(client, datum); err != nil {
-				log.Printf("Archive folder error: %v", err)
-			} else {
-				folderID = id
-			}
-		}
-		if folderID > 0 {
-			filename := req.Filename
-			if filename == "" {
-				filename = fmt.Sprintf("factuur_%s.pdf", req.Factuurnummer)
-			}
-			archiefFileId = h.uploadAndResolveArchiveFile(client, pdfBytes, folderID, filename)
-		}
-	}
+	datum := bookingDate(req.Datum)
+	archiveName := src.archiveName(archiveNameInput{
+		leverancier: req.Leverancier,
+		kenmerk:     req.Factuurnummer,
+		datum:       req.Datum,
+		docType:     submitFullDocType(req.DocumentType),
+	})
+	arch := h.stageArchiveFile(client, src, req.FolderID, datum, archiveName)
+	archiefFileId := arch.fileID
 
 	// Step 2: Create "Factuur ontvangen" mutation (soort 1)
 	// This books: debit cost account (tegenRekening), credit crediteuren (rekening)
@@ -767,29 +756,20 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		}
 	}
 
-	// Step 4: Link archived file to the invoice mutation
-	if archiefFileId > 0 && mutResult.MutNr > 0 {
-		linkPayload, _ := json.Marshal(map[string]any{
-			"koppelId":   mutResult.MutNr,
-			"folders":    []map[string]any{{"id": archiefFileId, "soort": "F"}},
-			"koppelType": "MUT",
-		})
-		_, err := client.LinkFileToMutation(linkPayload)
-		if err != nil {
-			log.Printf("File link error: %v", err)
-		}
-	}
+	// Step 4: Link the archive file to the invoice mutation, then (for a
+	// mail-folder document) rename it and move it out of the mail folder.
+	linked := linkArchiveFile(client, archiefFileId, mutResult.MutNr)
+	arch = h.completeArchive(ctx, client, sess.UserID, src, arch, linked, datum, archiveName)
 
 	// Invalidate inbox classification cache so "Vernieuwen" fetches fresh data
-	sess := session.FromContext(c)
-	if sess != nil && h.redis != nil {
-		h.redis.Del(c.Request.Context(), inboxClassifyKey(sess.UserID))
+	if h.redis != nil {
+		h.redis.Del(ctx, inboxClassifyKey(sess.UserID))
 	}
 
 	// Write the duplicate-detection marker so a future re-upload of this
 	// exact PDF surfaces an "already booked" warning at /analyze time.
 	// Best-effort: a marker write failure never blocks the booking response.
-	if sess != nil && h.redis != nil && req.PdfHash != "" && mutResult.MutNr > 0 {
+	if h.redis != nil && req.PdfHash != "" && mutResult.MutNr > 0 {
 		marker := invoiceSubmittedMarker{
 			MutNr:        mutResult.MutNr,
 			PaymentMutNr: paymentMutNr,
@@ -800,7 +780,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		}
 		if body, mErr := json.Marshal(marker); mErr == nil {
 			if setErr := h.redis.Set(
-				c.Request.Context(),
+				ctx,
 				invoiceSubmittedMarkerKey(sess.UserID, req.PdfHash),
 				body,
 				invoiceSubmittedMarkerTTL,
@@ -814,9 +794,10 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		"mutNr":        mutResult.MutNr,
 		"mutId":        mutResult.MutId,
 		"paymentMutNr": paymentMutNr,
-		"archived":     archiefFileId > 0,
-		"linked":       archiefFileId > 0 && mutResult.MutNr > 0,
 	}
+	// archived, linked, renamed, moved and, when set, archiveName,
+	// targetFolderId, targetFolderPath and archiveWarning.
+	arch.addTo(resp)
 	// Surface a Dutch payment-step warning to the frontend so the user
 	// sees that the bank-line clearing didn't happen. The FactuurOntvangen
 	// itself succeeded so we still return 200, but the warning lets the UI
@@ -836,11 +817,13 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 // This is the lightweight cousin of SubmitFull: one mutation instead of two,
 // no crediteurenrekening lookup, no relatie required.
 func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
+	sess := session.FromContext(c)
 	client := session.ClientFromContext(c)
-	if client == nil {
+	if sess == nil || client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
 		return
 	}
+	ctx := c.Request.Context()
 
 	// extraLine is one additional booking line within the same mutation.
 	// Used most commonly for restaurant tips: the receipt itself shows
@@ -868,12 +851,16 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		BTWBedrag       float64 `json:"btwBedrag"`
 		BTWCode         string  `json:"btwCode"`
 		TegenRekeningId int     `json:"tegenRekeningId"`
-		// PDF source: PdfBase64 (preferred, no R2 needed) or UploadKey + R2.
-		UploadKey string `json:"uploadKey"`
-		PdfBase64 string `json:"pdfBase64,omitempty"`
-		Filename  string `json:"filename"`
-		// FolderID is the picked archive folder; zero falls back to legacy
-		// auto-folder when R2 is configured.
+		// Document source: PdfBase64 (preferred, no R2 needed), UploadKey + R2,
+		// or ArchiveFileId for a file in the mail folder; see SubmitFull.
+		// Filename is accepted for compatibility but no longer used.
+		UploadKey      string `json:"uploadKey"`
+		PdfBase64      string `json:"pdfBase64,omitempty"`
+		Filename       string `json:"filename"`
+		ArchiveFileId  int    `json:"archiveFileId,omitempty"`
+		TargetFolderId int    `json:"targetFolderId,omitempty"`
+		// FolderID is the picked archive folder for an upload; zero falls
+		// back to legacy auto-folder when R2 is configured.
 		FolderID int `json:"folderId,omitempty"`
 		ImportId int `json:"importId,omitempty"`
 		// BankAccountId is the e-boekhouden internal ID of the bank account
@@ -991,46 +978,27 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		return
 	}
 
-	// Step 1: Upload PDF to e-boekhouden archive — see SubmitFull for the
-	// dual-source (PdfBase64 vs R2) + dual-folder (explicit vs legacy auto)
-	// rationale. Identical decision tree here, only the default filename
-	// differs ("bonnetje_…" instead of "factuur_…").
-	var archiefFileId int
-	var pdfBytes []byte
-	if req.PdfBase64 != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(req.PdfBase64); err != nil {
-			log.Printf("SubmitReceipt: invalid pdfBase64: %v", err)
-		} else {
-			pdfBytes = decoded
-		}
-	} else if req.UploadKey != "" && h.r2 != nil {
-		if downloaded, _, err := h.r2.Download(c.Request.Context(), req.UploadKey); err != nil {
-			log.Printf("R2 download error for %s: %v", req.UploadKey, err)
-		} else {
-			pdfBytes = downloaded
-		}
+	// Step 1: Resolve the document and stage the archive file — see SubmitFull
+	// and invoice_archive.go. A receipt has no invoice number, so its archive
+	// name ends in "bonnetje".
+	src, err := h.prepareArchiveSource(ctx, client, archiveSourceInput{
+		archiveFileID:  req.ArchiveFileId,
+		targetFolderID: req.TargetFolderId,
+		pdfBase64:      req.PdfBase64,
+		uploadKey:      req.UploadKey,
+	})
+	if err != nil {
+		h.writeArchiveSourceError(c, sess, err)
+		return
 	}
-	if len(pdfBytes) > 0 {
-		folderID := req.FolderID
-		if folderID == 0 && h.r2 != nil {
-			datum, _ := time.Parse("2006-01-02", req.Datum)
-			if datum.IsZero() {
-				datum = time.Now()
-			}
-			if id, err := h.findOrCreateArchiveFolder(client, datum); err != nil {
-				log.Printf("Archive folder error: %v", err)
-			} else {
-				folderID = id
-			}
-		}
-		if folderID > 0 {
-			filename := req.Filename
-			if filename == "" {
-				filename = fmt.Sprintf("bonnetje_%s_%s.pdf", req.Datum, req.Leverancier)
-			}
-			archiefFileId = h.uploadAndResolveArchiveFile(client, pdfBytes, folderID, filename)
-		}
-	}
+	datum := bookingDate(req.Datum)
+	archiveName := src.archiveName(archiveNameInput{
+		leverancier: req.Leverancier,
+		datum:       req.Datum,
+		docType:     claude.DocumentTypeBonnetje,
+	})
+	arch := h.stageArchiveFile(client, src, req.FolderID, datum, archiveName)
+	archiefFileId := arch.fileID
 
 	// Step 2: Create the "Geld uitgegeven" mutation (soort 6).
 	// Bank account is debited (rekening), cost account is credited (tegenRekening).
@@ -1105,74 +1073,22 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		return
 	}
 
-	// Step 3: Link the archived file to the mutation.
-	if archiefFileId > 0 && mutResult.MutNr > 0 {
-		linkPayload, _ := json.Marshal(map[string]any{
-			"koppelId":   mutResult.MutNr,
-			"folders":    []map[string]any{{"id": archiefFileId, "soort": "F"}},
-			"koppelType": "MUT",
-		})
-		if _, err := client.LinkFileToMutation(linkPayload); err != nil {
-			log.Printf("File link error: %v", err)
-		}
-	}
+	// Step 3: Link the archive file to the mutation, then (for a mail-folder
+	// document) rename it and move it out of the mail folder.
+	linked := linkArchiveFile(client, archiefFileId, mutResult.MutNr)
+	arch = h.completeArchive(ctx, client, sess.UserID, src, arch, linked, datum, archiveName)
 
 	// Invalidate inbox cache so the bank line disappears from the inbox view.
-	sess := session.FromContext(c)
-	if sess != nil && h.redis != nil {
-		h.redis.Del(c.Request.Context(), inboxClassifyKey(sess.UserID))
+	if h.redis != nil {
+		h.redis.Del(ctx, inboxClassifyKey(sess.UserID))
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"mutNr":    mutResult.MutNr,
-		"mutId":    mutResult.MutId,
-		"archived": archiefFileId > 0,
-		"linked":   archiefFileId > 0 && mutResult.MutNr > 0,
-	})
-}
-
-// uploadAndResolveArchiveFile uploads pdfBytes into folderID and returns the
-// archive file ID assigned by e-boekhouden. The /folder/upload endpoint
-// returns the destination folder ID — not the file ID — so we list the folder
-// after upload and match on filename to recover the real ID, which the caller
-// needs to link the file to a mutation. Returns 0 on any failure (logged).
-//
-// The filename is sanitized internally; an empty input becomes "document.pdf".
-// Callers that want a more descriptive name (e.g. "factuur_X.pdf") should pass
-// that string in rawFilename — sanitization keeps it but adds ".pdf" if missing.
-func (h *InvoiceHandler) uploadAndResolveArchiveFile(client *eboekhouden.Client, pdfBytes []byte, folderID int, rawFilename string) int {
-	if len(pdfBytes) == 0 || folderID == 0 {
-		return 0
+	resp := gin.H{
+		"mutNr": mutResult.MutNr,
+		"mutId": mutResult.MutId,
 	}
-	filename := sanitizeFilename(rawFilename)
-	uploadPayload, _ := json.Marshal(map[string]any{
-		"fileName":  filename,
-		"data":      base64.StdEncoding.EncodeToString(pdfBytes),
-		"overwrite": false,
-		"folderId":  folderID,
-	})
-	if _, err := client.UploadArchiveFile(uploadPayload); err != nil {
-		log.Printf("Archive upload error: %v", err)
-		return 0
-	}
-	filesRaw, err := client.GetArchiveFiles(folderID)
-	if err != nil {
-		log.Printf("Archive file list error after upload: %v", err)
-		return 0
-	}
-	var files []map[string]any
-	if err := json.Unmarshal(filesRaw, &files); err != nil {
-		log.Printf("Archive file list parse error: %v", err)
-		return 0
-	}
-	for _, f := range files {
-		if naam, _ := f["naam"].(string); naam == filename {
-			if id, ok := f["id"].(float64); ok {
-				return int(id)
-			}
-		}
-	}
-	return 0
+	arch.addTo(resp)
+	c.JSON(http.StatusOK, resp)
 }
 
 // findOrCreateArchiveFolder finds or creates the Facturen/year/month folder
@@ -1337,22 +1253,6 @@ func (h *InvoiceHandler) getAPIKey(c *gin.Context, userID string) (string, error
 		return "", err
 	}
 	return string(decrypted), nil
-}
-
-var safeFilenameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
-
-func sanitizeFilename(s string) string {
-	s = safeFilenameRe.ReplaceAllString(s, "_")
-	if len(s) > 100 {
-		s = s[:100]
-	}
-	if s == "" || s == "_" {
-		s = "document"
-	}
-	if len(s) < 5 || s[len(s)-4:] != ".pdf" {
-		s += ".pdf"
-	}
-	return s
 }
 
 func truncate(s string, maxLen int) string {

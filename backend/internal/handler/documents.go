@@ -853,11 +853,8 @@ func (h *InvoiceHandler) DeleteDocument(c *gin.Context) {
 // name as supplier and no reference. The date falls back from the invoice
 // date to the received date to now, and is returned for the folder choice.
 func archiveNameFor(file eboekhouden.ArchiveFile, inv *claude.InvoiceData, now time.Time) (time.Time, string) {
-	mediaType := mediaTypeFromExtension(file.Naam)
-	base, ext := splitFileName(file.Naam)
-	if mediaType == "" {
-		mediaType = ext // keep an unsupported extension such as xml
-	}
+	mediaType := archiveMediaType(file.Naam)
+	base, _ := splitFileName(file.Naam)
 	datum := now
 	if received, ok := parseEBoekhoudenTime(file.Datum); ok {
 		datum = received

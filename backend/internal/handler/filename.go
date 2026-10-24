@@ -195,6 +195,18 @@ func archiveNameExtension(mediaType string) string {
 	return ext
 }
 
+// archiveMediaType is the media type an archive file's name implies, for the
+// extension of its archive name: application/pdf, image/jpeg or image/png, or
+// the bare original extension when it is not one the analyser reads, so an
+// unsupported type such as xml keeps its extension.
+func archiveMediaType(name string) string {
+	if mediaType := mediaTypeFromExtension(name); mediaType != "" {
+		return mediaType
+	}
+	_, ext := splitFileName(name)
+	return ext
+}
+
 // uniqueName returns name unchanged when it is not in existing, otherwise the
 // first of name_2, name_3, … (the counter goes before the extension) that is
 // free. Names are compared case-insensitively; existing may hold either
