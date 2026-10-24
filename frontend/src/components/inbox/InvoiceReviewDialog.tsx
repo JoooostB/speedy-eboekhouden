@@ -10,12 +10,15 @@ import {
   Divider,
   LinearProgress,
   Link,
+  MenuItem,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
   Alert,
   AlertTitle,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
 import { api } from "../../api/client";
 import { track } from "../../analytics";
@@ -30,24 +33,34 @@ import {
 } from "../../hooks/useArchiveFolders";
 import { dedupePurchaseVatCodes, isReverseChargeCode } from "./vatCodeFilters";
 import { invoiceBlocker as evaluateInvoiceBlocker } from "./invoiceValidation";
+import {
+  buildFullSubmitPayload,
+  buildReceiptSubmitPayload,
+  isArchiveSource,
+  receiptExtraLines,
+  type ExtraLineEdit,
+} from "./invoiceSubmitPayload";
+import {
+  NO_MATCH_ALERT_TEXT,
+  archiveFolderHelperText,
+  archiveResultLine,
+  bankLineChoices,
+  bankLineOptionLabel,
+  isOpenBooking,
+  previewKind,
+  submitButtonLabel,
+} from "./mailDocumentReview";
 import type {
   AnalyzedInvoice,
   LedgerAccount,
+  MatchedBankLine,
+  ReceiptExtraLine,
   Relation,
+  SubmitArchiveOutcome,
   VATCode,
 } from "../../api/types";
 
 /** Mutable state per invoice in the review list */
-/** One additional booking line within a receipt — typically a restaurant
- *  tip that was added on the card but didn't make it onto the receipt
- *  itself. The tegenrekening defaults to the parent line's at submit
- *  time when left null. */
-interface ExtraLineEdit {
-  bedragIncl: string;
-  btwCode: string;
-  omschrijving: string;
-}
-
 interface InvoiceEdit {
   /** Original analyze response — holds uploadKey (R2 reference) and filename */
   source: AnalyzedInvoice;
@@ -66,6 +79,11 @@ interface InvoiceEdit {
   ledgerAccount: LedgerAccount | null;
   /** Linked bank statement line ID (marks it as processed on submit) */
   importId: number;
+  /** The bank line shown as the payment: the analysis' match, or the
+   *  candidate the user picked when several fit (mail-folder documents).
+   *  importId follows it; a user who unlinks keeps it on screen behind a
+   *  "Koppelen" button. */
+  bankLine: MatchedBankLine | null;
   /** Bonnetje mode: book as "Geld uitgegeven" without a relation. */
   isReceipt: boolean;
   /** Extra booking lines (tip split, etc.). Empty by default. */
@@ -103,7 +121,14 @@ interface Props {
   vatCodes: VATCode[];
   /** Called after dialog completes so the inbox can refresh */
   onComplete: () => void;
+  /** Folders that are never suggested or, for a mail-folder document,
+   *  offered as a target, together with everything nested under them: the
+   *  Mail & herken folder. A file archived there would still be in the
+   *  inbox. */
+  excludeFolderIds?: readonly number[];
 }
+
+const NO_FOLDERS: readonly number[] = [];
 
 /**
  * InvoiceReviewDialog — multi-invoice review before booking.
@@ -120,6 +145,16 @@ interface Props {
  * - Progress bar uses aria-valuenow / aria-label
  * - Results are announced via aria-live region
  * - All interactive elements are keyboard accessible (native MUI)
+ *
+ * Two document sources share the dialog. An upload (the "Facturen uploaden"
+ * button or a bank line's upload zone) is sent inline with the booking when
+ * a folder is picked. A Mail & herken document (source.archiveFileId) is
+ * already in e-boekhouden: the booking sends its id and the folder to move
+ * it to ("Verplaatsen naar"; none means Facturen/<jaar>/<maand>), and the
+ * backend links, renames and moves it. For such a document the card is
+ * headed by its title, several candidate bank lines can be chosen from, an
+ * invoice without a bank line is booked as an open invoice, and on phones
+ * the dialog is full screen.
  */
 export function InvoiceReviewDialog({
   open,
@@ -128,11 +163,15 @@ export function InvoiceReviewDialog({
   ledgerAccounts,
   vatCodes,
   onComplete,
+  excludeFolderIds = NO_FOLDERS,
 }: Props) {
   // Build editable state from analyzed responses
   const [invoices, setInvoices] = useState<InvoiceEdit[]>(() =>
     analyzed.map((a) => buildEdit(a, ledgerAccounts, vatCodes)),
   );
+  const theme = useTheme();
+  const isXs = useMediaQuery(theme.breakpoints.down("sm"));
+  const hasMailDocuments = invoices.some((inv) => isArchiveSource(inv.source));
 
   // Purchase-only VAT codes for the supplier invoice picker. Two layers
   // of filtering:
@@ -160,21 +199,22 @@ export function InvoiceReviewDialog({
   const { folders: archiveFolders } = useArchiveFolders();
 
   // When folders arrive, fill in any invoice whose archiveFolder is still
-  // null with the best matching folder for its supplier. We deliberately
-  // depend only on `folders`: this runs once per folder-list change so a
-  // user who deselects a suggested folder afterwards isn't re-surprised by
-  // the suggestion popping back in on every render.
+  // null with the best matching folder for its supplier, never one in the
+  // mail folder's subtree. We deliberately depend only on the folder list
+  // and the exclusions: this runs once per change of those so a user who
+  // deselects a suggested folder afterwards isn't re-surprised by the
+  // suggestion popping back in on every render.
   useEffect(() => {
     if (archiveFolders.length === 0) return;
     setInvoices((prev) =>
       prev.map((inv) =>
         inv.archiveFolder == null
-          ? { ...inv, archiveFolder: findArchiveFolderForSupplier(archiveFolders, inv.leverancier) }
+          ? { ...inv, archiveFolder: findArchiveFolderForSupplier(archiveFolders, inv.leverancier, excludeFolderIds) }
           : inv,
       ),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [archiveFolders]);
+  }, [archiveFolders, excludeFolderIds]);
 
   /** Flip every invoice to bonnetje- or factuur-mode in one call. Saves the
    *  user from clicking the per-card toggle N times when uploading a stack
@@ -294,6 +334,15 @@ export function InvoiceReviewDialog({
     });
   }, []);
 
+  /** Show another candidate bank line as the payment and link it. */
+  const selectBankLine = useCallback((index: number, line: MatchedBankLine | null) => {
+    setInvoices((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], bankLine: line, importId: line?.id ?? 0 };
+      return next;
+    });
+  }, []);
+
   /** Submit all invoices sequentially */
   const handleSubmitAll = useCallback(async () => {
     setSubmitting(true);
@@ -306,13 +355,22 @@ export function InvoiceReviewDialog({
       const inv = invoices[i];
       setProgress(i);
 
+      // A mail-folder document is listed by its title, an upload by its name.
+      const label = inv.source.documentTitle ?? inv.source.filename;
+      const archiveSource = isArchiveSource(inv.source);
+      const openBooking = isOpenBooking({
+        archiveFileId: inv.source.archiveFileId,
+        isReceipt: inv.isReceipt,
+        importId: inv.importId,
+      });
+
       // Skip incomplete rows instead of failing the whole batch. The user
       // gets a "skipped" result entry so they know which ones still need
       // attention; the dialog stays open so they can fix and retry.
       const blocker = invoiceBlocker(inv);
       if (blocker) {
         submitResults.push({
-          filename: inv.source.filename,
+          filename: label,
           status: "skipped",
           error: blocker,
         });
@@ -322,21 +380,22 @@ export function InvoiceReviewDialog({
       // Encode the original File as base64 once per invoice so the backend can
       // place it in the archive without R2 round-tripping. Only sent when the
       // user has picked a destination folder — otherwise the backend skips
-      // archive upload entirely.
+      // archive upload entirely. A mail-folder document is never inlined: the
+      // backend already has the file and only needs its id.
       let pdfBase64: string | undefined;
-      if (inv.archiveFolder && inv.source.localFile) {
+      if (!archiveSource && inv.archiveFolder && inv.source.localFile) {
         try {
           pdfBase64 = await fileToBase64(inv.source.localFile);
         } catch (err: any) {
           submitResults.push({
-            filename: inv.source.filename,
+            filename: label,
             status: "error",
             error: `PDF kon niet worden gelezen: ${err?.message ?? "onbekende fout"}`,
           });
           continue;
         }
       }
-      const folderId = inv.archiveFolder?.id;
+      const folderId = inv.archiveFolder?.id ?? 0;
 
       // The user expected the PDF to be archived if and only if both a folder
       // and a PDF were available. We use this below to detect a silent
@@ -344,133 +403,118 @@ export function InvoiceReviewDialog({
       // it as a warning instead of letting the user assume everything is OK.
       const archiveExpected = !!pdfBase64 && !!folderId;
 
+      const payloadInput = {
+        source: inv.source,
+        datum: inv.datum,
+        leverancier: inv.leverancier,
+        factuurnummer: inv.factuurnummer,
+        omschrijving: inv.omschrijving,
+        bedragExcl: parseFloat(inv.bedragExcl) || 0,
+        bedragIncl: parseFloat(inv.bedragIncl) || 0,
+        btwBedrag: parseFloat(inv.btwBedrag) || 0,
+        btwCode: inv.btwCode,
+        relatieId: inv.relation?.id ?? 0,
+        tegenRekeningId: inv.ledgerAccount!.id,
+        importId: inv.importId,
+        folderId,
+        pdfBase64,
+        extraLines: [] as ReceiptExtraLine[],
+      };
+
+      // The result line: for a mail-folder document what happened to the
+      // file ("Geboekt · verplaatst naar …"), for an upload the booking.
+      const receiptDetails = `Bonnetje: ${inv.leverancier || "onbekend"} — ${formatEuro(inv.bedragIncl)}`;
+      const invoiceDetails = `${inv.leverancier} — ${formatEuro(inv.bedragIncl)} — ${inv.factuurnummer}`;
+      const detailsFor = (resp: SubmitArchiveOutcome) =>
+        archiveSource ? archiveResultLine(resp, openBooking) : inv.isReceipt ? receiptDetails : invoiceDetails;
+      const confidence = String(Math.round(inv.source.invoice.confidence * 100));
+
       try {
+        let details: string;
         if (inv.isReceipt) {
-          // Bonnetje flow — no relation, "Geld uitgegeven" mutation.
-          // Convert any user-added split lines (typically the tip) into
-          // the backend's extraLines shape with proper BTW split per line.
-          const extraLines = inv.extraLines
-            .filter((el) => (parseFloat(el.bedragIncl) || 0) > 0)
-            .map((el) => {
-              const incl = parseFloat(el.bedragIncl) || 0;
-              const elRate = vatRate(el.btwCode);
-              const btw = elRate === 0 ? 0 : +((incl * elRate) / (100 + elRate)).toFixed(2);
-              const excl = +(incl - btw).toFixed(2);
-              return {
-                bedragIncl: incl,
-                bedragExcl: excl,
-                btwBedrag: btw,
-                btwCode: el.btwCode,
-                omschrijving: el.omschrijving || undefined,
-                // tegenRekeningId omitted → backend defaults to the main
-                // line's tegenrekening, which is the right behaviour for
-                // the common tip case (same expense account, different BTW).
-              };
+          // Bonnetje flow — no relation, "Geld uitgegeven" mutation. The
+          // user-added split lines (typically the tip) travel as extraLines
+          // with a BTW split per line (receiptExtraLines).
+          const receiptResp = await api.submitReceipt(
+            buildReceiptSubmitPayload({ ...payloadInput, extraLines: receiptExtraLines(inv.extraLines, vatRate) }),
+          );
+
+          // The booking stands, but the mail-folder document could not be
+          // linked, renamed or moved; the backend says what state it is in.
+          if (receiptResp.archiveWarning) {
+            submitResults.push({
+              filename: label,
+              status: "warning",
+              details: detailsFor(receiptResp),
+              error: receiptResp.archiveWarning,
             });
-          const receiptResp = await api.submitReceipt({
-            datum: inv.datum,
-            leverancier: inv.leverancier,
-            omschrijving: inv.omschrijving,
-            bedragExcl: parseFloat(inv.bedragExcl) || 0,
-            bedragIncl: parseFloat(inv.bedragIncl) || 0,
-            btwBedrag: parseFloat(inv.btwBedrag) || 0,
-            btwCode: inv.btwCode,
-            tegenRekeningId: inv.ledgerAccount!.id,
-            uploadKey: inv.source.uploadKey,
-            filename: inv.source.filename,
-            importId: inv.importId,
-            ...(extraLines.length > 0 ? { extraLines } : {}),
-            ...(pdfBase64 ? { pdfBase64 } : {}),
-            ...(folderId ? { folderId } : {}),
-          });
+            track("Invoice Review Submitted", { confidence, mode: "receipt", outcome: "archive_warning" });
+            continue;
+          }
 
           if (archiveExpected && receiptResp.archived === false) {
             submitResults.push({
-              filename: inv.source.filename,
+              filename: label,
               status: "warning",
-              details: `Bonnetje: ${inv.leverancier || "onbekend"} — ${formatEuro(inv.bedragIncl)}`,
+              details: receiptDetails,
               error:
                 "Bonnetje is geboekt, maar de PDF kon niet naar het archief worden geüpload. Upload het bestand handmatig of probeer opnieuw.",
             });
-            track("Invoice Review Submitted", {
-              confidence: String(Math.round(inv.source.invoice.confidence * 100)),
-              mode: "receipt",
-              outcome: "archive_warning",
-            });
+            track("Invoice Review Submitted", { confidence, mode: "receipt", outcome: "archive_warning" });
             continue;
           }
+          details = detailsFor(receiptResp);
         } else {
-          const fullResp = await api.submitInvoiceFull({
-            datum: inv.datum,
-            leverancier: inv.leverancier,
-            factuurnummer: inv.factuurnummer,
-            omschrijving: inv.omschrijving,
-            bedragExcl: parseFloat(inv.bedragExcl) || 0,
-            bedragIncl: parseFloat(inv.bedragIncl) || 0,
-            btwBedrag: parseFloat(inv.btwBedrag) || 0,
-            btwCode: inv.btwCode,
-            inEx: "EX",
-            relatieId: inv.relation!.id,
-            tegenRekeningId: inv.ledgerAccount!.id,
-            rekeningId: inv.source.crediteurenId || 0,
-            uploadKey: inv.source.uploadKey,
-            filename: inv.source.filename,
-            pdfHash: inv.source.pdfHash,
-            ...(inv.importId ? { importId: inv.importId } : {}),
-            ...(pdfBase64 ? { pdfBase64 } : {}),
-            ...(folderId ? { folderId } : {}),
-          });
+          const fullResp = await api.submitInvoiceFull(buildFullSubmitPayload(payloadInput));
 
           // FactuurOntvangen succeeded but the bank-line-clearing payment
           // mutation didn't — surface as a yellow warning so the user
           // doesn't think the booking is done.
           if (fullResp.paymentWarning) {
             submitResults.push({
-              filename: inv.source.filename,
+              filename: label,
               status: "warning",
-              details: `${inv.leverancier} — ${formatEuro(inv.bedragIncl)} — ${inv.factuurnummer}`,
+              details: detailsFor(fullResp),
               error: fullResp.paymentWarning,
             });
-            track("Invoice Review Submitted", {
-              confidence: String(Math.round(inv.source.invoice.confidence * 100)),
-              mode: "invoice",
-              outcome: "payment_warning",
+            track("Invoice Review Submitted", { confidence, mode: "invoice", outcome: "payment_warning" });
+            continue;
+          }
+
+          if (fullResp.archiveWarning) {
+            submitResults.push({
+              filename: label,
+              status: "warning",
+              details: detailsFor(fullResp),
+              error: fullResp.archiveWarning,
             });
+            track("Invoice Review Submitted", { confidence, mode: "invoice", outcome: "archive_warning" });
             continue;
           }
 
           if (archiveExpected && fullResp.archived === false) {
             submitResults.push({
-              filename: inv.source.filename,
+              filename: label,
               status: "warning",
-              details: `${inv.leverancier} — ${formatEuro(inv.bedragIncl)} — ${inv.factuurnummer}`,
+              details: invoiceDetails,
               error:
                 "Factuur is geboekt, maar de PDF kon niet naar het archief worden geüpload. Upload het bestand handmatig of probeer opnieuw.",
             });
-            track("Invoice Review Submitted", {
-              confidence: String(Math.round(inv.source.invoice.confidence * 100)),
-              mode: "invoice",
-              outcome: "archive_warning",
-            });
+            track("Invoice Review Submitted", { confidence, mode: "invoice", outcome: "archive_warning" });
             continue;
           }
+          details = detailsFor(fullResp);
         }
 
-        submitResults.push({
-          filename: inv.source.filename,
-          status: "ok",
-          details: inv.isReceipt
-            ? `Bonnetje: ${inv.leverancier || "onbekend"} — ${formatEuro(inv.bedragIncl)}`
-            : `${inv.leverancier} — ${formatEuro(inv.bedragIncl)} — ${inv.factuurnummer}`,
-        });
+        submitResults.push({ filename: label, status: "ok", details });
 
         track("Invoice Review Submitted", {
-          confidence: String(Math.round(inv.source.invoice.confidence * 100)),
+          confidence,
           mode: inv.isReceipt ? "receipt" : "invoice",
         });
       } catch (err: any) {
         submitResults.push({
-          filename: inv.source.filename,
+          filename: label,
           status: "error",
           error: err.message,
         });
@@ -486,7 +530,7 @@ export function InvoiceReviewDialog({
       total: String(invoices.length),
       success: String(successCount),
     });
-  }, [invoices]);
+  }, [invoices, vatRate]);
 
   /** Close and trigger refresh if anything was submitted */
   const handleClose = useCallback(() => {
@@ -513,6 +557,8 @@ export function InvoiceReviewDialog({
       onClose={submitting ? undefined : handleClose}
       fullWidth
       maxWidth="xl"
+      /* Mail-folder documents are reviewed full screen on phones. */
+      fullScreen={isXs && hasMailDocuments}
       aria-labelledby="invoice-review-title"
       /* Prevent closing during submission */
       disableEscapeKeyDown={submitting}
@@ -638,7 +684,9 @@ export function InvoiceReviewDialog({
                   m: 0,
                 }}
               >
-                {/* Legend: filename + confidence badge */}
+                {/* Legend: the document title (mail folder) or file name,
+                    the original file name small and grey next to a title,
+                    a "Creditnota" chip, and the confidence badge */}
                 <Typography
                   component="legend"
                   sx={{
@@ -651,7 +699,24 @@ export function InvoiceReviewDialog({
                     flexWrap: "wrap",
                   }}
                 >
-                  {inv.source.filename}
+                  {inv.source.documentTitle ?? inv.source.filename}
+                  {inv.source.documentTitle && (
+                    <Typography
+                      component="span"
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ fontWeight: 400 }}
+                    >
+                      {inv.source.filename}
+                    </Typography>
+                  )}
+                  {inv.source.invoice.documentType === "creditnota" && (
+                    <Chip
+                      label="Creditnota"
+                      size="small"
+                      sx={{ fontWeight: 600, fontSize: "0.7rem", height: 22, color: "#1e40af", bgcolor: "rgba(59, 130, 246, 0.1)" }}
+                    />
+                  )}
                   <ConfidenceBadge confidence={inv.source.invoice.confidence} />
                 </Typography>
 
@@ -725,12 +790,14 @@ export function InvoiceReviewDialog({
                     mt: 2,
                   }}
                 >
-                  {/* PDF preview pane. Prefer the R2 presigned URL when
+                  {/* Preview pane. Prefer the R2 presigned URL when
                       available, fall back to the client-side blob: URL so the
-                      preview works in self-hosted deployments without R2. */}
-                  <PdfPreview
-                    pdfUrl={inv.source.pdfUrl || inv.source.localPdfUrl || ""}
+                      preview works in self-hosted deployments without R2 and
+                      for mail-folder documents. Images render as <img>. */}
+                  <DocumentPreview
+                    url={inv.source.pdfUrl || inv.source.localPdfUrl || ""}
                     filename={inv.source.filename}
+                    mediaType={inv.source.localFile?.type}
                   />
 
                   {/* Form fields pane */}
@@ -880,16 +947,35 @@ export function InvoiceReviewDialog({
                       />
                     </Box>
 
-                    {/* Row 4b: Archive folder picker. Optional — leaving it
-                        empty means the PDF is not uploaded to the digitaal
-                        archief (mutation is still booked). */}
+                    {/* Row 4b: Archive folder picker. For an upload it is
+                        optional — leaving it empty means the PDF is not
+                        uploaded to the digitaal archief (mutation is still
+                        booked). For a mail-folder document the file always
+                        leaves the mail folder: the picker says where it goes,
+                        empty meaning Facturen/<jaar>/<maand>, and the mail
+                        folder's subtree is not on offer. */}
                     <Box sx={{ mt: 2 }}>
-                      <ArchiveFolderPicker
-                        value={inv.archiveFolder}
-                        onChange={(f) => updateField(index, "archiveFolder", f)}
-                        disabled={submitting}
-                        helperText="Optioneel — laat leeg om de PDF niet in het digitaal archief op te slaan."
-                      />
+                      {isArchiveSource(inv.source) ? (
+                        <ArchiveFolderPicker
+                          value={inv.archiveFolder}
+                          onChange={(f) => updateField(index, "archiveFolder", f)}
+                          disabled={submitting}
+                          label="Verplaatsen naar"
+                          helperText={archiveFolderHelperText({
+                            folderPicked: inv.archiveFolder !== null,
+                            datum: inv.datum,
+                            mailFolderName: inv.source.mailFolderName ?? "",
+                          })}
+                          excludeFolderIds={excludeFolderIds}
+                        />
+                      ) : (
+                        <ArchiveFolderPicker
+                          value={inv.archiveFolder}
+                          onChange={(f) => updateField(index, "archiveFolder", f)}
+                          disabled={submitting}
+                          helperText="Optioneel — laat leeg om de PDF niet in het digitaal archief op te slaan."
+                        />
+                      )}
                     </Box>
 
                     {/* AI reasoning for grootboekrekening */}
@@ -995,8 +1081,38 @@ export function InvoiceReviewDialog({
                       );
                     })()}
 
+                    {/* Bank line choice — a mail-folder document with several
+                        candidate lines gets a select; the chosen line is shown
+                        and linked below. */}
+                    {isArchiveSource(inv.source) && (() => {
+                      const choices = bankLineChoices(inv.source);
+                      if (choices.length < 2) return null;
+                      return (
+                        <TextField
+                          select
+                          label="Afschriftregel"
+                          value={inv.bankLine?.id ?? ""}
+                          onChange={(e) => {
+                            const id = Number(e.target.value);
+                            selectBankLine(index, choices.find((l) => l.id === id) ?? null);
+                          }}
+                          size="small"
+                          fullWidth
+                          disabled={submitting}
+                          helperText="Meerdere afschriftregels passen bij dit bedrag. Kies de betaling van deze factuur."
+                          sx={{ mt: 2 }}
+                        >
+                          {choices.map((line) => (
+                            <MenuItem key={line.id} value={line.id}>
+                              {bankLineOptionLabel(line)}
+                            </MenuItem>
+                          ))}
+                        </TextField>
+                      );
+                    })()}
+
                     {/* Matched bank line */}
-                    {inv.source.matchedBankLine && (
+                    {inv.bankLine && (
                       <Alert
                         severity="success"
                         sx={{ mt: 2 }}
@@ -1013,7 +1129,7 @@ export function InvoiceReviewDialog({
                             <Button
                               color="inherit"
                               size="small"
-                              onClick={() => updateField(index, "importId", inv.source.matchedBankLine!.id)}
+                              onClick={() => updateField(index, "importId", inv.bankLine!.id)}
                             >
                               Koppelen
                             </Button>
@@ -1022,7 +1138,7 @@ export function InvoiceReviewDialog({
                       >
                         <Typography variant="body2" fontWeight={600}>
                           {inv.importId ? "Gekoppeld aan afschriftregel:" : "Gevonden afschriftregel:"}
-                          {inv.source.matchedBankLine.currencyConverted && (
+                          {inv.bankLine.currencyConverted && (
                             <Typography
                               component="span"
                               variant="caption"
@@ -1033,14 +1149,26 @@ export function InvoiceReviewDialog({
                           )}
                         </Typography>
                         <Typography variant="body2">
-                          {new Date(inv.source.matchedBankLine.datum).toLocaleDateString("nl-NL")} — {new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" }).format(inv.source.matchedBankLine.bedrag)} — {inv.source.matchedBankLine.omschrijving.slice(0, 80)}
+                          {new Date(inv.bankLine.datum).toLocaleDateString("nl-NL")} — {new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" }).format(inv.bankLine.bedrag)} — {inv.bankLine.omschrijving.slice(0, 80)}
                         </Typography>
-                        {inv.source.matchedBankLine.currencyConverted && inv.source.matchedBankLine.invoiceCurrency && (
+                        {inv.bankLine.currencyConverted && inv.bankLine.invoiceCurrency && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-                            Factuur: {inv.source.matchedBankLine.invoiceAmount?.toFixed(2)} {inv.source.matchedBankLine.invoiceCurrency} —
+                            Factuur: {inv.bankLine.invoiceAmount?.toFixed(2)} {inv.bankLine.invoiceCurrency} —
                             omgerekend naar EUR voor matching. De boeking gebruikt het werkelijke EUR-bedrag van de bank.
                           </Typography>
                         )}
+                      </Alert>
+                    )}
+
+                    {/* A mail-folder invoice without a bank line is booked
+                        as an open invoice (UX flow 4). */}
+                    {isOpenBooking({
+                      archiveFileId: inv.source.archiveFileId,
+                      isReceipt: inv.isReceipt,
+                      importId: inv.importId,
+                    }) && (
+                      <Alert severity="info" sx={{ mt: 2 }}>
+                        <Typography variant="body2">{NO_MATCH_ALERT_TEXT}</Typography>
                       </Alert>
                     )}
 
@@ -1060,9 +1188,7 @@ export function InvoiceReviewDialog({
                         (sum, el) => sum + (parseFloat(el.bedragIncl) || 0),
                         0,
                       );
-                      const bankAmount = inv.source.matchedBankLine
-                        ? Math.abs(inv.source.matchedBankLine.bedrag)
-                        : 0;
+                      const bankAmount = inv.bankLine ? Math.abs(inv.bankLine.bedrag) : 0;
                       const totalNow = incl + extraSum;
                       const delta = bankAmount > 0 ? bankAmount - totalNow : 0;
                       const showTipHint =
@@ -1313,13 +1439,19 @@ export function InvoiceReviewDialog({
                 )
               }
             >
-              {submitting
-                ? `Verwerken (${progress}/${invoices.length})...`
-                : invoices.length === 1
-                  ? "Boeken"
-                  : blockedCount > 0
-                    ? `Boek ${submittableCount} van ${invoices.length}`
-                    : `Alles boeken (${invoices.length})`}
+              {submitButtonLabel({
+                submitting,
+                progress,
+                total: invoices.length,
+                blockedCount,
+                openBooking:
+                  invoices.length === 1 &&
+                  isOpenBooking({
+                    archiveFileId: invoices[0].source.archiveFileId,
+                    isReceipt: invoices[0].isReceipt,
+                    importId: invoices[0].importId,
+                  }),
+              })}
             </Button>
           </>
         )}
@@ -1403,6 +1535,7 @@ function buildEdit(
     relation: matchedRelation,
     ledgerAccount: matchedLedger,
     importId: a.matchedBankLine?.id ?? 0,
+    bankLine: a.matchedBankLine ?? null,
     isReceipt: inv.isReceipt ?? false,
     extraLines: [],
     archiveFolder: null,
@@ -1452,20 +1585,43 @@ function fileToBase64(file: File): Promise<string> {
 }
 
 /**
- * PdfPreview — renders an inline PDF viewer with a fallback link.
+ * DocumentPreview — renders the document inline with a fallback link.
  *
- * Uses <object type="application/pdf"> which has better cross-browser PDF
+ * Images (JPG/PNG, by media type or extension) render as a plain <img>. PDFs
+ * use <object type="application/pdf"> which has better cross-browser PDF
  * rendering than <iframe> (Safari, Firefox handle it natively). The fallback
  * content inside <object> is shown when the browser cannot render PDFs inline
  * (e.g. mobile browsers), providing a direct download/open link.
  *
  * Accessibility:
- * - The <object> has aria-label describing its content
+ * - The <img> has alt text naming the document; the <object> an aria-label
  * - The fallback link is keyboard-accessible and clearly labeled
  * - The "open in new tab" link uses aria-describedby to clarify it opens externally
  * - role="document" on the object tells screen readers this is an embedded document
  */
-function PdfPreview({ pdfUrl, filename }: { pdfUrl: string; filename: string }) {
+function DocumentPreview({ url: pdfUrl, filename, mediaType }: { url: string; filename: string; mediaType?: string }) {
+  if (pdfUrl && previewKind(mediaType, filename) === "image") {
+    return (
+      <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+        <Box
+          component="img"
+          src={pdfUrl}
+          alt={`Voorbeeld van ${filename}`}
+          sx={{
+            width: "100%",
+            maxHeight: { xs: 400, md: 600 },
+            objectFit: "contain",
+            border: "1px solid",
+            borderColor: "divider",
+            borderRadius: 1,
+            bgcolor: "grey.50",
+          }}
+        />
+        <OpenInNewTabLink href={pdfUrl} />
+      </Box>
+    );
+  }
+
   if (!pdfUrl) {
     return (
       <Box
@@ -1552,39 +1708,46 @@ function PdfPreview({ pdfUrl, filename }: { pdfUrl: string; filename: string }) 
       </Box>
 
       {/* "Open in new tab" link — always visible below the preview */}
-      <Link
-        href={pdfUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        sx={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 0.5,
-          fontSize: "0.8125rem",
-          color: "text.secondary",
-          textDecorationColor: "currentcolor",
-          "&:hover": { color: "primary.main" },
-        }}
-      >
-        {/* External link icon — inline SVG */}
-        <Box
-          component="svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-          sx={{ width: 14, height: 14 }}
-        >
-          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-          <polyline points="15 3 21 3 21 9" />
-          <line x1="10" y1="14" x2="21" y2="3" />
-        </Box>
-        Openen in nieuw tabblad
-      </Link>
+      <OpenInNewTabLink href={pdfUrl} />
     </Box>
+  );
+}
+
+/** The "Openen in nieuw tabblad" link under a preview. */
+function OpenInNewTabLink({ href }: { href: string }) {
+  return (
+    <Link
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.5,
+        fontSize: "0.8125rem",
+        color: "text.secondary",
+        textDecorationColor: "currentcolor",
+        "&:hover": { color: "primary.main" },
+      }}
+    >
+      {/* External link icon — inline SVG */}
+      <Box
+        component="svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        sx={{ width: 14, height: 14 }}
+      >
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+        <polyline points="15 3 21 3 21 9" />
+        <line x1="10" y1="14" x2="21" y2="3" />
+      </Box>
+      Openen in nieuw tabblad
+    </Link>
   );
 }
 

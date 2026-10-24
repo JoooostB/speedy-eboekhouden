@@ -21,7 +21,9 @@ import type {
   InvoiceAnalyzeResponse,
   InvoiceMatchResponse,
   InvoiceSubmitFullRequest,
+  InvoiceSubmitFullResponse,
   InvoiceSubmitReceiptRequest,
+  InvoiceSubmitReceiptResponse,
   LedgerAccount,
   MailDocumentAnalyzeResponse,
   MailDocumentsResponse,
@@ -342,29 +344,17 @@ export const api = {
   },
 
   submitInvoiceFull(data: InvoiceSubmitFullRequest) {
-    return request<{
-      mutNr: number;
-      mutId: number;
-      paymentMutNr?: number;
-      archived?: boolean;
-      linked?: boolean;
-      /** Set when FactuurOntvangen succeeded but the bank-line-clearing
-       *  payment mutation didn't — UI should treat as warning, not success. */
-      paymentWarning?: string;
-    }>("/invoices/submit-full", {
+    return request<InvoiceSubmitFullResponse>("/invoices/submit-full", {
       method: "POST",
       body: JSON.stringify(data),
     });
   },
 
   submitReceipt(data: InvoiceSubmitReceiptRequest) {
-    return request<{ mutNr: number; mutId: number; archived: boolean; linked: boolean }>(
-      "/invoices/submit-receipt",
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      },
-    );
+    return request<InvoiceSubmitReceiptResponse>("/invoices/submit-receipt", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
   },
 
   // Claude classification

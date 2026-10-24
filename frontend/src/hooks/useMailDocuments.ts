@@ -66,7 +66,11 @@ export interface MailDocumentsState {
 }
 
 export interface MailDocumentsActions {
-  reload: (opts?: { silent?: boolean }) => Promise<void>;
+  /** Fetches the list again and resolves with the fresh documents, or null
+   *  when the load failed or was superseded by a newer one. Callers that
+   *  need a document right after the reload read it from the result, since
+   *  the state update is not visible to them yet. */
+  reload: (opts?: { silent?: boolean }) => Promise<MailDocument[] | null>;
   analyze: (id: number, force?: boolean) => Promise<void>;
   analyzeAll: () => Promise<void>;
   stop: () => void;
@@ -186,7 +190,7 @@ export function useMailDocuments(eboekhoudenConnected: boolean): { state: MailDo
     });
   }, []);
 
-  const reload = useCallback(async (opts?: { silent?: boolean }) => {
+  const reload = useCallback(async (opts?: { silent?: boolean }): Promise<MailDocument[] | null> => {
     const seq = ++loadSeq.current;
     setState((s) => ({
       ...s,
@@ -196,7 +200,8 @@ export function useMailDocuments(eboekhoudenConnected: boolean): { state: MailDo
     }));
     try {
       const res = await api.getDocuments();
-      if (seq !== loadSeq.current) return;
+      if (seq !== loadSeq.current) return null;
+      const documents = res.documents ?? [];
       setState((s) => ({
         ...s,
         loading: false,
@@ -206,16 +211,17 @@ export function useMailDocuments(eboekhoudenConnected: boolean): { state: MailDo
         configured: res.configured,
         reason: res.reason,
         folder: res.folder ?? null,
-        documents: res.documents ?? [],
+        documents,
         ignoredCount: res.ignoredCount ?? 0,
       }));
+      return documents;
     } catch (err) {
-      if (seq !== loadSeq.current) return;
+      if (seq !== loadSeq.current) return null;
       // An expired e-boekhouden session flips eboekhoudenConnected through
       // the API client's event; the effect below then resets this hook.
       if (statusOf(err) === 412) {
         setState((s) => ({ ...s, loading: false, refreshing: false }));
-        return;
+        return null;
       }
       // A failed background refresh keeps the list that is already shown.
       setState((s) => ({
@@ -225,6 +231,7 @@ export function useMailDocuments(eboekhoudenConnected: boolean): { state: MailDo
         loaded: true,
         error: opts?.silent && s.documents.length > 0 ? s.error : errorMessage(err, "Kon je mailmap niet laden"),
       }));
+      return null;
     }
   }, []);
 

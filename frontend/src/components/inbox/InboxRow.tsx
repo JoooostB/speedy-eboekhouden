@@ -27,6 +27,7 @@ import { RelationPicker } from "../shared/RelationPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
 import { BookingConfirmDialog } from "./BookingConfirmDialog";
 import { documentMatchIndicator, koppelenLabel, toInboxProcessItem } from "./inboxBooking";
+import { INVOICE_FILE_ACCEPT, isAcceptedInvoiceFile } from "./mailDocumentReview";
 
 /**
  * Category config: color, label, and whether inline editing is shown.
@@ -256,7 +257,7 @@ export function InboxRow({
       e.preventDefault();
       setDragOver(false);
       const file = e.dataTransfer.files[0];
-      if (file && file.type === "application/pdf") {
+      if (file && isAcceptedInvoiceFile(file)) {
         handleFileSelect(file);
       }
     },
@@ -568,7 +569,7 @@ export function InboxRow({
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
                 role="button"
                 tabIndex={0}
-                aria-label="Upload een PDF-factuur"
+                aria-label="Upload een factuur (PDF, JPG of PNG)"
                 sx={{
                   border: "2px dashed",
                   borderColor: dragOver ? "primary.main" : "grey.300",
@@ -582,12 +583,12 @@ export function InboxRow({
                 }}
               >
                 <Typography variant="body2" color="text.secondary">
-                  Sleep een PDF hierheen of klik om te uploaden
+                  Sleep een PDF, JPG of PNG hierheen of klik om te uploaden
                 </Typography>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="application/pdf"
+                  accept={INVOICE_FILE_ACCEPT}
                   onChange={handleFileInput}
                   style={{ display: "none" }}
                   aria-hidden="true"

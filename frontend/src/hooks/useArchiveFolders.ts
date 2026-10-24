@@ -98,10 +98,15 @@ function normalizeSupplierToken(s: string): string {
  * or "EU" don't produce spurious matches across the whole tree. Returns
  * null when nothing matches; the picker then stays empty so the user
  * makes an explicit choice.
+ *
+ * Folders in excludeFolderIds, and everything nested under them, are never
+ * suggested: the Mail & herken folder goes here, because a document archived
+ * into it (or a subfolder of it) would still be in the inbox.
  */
 export function findArchiveFolderForSupplier(
   folders: ArchiveFolderWithPath[],
   supplier: string,
+  excludeFolderIds: readonly number[] = [],
 ): ArchiveFolderWithPath | null {
   const supplierNorm = normalizeSupplierToken(supplier);
   if (supplierNorm.length < 3) return null;
@@ -110,7 +115,7 @@ export function findArchiveFolderForSupplier(
 
   let best: ArchiveFolderWithPath | null = null;
   let bestScore = 0;
-  for (const folder of folders) {
+  for (const folder of excludeFolderTree(folders, excludeFolderIds)) {
     const folderNorm = normalizeSupplierToken(folder.naam);
     if (folderNorm.length < 3) continue;
     // Match if the folder name appears as a whole token in the supplier or

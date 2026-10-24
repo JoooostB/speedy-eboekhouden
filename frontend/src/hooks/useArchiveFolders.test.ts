@@ -144,6 +144,25 @@ describe("findArchiveFolderForSupplier", () => {
     // "TransIP" -> token "transip". Symmetric.
     expect(findArchiveFolderForSupplier(enriched, "TransIP B.V.")?.naam).toBe("TransIP");
   });
+
+  it("never suggests an excluded folder or anything nested under it", () => {
+    // "Anthropic" lives under Inbox / Verwerkte facturen. With the "Inbox"
+    // root excluded (it is the mail folder here) it may not be suggested,
+    // even though it matches the supplier perfectly.
+    const inboxRoot = 81704302;
+    expect(findArchiveFolderForSupplier(enriched, "Anthropic, PBC", [inboxRoot])).toBeNull();
+    expect(findArchiveFolderForSupplier(enriched, "TransIP B.V.", [inboxRoot])).toBeNull();
+  });
+
+  it("still suggests a matching folder outside the excluded tree", () => {
+    const withOutside = enrichArchiveFolders([...realWorldFolders, f(7, "Anthropic", 0)]);
+    expect(findArchiveFolderForSupplier(withOutside, "Anthropic, PBC", [81704302])?.id).toBe(7);
+  });
+
+  it("changes nothing without exclusions", () => {
+    expect(findArchiveFolderForSupplier(enriched, "Anthropic, PBC", [])?.naam).toBe("Anthropic");
+    expect(findArchiveFolderForSupplier(enriched, "Anthropic, PBC", [12345])?.naam).toBe("Anthropic");
+  });
 });
 
 describe("excludeFolderTree", () => {

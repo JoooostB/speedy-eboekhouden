@@ -25,12 +25,24 @@ import { useLedgerAccounts } from "../../hooks/useLedgerAccounts";
 import { useVATCodes } from "../../hooks/useVATCodes";
 import { useMailDocuments } from "../../hooks/useMailDocuments";
 import { inboxSubtitle, pendingDocumentCount } from "../../hooks/mailDocumentsModel";
-import type { InboxClassification, InboxCategory, InboxProcessResult, AnalyzedInvoice } from "../../api/types";
+import { runWithConcurrency } from "../../utils/runWithConcurrency";
+import type {
+  InboxClassification,
+  InboxCategory,
+  InboxProcessResult,
+  AnalyzedInvoice,
+  MailDocument,
+  MatchedBankLine,
+} from "../../api/types";
 import { InboxRow } from "./InboxRow";
 import { BatchApproveBar } from "./BatchApproveBar";
 import { InvoiceReviewDialog } from "./InvoiceReviewDialog";
 import { AiStatusAlert, type AiStatus } from "./AiStatusAlert";
 import { DocumentList } from "./DocumentList";
+import { INVOICE_FILE_ACCEPT, buildAnalyzedInvoiceFromDocument, documentFile } from "./mailDocumentReview";
+
+/** How many mail-folder documents are downloaded at once for a review. */
+const DOCUMENT_FETCH_CONCURRENCY = 3;
 
 /** The two lists of the inbox; the active one lives in ?lijst=. */
 type InboxTab = "afschriften" | "documenten";
@@ -164,8 +176,16 @@ export function BookkeepingInbox() {
   // The documents inbox loads on the same trigger as the bank lines.
   const documents = useMailDocuments(eboekhoudenConnected);
   const { state: docState, ...docActions } = documents;
+  const reloadDocuments = documents.reload;
   const docsKnown = docState.loaded || docState.error !== null;
   const docCount = pendingDocumentCount(docState.documents);
+  // The mail folder (and its subfolders) is never an archive target: a
+  // file archived there would still be in the inbox. Memoised so the review
+  // dialog's suggestion effect does not re-run on every render.
+  const excludeFolderIds = useMemo(() => (docState.folder ? [docState.folder.id] : []), [docState.folder]);
+  // Number of mail-folder documents being downloaded for a review; 0 when
+  // none. Drives the small status line and blocks a second open meanwhile.
+  const [openingDocuments, setOpeningDocuments] = useState(0);
 
   const firstName = getFirstName(user?.name);
 
@@ -212,6 +232,89 @@ export function BookkeepingInbox() {
     }
     setReviewInvoices(null);
   }, [reviewInvoices]);
+
+  // Opens the review dialog for mail-folder documents: downloads each file
+  // (three at a time), wraps it in a File with an object URL and builds the
+  // AnalyzedInvoice from the document's analysis and fresh bank-line match.
+  // A document that cannot be fetched is reported in the snackbar and
+  // skipped; the others still open. With bankLine the review is opened from
+  // that bank line and it is pre-selected as the payment.
+  const openDocumentsForReview = useCallback(
+    async (docs: MailDocument[], bankLine?: MatchedBankLine) => {
+      if (docs.length === 0 || openingDocuments > 0) return;
+      setOpeningDocuments(docs.length);
+      const mailFolderName = docState.folder?.name ?? "";
+      try {
+        const results = await runWithConcurrency(docs, (doc) => api.getDocumentContent(doc.id), {
+          limit: DOCUMENT_FETCH_CONCURRENCY,
+        });
+        const analyzed: AnalyzedInvoice[] = [];
+        let failed = 0;
+        let notAnalyzed = 0;
+        let firstError = "";
+        results.forEach((r, i) => {
+          const doc = docs[i];
+          if (r.status !== "ok") {
+            failed++;
+            if (!firstError && r.status === "error" && r.error instanceof Error) firstError = r.error.message;
+            return;
+          }
+          const file = documentFile(doc, r.value);
+          const url = URL.createObjectURL(file);
+          const inv = buildAnalyzedInvoiceFromDocument(doc, file, url, { mailFolderName, bankLine });
+          if (!inv) {
+            URL.revokeObjectURL(url);
+            notAnalyzed++;
+            return;
+          }
+          analyzed.push(inv);
+        });
+        if (failed > 0) {
+          const what = failed === 1 ? "Document ophalen mislukt" : `${failed} documenten ophalen mislukt`;
+          setSnackbar({ message: firstError ? `${what}: ${firstError}` : what, severity: "warning" });
+        } else if (notAnalyzed > 0) {
+          setSnackbar({
+            message: notAnalyzed === 1 ? "Analyseer het document eerst" : `Analyseer de ${notAnalyzed} documenten eerst`,
+            severity: "warning",
+          });
+        }
+        if (analyzed.length > 0) {
+          setReviewInvoices(analyzed);
+          track("Document Review Opened", { count: String(analyzed.length), fromBankLine: String(!!bankLine) });
+        }
+      } finally {
+        setOpeningDocuments(0);
+      }
+    },
+    [docState.folder, openingDocuments],
+  );
+
+  const handleBookDocument = useCallback((doc: MailDocument) => void openDocumentsForReview([doc]), [openDocumentsForReview]);
+  const handleBookAll = useCallback((docs: MailDocument[]) => void openDocumentsForReview(docs), [openDocumentsForReview]);
+
+  // "Factuur koppelen en boeken" on a bank line: open the matching document
+  // with this line pre-selected as its payment. The document normally is in
+  // the loaded list; if not (the list is stale), reload once and look again.
+  const handleOpenDocument = useCallback(
+    async (fileId: number, line: InboxClassification) => {
+      let doc = docState.documents.find((d) => d.id === fileId);
+      if (!doc) {
+        const fresh = await reloadDocuments({ silent: true });
+        doc = fresh?.find((d) => d.id === fileId);
+      }
+      if (!doc) {
+        setSnackbar({ message: "Document niet gevonden in je mailmap", severity: "warning" });
+        return;
+      }
+      await openDocumentsForReview([doc], {
+        id: line.id,
+        datum: line.datum,
+        bedrag: line.bedrag,
+        omschrijving: line.omschrijving,
+      });
+    },
+    [docState.documents, reloadDocuments, openDocumentsForReview],
+  );
 
   // Load inbox — try AI classification first, fall back to raw bank lines.
   //
@@ -287,6 +390,13 @@ export function BookkeepingInbox() {
     // Check API key status in background
     api.checkApiKeyStatus().then(setApiKeyStatus).catch(() => {});
   }, [loadInbox]);
+
+  // After a booking both lists change: the bank line is processed and the
+  // document has left the mail folder (or shows as linked).
+  const handleReviewComplete = useCallback(() => {
+    void reloadDocuments({ silent: true });
+    void loadInbox(true);
+  }, [reloadDocuments, loadInbox]);
 
   // Filter items by category
   const filteredItems = useMemo(
@@ -523,7 +633,7 @@ export function BookkeepingInbox() {
             {analyzingInvoices ? "Analyseren..." : "Facturen uploaden"}
             <input
               type="file"
-              accept=".pdf"
+              accept={INVOICE_FILE_ACCEPT}
               multiple
               hidden
               onChange={(e) => {
@@ -643,6 +753,20 @@ export function BookkeepingInbox() {
         </Alert>
       )}
 
+      {/* Mail-folder documents being downloaded for the review dialog.
+          Visible on both tabs: the request can come from either. */}
+      {openingDocuments > 0 && (
+        <Alert
+          severity="info"
+          icon={<CircularProgress size={18} color="inherit" aria-hidden="true" />}
+          role="status"
+          aria-live="polite"
+          sx={{ mb: 3 }}
+        >
+          {openingDocuments === 1 ? "Document wordt opgehaald…" : `${openingDocuments} documenten worden opgehaald…`}
+        </Alert>
+      )}
+
       {/* Documenten panel — kept mounted so its state survives a switch */}
       <Box
         role="tabpanel"
@@ -650,7 +774,13 @@ export function BookkeepingInbox() {
         aria-labelledby="inbox-tab-documenten"
         hidden={tab !== "documenten"}
       >
-        <DocumentList state={docState} actions={docActions} aiStatus={apiKeyStatus} />
+        <DocumentList
+          state={docState}
+          actions={docActions}
+          aiStatus={apiKeyStatus}
+          onBook={handleBookDocument}
+          onBookAll={handleBookAll}
+        />
       </Box>
 
       {/* Afschriften panel */}
@@ -666,7 +796,8 @@ export function BookkeepingInbox() {
         <AiStatusAlert status={apiKeyStatus} variant="bank" sx={{ mb: 3 }} />
       )}
 
-      {/* Invoice review dialog — shown after PDFs are analyzed */}
+      {/* Invoice review dialog — shown after files are analyzed or for
+          mail-folder documents that are ready to book */}
       {reviewInvoices && (
         <InvoiceReviewDialog
           open={true}
@@ -674,7 +805,8 @@ export function BookkeepingInbox() {
           analyzed={reviewInvoices}
           ledgerAccounts={ledgerAccounts ?? []}
           vatCodes={vatCodes ?? []}
-          onComplete={() => loadInbox(true)}
+          onComplete={handleReviewComplete}
+          excludeFolderIds={excludeFolderIds}
         />
       )}
 
@@ -804,6 +936,7 @@ export function BookkeepingInbox() {
                     // Use the same review dialog flow as "Facturen uploaden"
                     handleInvoiceFiles([file]);
                   }}
+                  onOpenDocument={(fileId) => void handleOpenDocument(fileId, item)}
                   processed={processedIds.has(item.id)}
                 />
               ))}

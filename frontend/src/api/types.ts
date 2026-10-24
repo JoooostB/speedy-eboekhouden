@@ -365,6 +365,48 @@ export interface AnalyzedInvoice extends InvoiceAnalyzeResponse {
   localPdfUrl?: string;
   /** Original File for re-encoding as base64 on submit. */
   localFile?: File;
+  /** Set when the document already sits in the Mail & herken folder: the
+   *  archive file id to book from. The submit then sends archiveFileId (and
+   *  targetFolderId) instead of the file itself, and the backend renames and
+   *  moves the file after booking. */
+  archiveFileId?: number;
+  /** Name of the mail folder the document comes from, for the helper text. */
+  mailFolderName?: string;
+  /** Readable title of the mail-folder document, shown instead of the file
+   *  name ("Anthropic · 12 okt 2026 · € 21,78"). */
+  documentTitle?: string;
+}
+
+/** The archive side of a submit response, shared by SubmitFull and
+ *  SubmitReceipt. archived/linked/renamed/moved are always sent; the rest
+ *  only when it has a value. */
+export interface SubmitArchiveOutcome {
+  archived?: boolean;
+  linked?: boolean;
+  renamed?: boolean;
+  moved?: boolean;
+  /** The name the file carries after the booking. */
+  archiveName?: string;
+  targetFolderId?: number;
+  /** Breadcrumb of the folder the file ended up in: "Facturen / 2026 / 10 Oktober". */
+  targetFolderPath?: string;
+  /** Dutch warning when the booking succeeded but linking, renaming or
+   *  moving the mail-folder document did not. Same role as paymentWarning. */
+  archiveWarning?: string;
+}
+
+export interface InvoiceSubmitFullResponse extends SubmitArchiveOutcome {
+  mutNr: number;
+  mutId: number;
+  paymentMutNr?: number;
+  /** Set when FactuurOntvangen succeeded but the bank-line-clearing
+   *  payment mutation didn't — UI should treat as warning, not success. */
+  paymentWarning?: string;
+}
+
+export interface InvoiceSubmitReceiptResponse extends SubmitArchiveOutcome {
+  mutNr: number;
+  mutId: number;
 }
 
 /** Payload for POST /api/v1/invoices/submit-full */
@@ -381,15 +423,27 @@ export interface InvoiceSubmitFullRequest {
   relatieId: number;
   tegenRekeningId: number;
   rekeningId: number;
-  uploadKey: string;
-  filename: string;
+  /** R2 key of the analysed upload. Absent for a mail-folder document. */
+  uploadKey?: string;
+  /** Accepted by the backend for compatibility; the archive name follows
+   *  the naming convention. Absent for a mail-folder document. */
+  filename?: string;
   /** Base64-encoded PDF; alternative to uploadKey for clients that don't use
    *  R2. The backend prefers pdfBase64 when both are present. */
   pdfBase64?: string;
   /** Archive folder ID picked by the user. When omitted the backend either
-   *  auto-creates Inkoopfacturen/year/month (if R2 is configured) or skips
+   *  auto-creates Facturen/year/month (if R2 is configured) or skips
    *  archiving entirely. */
   folderId?: number;
+  /** A file in the Mail & herken folder to book from instead of an upload.
+   *  Mutually exclusive with pdfBase64/uploadKey. The backend links the
+   *  file, renames it and moves it to targetFolderId. */
+  archiveFileId?: number;
+  /** Where the mail-folder document goes after booking. Omitted means
+   *  Facturen/<jaar>/<maand>. Only with archiveFileId. */
+  targetFolderId?: number;
+  /** Only influences the archive name: "creditnota" or (default) "factuur". */
+  documentType?: "factuur" | "creditnota";
   importId?: number;
   /** Echo of the analyze response's pdfHash so the backend can write a
    *  duplicate-detection marker. Optional for legacy clients. */
@@ -422,12 +476,17 @@ export interface InvoiceSubmitReceiptRequest {
   btwBedrag: number;
   btwCode: string;
   tegenRekeningId: number;
-  uploadKey: string;
-  filename: string;
+  /** See InvoiceSubmitFullRequest.uploadKey; absent for a mail-folder document. */
+  uploadKey?: string;
+  filename?: string;
   /** Base64-encoded PDF; see InvoiceSubmitFullRequest.pdfBase64. */
   pdfBase64?: string;
   /** Archive folder ID; see InvoiceSubmitFullRequest.folderId. */
   folderId?: number;
+  /** See InvoiceSubmitFullRequest.archiveFileId. */
+  archiveFileId?: number;
+  /** See InvoiceSubmitFullRequest.targetFolderId. */
+  targetFolderId?: number;
   importId?: number;
   /** Bank account internal ID — required when importId is not provided. */
   bankAccountId?: number;
