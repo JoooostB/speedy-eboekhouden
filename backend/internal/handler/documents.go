@@ -235,11 +235,8 @@ func ignoredDocuments(ctx context.Context, rdb *redis.Client, userID string) map
 }
 
 // countOpenMailDocuments counts the documents the dashboard should draw
-// attention to: the files in the mail folder that still need the user, by
-// the same status rules as the Documents tab (documentStatus). Linked,
-// ignored, unsupported and junk files are not counted; junk needs the cached
-// analyses, because a small image that was analysed follows its analysis.
-// An administration without a mail folder has zero.
+// attention to: in the mail folder, not ignored, not yet linked, readable by
+// the analyser. An administration without a mail folder has zero.
 func countOpenMailDocuments(ctx context.Context, rdb *redis.Client, client *eboekhouden.Client, userID string) (int, error) {
 	_, files, err := mailFolderFiles(client)
 	if errors.Is(err, errMailFolderNotConfigured) {
@@ -248,32 +245,14 @@ func countOpenMailDocuments(ctx context.Context, rdb *redis.Client, client *eboe
 	if err != nil {
 		return 0, err
 	}
-	ids := make([]int, len(files))
-	for i, f := range files {
-		ids[i] = f.ID
-	}
-	return countOpenDocuments(files, ignoredDocuments(ctx, rdb, userID), loadDocumentAnalyses(ctx, rdb, userID, ids)), nil
-}
-
-// countOpenDocuments is the pure part of countOpenMailDocuments: every file
-// whose status is not linked, ignored, unsupported or junk.
-func countOpenDocuments(files []eboekhouden.ArchiveFile, ignored map[int]bool, analyses map[int]*documentAnalysisEntry) int {
+	ignored := ignoredDocuments(ctx, rdb, userID)
 	n := 0
 	for _, f := range files {
-		status := documentStatus(docStatusInput{
-			KoppelCount: f.KoppelCount,
-			Ignored:     ignored[f.ID],
-			MediaType:   mediaTypeFromExtension(f.Naam),
-			Size:        f.Size,
-			Analysis:    analyses[f.ID].invoice(),
-		})
-		switch status {
-		case docStatusLinked, docStatusIgnored, docStatusUnsupported, docStatusJunk:
-		default:
+		if f.KoppelCount == 0 && !ignored[f.ID] && mediaTypeFromExtension(f.Naam) != "" {
 			n++
 		}
 	}
-	return n
+	return n, nil
 }
 
 // writeDocumentsError maps the errors of the mail-folder helpers and other

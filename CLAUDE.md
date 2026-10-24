@@ -120,7 +120,7 @@ Statuses in priority order (`documentStatus` in `documents_status.go`): `linked`
 
 Both responses always carry `archived, linked, renamed, moved` and, when set, `archiveName, targetFolderId, targetFolderPath, archiveWarning`. A failed rename/move never fails the booking: the mutation stands and `archiveWarning` says what state the file is in (rename failed → untouched in the mail folder; move failed → renamed, still in the mail folder, linked, so "Alles opruimen" can finish it).
 
-`GET /inbox/summary` includes `documentsCount`: the mail-folder files whose status is not `linked`, `ignored`, `unsupported` or `junk` (`countOpenDocuments`, the same rules as the Documents tab). `POST /inbox/classify` returns the cached classification base with two overlays recomputed on every response, cache hit or not: bank lines paying an open post become factuurbetaling suggestions (`openPostMatch`, `relatieId`, `factuurnummer`), and lines that are the assigned payment of an analysed document carry `documentMatch {fileId, title}`.
+`GET /inbox/summary` includes `documentsCount` (mail-folder files that are not ignored, not linked and readable; the same rule as `pendingDocumentCount` behind the Documents tab badge, so junk counts: it waits for "Negeren"). `POST /inbox/classify` returns the cached classification base with two overlays recomputed on every response, cache hit or not: bank lines paying an open post become factuurbetaling suggestions (`openPostMatch`, `relatieId`, `factuurnummer`), and lines that are the assigned payment of an analysed document carry `documentMatch {fileId, title}`.
 
 ## e-Boekhouden Endpoints Learned for This Feature
 
