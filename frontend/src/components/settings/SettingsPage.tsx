@@ -19,6 +19,21 @@ import { useAuth } from "../../context/AuthContext";
 import { track } from "../../analytics";
 import { PasskeysSection } from "./PasskeysSection";
 import { LearnedSection } from "./LearnedSection";
+import { EBoekhoudenDisconnectDialog } from "../EBoekhoudenDisconnectDialog";
+
+/** Inline SVG icon: Link / connection */
+function LinkIcon(props: { sx?: object }) {
+  return (
+    <Box
+      component="svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true" sx={{ width: 20, height: 20, ...props.sx }}
+    >
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </Box>
+  );
+}
 
 /** Inline SVG icon: Key (Lucide-style) */
 function KeyIcon(props: { sx?: object }) {
@@ -102,7 +117,8 @@ function GlobeIcon(props: { sx?: object }) {
 }
 
 export function SettingsPage() {
-  const { user, team, avatarUrl, setAvatarUrl } = useAuth();
+  const { user, team, avatarUrl, setAvatarUrl, eboekhoudenConnected } = useAuth();
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [hasSoapCredentials, setHasSoapCredentials] = useState(false);
   const [hasRestAccessToken, setHasRestAccessToken] = useState(false);
@@ -286,6 +302,36 @@ export function SettingsPage() {
             </Button>
           )}
         </Box>
+      </Paper>
+
+      {/* e-Boekhouden connection: status, connect, disconnect */}
+      <Paper sx={{ p: 3, mb: 3 }}>
+        <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
+          <LinkIcon sx={{ mr: 1, color: "primary.main", flexShrink: 0 }} />
+          <Typography variant="h6" component="h2">Verbinding met e-Boekhouden</Typography>
+          <Chip
+            label={eboekhoudenConnected ? "Gekoppeld" : "Niet gekoppeld"}
+            color={eboekhoudenConnected ? "success" : "default"}
+            size="small"
+            sx={{ ml: 1 }}
+          />
+        </Box>
+
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          {eboekhoudenConnected
+            ? "Speedy is verbonden met je e-Boekhouden-administratie. Verbreek de verbinding om je af te melden bij e-Boekhouden en de tijdelijk opgeslagen gegevens van deze administratie uit Speedy te verwijderen. Je wachtwoord bewaart Speedy nooit."
+            : "Speedy is niet verbonden met e-Boekhouden. Koppel je administratie om afschriften, documenten en uren te verwerken."}
+        </Typography>
+
+        {eboekhoudenConnected ? (
+          <Button variant="outlined" color="error" onClick={() => setDisconnectOpen(true)}>
+            Verbinding verbreken
+          </Button>
+        ) : (
+          <Button variant="contained" onClick={() => window.dispatchEvent(new CustomEvent("eb:connect"))}>
+            e-Boekhouden koppelen
+          </Button>
+        )}
       </Paper>
 
       {/* Onderneming type — drives Claude's BV-vs-ZZP classification rules */}
@@ -522,6 +568,8 @@ export function SettingsPage() {
           </List>
         </Paper>
       )}
+
+      <EBoekhoudenDisconnectDialog open={disconnectOpen} onClose={() => setDisconnectOpen(false)} />
     </Box>
   );
 }

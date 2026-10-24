@@ -32,6 +32,17 @@ export interface EBStatusResponse {
   mfaPending: boolean;
 }
 
+/** Response of POST /eboekhouden/disconnect ("Verbinding verbreken"). */
+export interface EBDisconnectResponse {
+  status: "ok";
+  /** True only when e-boekhouden confirmed the session is gone after the
+   *  logout request. False means Speedy dropped its token and caches but
+   *  e-boekhouden lets the session expire on its own. */
+  ebLoggedOut: boolean;
+  /** Number of cached Redis keys of this user that were deleted. */
+  purgedKeys: number;
+}
+
 // Hours (existing)
 export interface Employee {
   id: number;

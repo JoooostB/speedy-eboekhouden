@@ -9,6 +9,7 @@ import type {
   ClassifyRequest,
   ClassifyResult,
   CreateInvoiceRequest,
+  EBDisconnectResponse,
   EBStatusResponse,
   EmailTemplate,
   Employee,
@@ -212,7 +213,7 @@ export const api = {
   },
 
   ebDisconnect() {
-    return request<{ status: string }>("/eboekhouden/disconnect", { method: "POST" });
+    return request<EBDisconnectResponse>("/eboekhouden/disconnect", { method: "POST" });
   },
 
   ebKeepalive() {

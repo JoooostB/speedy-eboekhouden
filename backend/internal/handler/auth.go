@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
 	"github.com/joooostb/speedy-eboekhouden/internal/eboekhouden"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
+	"github.com/redis/go-redis/v9"
 )
 
 // EBoekhoudenAuthHandler handles e-boekhouden login (secondary auth within an existing Speedy session).
@@ -18,6 +20,13 @@ type EBoekhoudenAuthHandler struct {
 	sessions *session.Store
 	db       *database.DB
 	encKey   crypto.AESKey
+	// redis holds the per-user caches that Disconnect purges (see
+	// userCachePatterns). nil skips the purge; tests pass a fake.
+	redis keyScanner
+	// logoutEB ends the e-boekhouden session behind a token and reports
+	// whether e-boekhouden confirmed that the token is dead. Defaults to
+	// logoutEBoekhouden; tests replace it.
+	logoutEB func(token string) bool
 
 	// pendingMFA keeps the e-boekhouden Client in memory during the MFA window.
 	// The cookie jar from the login request is needed to complete MFA — it can't
@@ -31,8 +40,13 @@ type pendingMFAEntry struct {
 }
 
 // NewEBoekhoudenAuthHandler creates a new e-boekhouden auth handler.
-func NewEBoekhoudenAuthHandler(sessions *session.Store, db *database.DB, encKey crypto.AESKey) *EBoekhoudenAuthHandler {
-	h := &EBoekhoudenAuthHandler{sessions: sessions, db: db, encKey: encKey}
+// redisClient may be nil, in which case Disconnect clears the token but
+// purges no caches.
+func NewEBoekhoudenAuthHandler(sessions *session.Store, db *database.DB, encKey crypto.AESKey, redisClient *redis.Client) *EBoekhoudenAuthHandler {
+	h := &EBoekhoudenAuthHandler{sessions: sessions, db: db, encKey: encKey, logoutEB: logoutEBoekhouden}
+	if redisClient != nil {
+		h.redis = redisClient
+	}
 	go h.cleanupPendingMFA()
 	return h
 }
@@ -203,22 +217,79 @@ func (h *EBoekhoudenAuthHandler) Keepalive(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"alive": true})
 }
 
-// Disconnect handles POST /api/v1/eboekhouden/disconnect
+// Disconnect handles POST /api/v1/eboekhouden/disconnect ("Verbinding
+// verbreken"). In order:
+//
+//  1. Best-effort: log the token out at e-boekhouden and check whether the
+//     session is really gone; that result is ebLoggedOut.
+//  2. Clear the token from the Redis session and from PostgreSQL. A pending
+//     MFA login is dropped as well.
+//  3. Purge this user's cached administration data from Redis
+//     (userCachePatterns): classification, analyses, duplicate markers,
+//     locks and the ignore list. Learned classifications stay: they are the
+//     user's preferences, deletable under Instellingen.
+//
+// A failure in step 1 or 3 never prevents step 2. The response is
+// {status:"ok", ebLoggedOut:bool, purgedKeys:n}; ebLoggedOut is true only
+// when e-boekhouden reported the token as invalid after the logout request.
 func (h *EBoekhoudenAuthHandler) Disconnect(c *gin.Context) {
 	sess := session.FromContext(c)
 	if sess == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
 		return
 	}
+	ctx := c.Request.Context()
+
+	loggedOut := false
+	if sess.EBoekhoudenToken != "" && !sess.MFAPending && h.logoutEB != nil {
+		loggedOut = h.logoutEB(sess.EBoekhoudenToken)
+	}
+	h.pendingMFA.Delete(sess.ID)
 
 	sess.EBoekhoudenToken = ""
 	sess.MFAPending = false
-	h.sessions.Update(c.Request.Context(), sess)
+	if h.sessions != nil {
+		h.sessions.Update(ctx, sess)
+	}
+	if h.db != nil {
+		h.db.ClearEBToken(ctx, sess.UserID)
+	}
 
-	// Also clear from PostgreSQL
-	h.db.ClearEBToken(c.Request.Context(), sess.UserID)
+	purged := 0
+	if h.redis != nil {
+		n, err := purgeUserCaches(ctx, h.redis, sess.UserID)
+		purged = n
+		if err != nil {
+			log.Printf("Disconnect: cache purge incomplete for user %s after %d keys: %v", sess.UserID, n, err)
+		}
+	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{
+		"status":      "ok",
+		"ebLoggedOut": loggedOut,
+		"purgedKeys":  purged,
+	})
+}
+
+// logoutEBoekhouden is the production logoutEB: it sends the logout request
+// for token and returns true only when e-boekhouden then reports the token as
+// no longer valid. The logout page answers with the login page whether or not
+// anything happened, so the follow-up check is what counts. Only error
+// classes are logged.
+func logoutEBoekhouden(token string) bool {
+	client, err := eboekhouden.NewClientWithToken(token)
+	if err != nil {
+		return false
+	}
+	if err := client.Logout(); err != nil {
+		log.Printf("Disconnect: e-boekhouden logout request failed: %T", err)
+	}
+	valid, err := client.CheckAuth()
+	if err != nil {
+		log.Printf("Disconnect: e-boekhouden auth check failed: %T", err)
+		return false
+	}
+	return !valid
 }
 
 func (h *EBoekhoudenAuthHandler) cleanupPendingMFA() {

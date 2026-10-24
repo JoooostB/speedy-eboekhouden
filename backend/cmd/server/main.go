@@ -79,7 +79,7 @@ func main() {
 
 	// Handlers
 	passkeyHandler := handler.NewPasskeyHandler(webauthnSvc, store, cfg, db, encKey, mailer, r2Client)
-	ebAuthHandler := handler.NewEBoekhoudenAuthHandler(store, db, encKey)
+	ebAuthHandler := handler.NewEBoekhoudenAuthHandler(store, db, encKey, redisClient)
 	settingsHandler := handler.NewSettingsHandler(db, encKey)
 	passkeySettingsHandler := handler.NewPasskeySettingsHandler(db)
 	learnedSettingsHandler := handler.NewLearnedSettingsHandler(db)
