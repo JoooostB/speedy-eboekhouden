@@ -88,6 +88,7 @@ func main() {
 	classifyHandler := handler.NewClassifyHandler(claudeSvc, db, encKey)
 	inboxHandler := handler.NewInboxHandler(claudeSvc, db, encKey, redisClient, r2Client, store)
 	bankStatementsHandler := handler.NewBankStatementsHandler(store, db)
+	archiveHandler := handler.NewArchiveHandler(store, db)
 	soapHandler := handler.NewSoapAPIHandler(db, encKey)
 	restHandler := handler.NewRestAPIHandler(db, encKey)
 
@@ -211,11 +212,11 @@ func main() {
 				eb.GET("/vat-codes", handler.GetVATCodes)
 
 				// Digital archive
-				eb.GET("/archive/folders", handler.GetArchiveFolders)
-				eb.POST("/archive/folders", handler.CreateArchiveFolder)
-				eb.GET("/archive/files/:folderId", handler.GetArchiveFiles)
-				eb.POST("/archive/upload", handler.UploadArchiveFile)
-				eb.POST("/archive/link", handler.LinkFileToMutation)
+				eb.GET("/archive/folders", archiveHandler.GetArchiveFolders)
+				eb.POST("/archive/folders", archiveHandler.CreateArchiveFolder)
+				eb.GET("/archive/files/:folderId", archiveHandler.GetArchiveFiles)
+				eb.POST("/archive/upload", archiveHandler.UploadArchiveFile)
+				eb.POST("/archive/link", archiveHandler.LinkFileToMutation)
 
 				// Relations + KvK
 				eb.GET("/kvk/search", handler.SearchKvK)
