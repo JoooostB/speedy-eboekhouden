@@ -329,10 +329,10 @@ export const api = {
       credentials: "include",
       body: formData,
     }).then(async (res) => {
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        throw new ApiError(res.status, body.error || body.message || res.statusText);
-      }
+      // Through throwApiError like every other call: an expired e-boekhouden
+      // session (412) must open the reconnect prompt, and the user reads the
+      // Dutch message, not the machine code (that one is on err.code).
+      if (!res.ok) await throwApiError(res, "/invoices/analyze");
       return res.json() as Promise<InvoiceAnalyzeResponse>;
     });
   },

@@ -119,21 +119,19 @@ describe("requestBlob shares the rules", () => {
 describe("analyzeInvoice (upload) error handling", () => {
   const file = new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], "voorbeeld-factuur.pdf", { type: "application/pdf" });
 
-  it("keeps main's message order for the errors main already sent (error before message)", async () => {
-    // Unchanged from main: analyzeInvoice has its own fetch and prefers the
-    // machine code. Recorded so a change here is deliberate.
+  it("shows the Dutch message and keeps the machine code on err.code", async () => {
+    // Deliberate change from main, which showed the code ("no_api_key").
     fetchMock.mockResolvedValue(jsonResponse(400, { error: "no_api_key", message: "Stel eerst een Anthropic API-sleutel in" }));
     const err = await caught(api.analyzeInvoice(file));
     expect(err.status).toBe(400);
-    expect(err.message).toBe("no_api_key");
+    expect(err.message).toBe("Stel eerst een Anthropic API-sleutel in");
+    expect(err.code).toBe("no_api_key");
   });
 
-  // regression: since this branch POST /invoices/analyze answers 412
-  // eboekhouden_session_expired when the e-boekhouden session has expired
-  // (main ignored the expired session and still analysed). analyzeInvoice
-  // bypasses throwApiError, so the reconnect prompt never opens and the user
-  // reads "Fout bij voorbeeld-factuur.pdf: eboekhouden_session_expired".
-  it.skip("regression: a 412 from analyze opens the reconnect prompt and shows the Dutch message", async () => {
+  // POST /invoices/analyze answers 412 eboekhouden_session_expired when the
+  // e-boekhouden session has expired (main ignored it and still analysed), so
+  // the upload has to open the reconnect prompt like every other call.
+  it("a 412 from analyze opens the reconnect prompt and shows the Dutch message", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse(412, {
         error: "eboekhouden_session_expired",
