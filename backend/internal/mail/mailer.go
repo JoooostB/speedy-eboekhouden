@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"html"
@@ -8,6 +9,7 @@ import (
 	"net/smtp"
 	"net/textproto"
 	"strings"
+	"time"
 )
 
 // Config holds SMTP connection settings.
@@ -19,9 +21,21 @@ type Config struct {
 	From     string
 }
 
+// Bounds of one delivery. smtp.SendMail has none, so a server that accepts
+// the connection and then stalls would hold the sender forever; mails are
+// sent in the background, so stalled sends would pile up.
+const (
+	defaultDialTimeout = 10 * time.Second
+	defaultSendTimeout = 30 * time.Second
+)
+
 // Mailer sends transactional emails via SMTP.
 type Mailer struct {
 	config Config
+	// dialTimeout bounds connecting, sendTimeout the whole SMTP
+	// conversation (TLS handshake included). Tests shorten them.
+	dialTimeout time.Duration
+	sendTimeout time.Duration
 }
 
 // New creates a new mailer. Returns nil if SMTP is not configured.
@@ -29,7 +43,7 @@ func New(cfg Config) *Mailer {
 	if cfg.Host == "" {
 		return nil
 	}
-	return &Mailer{config: cfg}
+	return &Mailer{config: cfg, dialTimeout: defaultDialTimeout, sendTimeout: defaultSendTimeout}
 }
 
 // sanitizeHeader strips CR/LF to prevent email header injection.
@@ -106,10 +120,53 @@ func (m *Mailer) sendHTML(to, subject, htmlBody, plain string) error {
 	return m.deliver(to, []byte(msg))
 }
 
+// deliver does what smtp.SendMail does (STARTTLS when offered, PLAIN auth,
+// one recipient), on a connection with a deadline. Without a username it
+// sends without AUTH, for a relay that needs none.
 func (m *Mailer) deliver(to string, msg []byte) error {
-	auth := smtp.PlainAuth("", m.config.Username, m.config.Password, m.config.Host)
-	addr := m.config.Host + ":" + m.config.Port
-	return smtp.SendMail(addr, auth, m.config.From, []string{to}, msg)
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(m.config.Host, m.config.Port), m.dialTimeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(m.sendTimeout)); err != nil {
+		return err
+	}
+
+	c, err := smtp.NewClient(conn, m.config.Host)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: m.config.Host}); err != nil {
+			return err
+		}
+	}
+	if ok, _ := c.Extension("AUTH"); ok {
+		if err := c.Auth(smtp.PlainAuth("", m.config.Username, m.config.Password, m.config.Host)); err != nil {
+			return err
+		}
+	} else if m.config.Username != "" {
+		return errors.New("smtp: server doesn't support AUTH")
+	}
+	if err := c.Mail(m.config.From); err != nil {
+		return err
+	}
+	if err := c.Rcpt(to); err != nil {
+		return err
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(msg); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
 }
 
 // ErrClass renders a send error for a log line without the recipient. SMTP

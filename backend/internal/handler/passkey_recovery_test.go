@@ -12,6 +12,7 @@ import (
 	"github.com/joooostb/speedy-eboekhouden/internal/auth"
 	"github.com/joooostb/speedy-eboekhouden/internal/auth/authtest"
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
+	"github.com/joooostb/speedy-eboekhouden/internal/mail"
 )
 
 const (
@@ -121,5 +122,45 @@ func TestRecoverFinishAnswersInDutch(t *testing.T) {
 	}
 	if code, msg := callRecoverFinish(t, h, map[string]string{"X-Challenge-ID": challengeID}, []byte("{}")); code != http.StatusBadRequest || msg != msgRecoveryNotCreated {
 		t.Fatalf("broken credential: got %d %q", code, msg)
+	}
+}
+
+// The answer to a recovery request must not depend on the address: the
+// lookup, the token and the mail run after the handler answered. The
+// handler has no database here, so any lookup before the answer panics.
+func TestRecoverRequestAnswersBeforeLookingUpTheAddress(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var started []string
+	h := &PasskeyHandler{
+		mailer:        &mail.Mailer{},
+		startRecovery: func(email string) { started = append(started, email) },
+	}
+	call := func(body string) (int, string) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/recover", bytes.NewBufferString(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.RecoverRequest(c)
+		return w.Code, w.Body.String()
+	}
+
+	code, body := call(`{"email":"iemand@voorbeeld.test"}`)
+	if code != http.StatusOK || body != `{"status":"ok"}` {
+		t.Fatalf("got %d %s, want 200 {\"status\":\"ok\"}", code, body)
+	}
+	if len(started) != 1 || started[0] != "iemand@voorbeeld.test" {
+		t.Fatalf("background work started for %v, want the address once", started)
+	}
+
+	if code, _ := call(`{"email":"geen-adres"}`); code != http.StatusBadRequest {
+		t.Errorf("invalid address: got %d, want 400", code)
+	}
+	if len(started) != 1 {
+		t.Errorf("an invalid address started background work")
+	}
+
+	h.mailer = nil
+	if code, _ := call(`{"email":"iemand@voorbeeld.test"}`); code != http.StatusServiceUnavailable {
+		t.Errorf("without mailer: got %d, want 503", code)
 	}
 }

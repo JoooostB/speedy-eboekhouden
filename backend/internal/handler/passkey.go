@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -25,11 +26,17 @@ type PasskeyHandler struct {
 	encKey   crypto.AESKey
 	mailer   *mail.Mailer
 	r2       *storage.Client
+	// startRecovery runs the work behind a recovery request (account lookup,
+	// token, mail) after RecoverRequest has answered; by default
+	// sendRecoveryMail in a goroutine. Tests replace it.
+	startRecovery func(email string)
 }
 
 // NewPasskeyHandler creates a new passkey handler.
 func NewPasskeyHandler(wa *auth.WebAuthnService, sessions *session.Store, cfg *config.Config, db *database.DB, encKey crypto.AESKey, mailer *mail.Mailer, r2 *storage.Client) *PasskeyHandler {
-	return &PasskeyHandler{webauthn: wa, sessions: sessions, config: cfg, db: db, encKey: encKey, mailer: mailer, r2: r2}
+	h := &PasskeyHandler{webauthn: wa, sessions: sessions, config: cfg, db: db, encKey: encKey, mailer: mailer, r2: r2}
+	h.startRecovery = func(email string) { go h.sendRecoveryMail(email) }
+	return h
 }
 
 type registerBeginRequest struct {
@@ -96,7 +103,11 @@ func (h *PasskeyHandler) RegisterFinish(c *gin.Context) {
 
 	// Send welcome email async (non-blocking)
 	if h.mailer != nil {
-		go h.mailer.SendWelcomeEmail(user.Email, user.Name, h.config.WebAuthnOrigin+"/app/")
+		go func(userID, email, name string) {
+			if err := h.mailer.SendWelcomeEmail(email, name, h.config.WebAuthnOrigin+"/app/"); err != nil {
+				log.Printf("Registration: welcome mail for user %s not sent: %s", userID, mail.ErrClass(err))
+			}
+		}(user.ID, user.Email, user.Name)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -237,35 +248,43 @@ func (h *PasskeyHandler) RecoverRequest(c *gin.Context) {
 		return
 	}
 
-	// Always answer the same to avoid e-mail enumeration: an address without
-	// an account, a token that could not be stored and a mail that could not
-	// be sent all look like success. A failure for an existing account must
-	// not answer differently, because the difference would tell a caller that
-	// the address has an account (and during an SMTP outage every request
-	// would). The frontend words the success conditionally ("Als er een
-	// account bestaat…"), so it does not promise a mail. Failures are logged
-	// by user id and error class only: never the address, and never the SMTP
-	// reply text, which often echoes it. A server without mailer at all is a
-	// server-wide condition and is reported above.
-	user, err := h.db.GetUserByEmail(c.Request.Context(), req.Email)
+	// Answer the same for every address, and before anything about the
+	// address is looked up: the lookup, the token and the mail run in the
+	// background (sendRecoveryMail). Neither the answer nor its timing then
+	// tells a caller whether the address has an account, also not during an
+	// SMTP outage. The frontend words the success conditionally ("Als er een
+	// account bestaat…"), so it does not promise a mail. A server without
+	// mailer at all is a server-wide condition and is reported above.
+	h.startRecovery(req.Email)
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// recoveryWorkTimeout bounds the database part of sendRecoveryMail; the
+// mail itself has the mailer's own timeouts.
+const recoveryWorkTimeout = time.Minute
+
+// sendRecoveryMail looks up the account of a recovery request, stores a
+// recovery token and mails the link. It runs after RecoverRequest has
+// answered, so it has its own context. An address without an account ends
+// here silently. Failures are logged by user id and error class only: never
+// the address, and never the SMTP reply text, which often echoes it.
+func (h *PasskeyHandler) sendRecoveryMail(email string) {
+	ctx, cancel := context.WithTimeout(context.Background(), recoveryWorkTimeout)
+	defer cancel()
+
+	user, err := h.db.GetUserByEmail(ctx, email)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
-
-	token, err := h.db.CreateRecoveryToken(c.Request.Context(), user.ID)
+	token, err := h.db.CreateRecoveryToken(ctx, user.ID)
 	if err != nil {
 		log.Printf("Recovery: storing a token for user %s failed: %v", user.ID, err)
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
-
 	recoveryURL := h.config.WebAuthnOrigin + "/app/herstel?token=" + token
 	if err := h.mailer.SendRecoveryEmail(user.Email, user.Name, recoveryURL); err != nil {
 		log.Printf("Recovery: mail for user %s not sent: %s", user.ID, mail.ErrClass(err))
 	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // RecoverFinishBegin handles POST /api/v1/auth/recover/begin — starts passkey registration with a recovery token.
