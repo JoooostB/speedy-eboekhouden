@@ -110,6 +110,7 @@ function invoiceBlocker(inv: InvoiceEdit): string | null {
     hasRelation: inv.relation !== null,
     hasImportId: inv.importId !== 0,
     isReceipt: inv.isReceipt,
+    isCreditnota: inv.source.invoice.documentType === "creditnota",
   });
 }
 

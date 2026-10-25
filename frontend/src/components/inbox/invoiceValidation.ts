@@ -1,3 +1,5 @@
+import { CREDITNOTA_NOT_BOOKABLE } from "../../hooks/mailDocumentsModel";
+
 /**
  * Per-row validation for the invoice review batch. Returns the Dutch reason
  * a row can't be booked yet, or null when the row is ready.
@@ -21,9 +23,13 @@ export interface InvoiceValidationInput {
   hasImportId: boolean;
   /** True when the user picked the Bonnetje toggle for this row. */
   isReceipt: boolean;
+  /** True when the analysis says the document is a credit note, which
+   *  Speedy cannot book yet (in either mode). */
+  isCreditnota?: boolean;
 }
 
 export function invoiceBlocker(inv: InvoiceValidationInput): string | null {
+  if (inv.isCreditnota) return CREDITNOTA_NOT_BOOKABLE;
   if (!inv.hasLedgerAccount) return "Geen tegenrekening";
   if (inv.isReceipt && !inv.hasImportId) return "Geen afschriftregel gekoppeld";
   if (!inv.isReceipt && !inv.hasRelation) return "Geen relatie";

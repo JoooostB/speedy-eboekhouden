@@ -23,6 +23,11 @@ describe("invoiceBlocker — factuur mode", () => {
     expect(factuur({ hasRelation: false })).toBe("Geen relatie");
   });
 
+  it("blocks a credit note in either mode, even when complete", () => {
+    expect(factuur({ isCreditnota: true })).toBe("Creditnota's boek je voorlopig in e-Boekhouden zelf");
+    expect(factuur({ isCreditnota: true, isReceipt: true })).toBe("Creditnota's boek je voorlopig in e-Boekhouden zelf");
+  });
+
   it("does NOT require a bank line for factuur mode", () => {
     // Factuur without bank line is legitimate — the user might link the
     // payment later. This was important for the partial-submit feature.

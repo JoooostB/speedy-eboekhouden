@@ -22,6 +22,7 @@ import {
   primaryActionFor,
   sectionsFromSnapshot,
   summarizeRun,
+  CREDITNOTA_NOT_BOOKABLE,
 } from "./mailDocumentsModel";
 
 const doc = (id: number, status: MailDocumentStatus, overrides: Partial<MailDocument> = {}): MailDocument => ({
@@ -347,6 +348,22 @@ describe("primaryActionFor", () => {
   it("has no booking action when the parent cannot book", () => {
     expect(primaryActionFor(analyzed(1, "matched"), undefined, false)).toBeNull();
     expect(primaryActionFor(analyzed(1, "unmatched"), undefined, false)).toBeNull();
+  });
+
+  it("never offers to book a credit note", () => {
+    for (const status of ["matched", "unmatched"] as const) {
+      const cn = analyzed(1, status, { documentType: "creditnota" });
+      expect(primaryActionFor(cn, undefined, true)).toEqual({
+        kind: "wait",
+        label: "Boeken",
+        disabled: true,
+        reason: CREDITNOTA_NOT_BOOKABLE,
+      });
+      expect(documentSubtitle(cn)).toBe(CREDITNOTA_NOT_BOOKABLE);
+    }
+    // Other statuses keep their own action, e.g. cleaning up once it is
+    // booked and linked in e-Boekhouden.
+    expect(primaryActionFor(doc(1, "linked", { documentType: "creditnota" }), undefined, true)).toEqual({ kind: "archive", label: "Opruimen" });
   });
 });
 

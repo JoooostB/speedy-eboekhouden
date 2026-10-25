@@ -451,7 +451,7 @@ func buildDocumentList(ctx context.Context, rdb *redis.Client, client *eboekhoud
 		if entry.PdfHash != "" {
 			hashes = append(hashes, entry.PdfHash)
 		}
-		if bankLineMatchable(inv) {
+		if assignsBankLine(inv) {
 			needGrid = true
 		}
 	}
@@ -467,7 +467,7 @@ func buildDocumentList(ctx context.Context, rdb *redis.Client, client *eboekhoud
 			log.Printf("Documents: import grid fetch failed, listing without matches: %s", errClass(err))
 		} else {
 			for id, inv := range invoices {
-				if bankLineMatchable(inv) {
+				if assignsBankLine(inv) {
 					candidates[id] = rankBankLineMatches(inv, rows, nil)
 				}
 			}

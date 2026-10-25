@@ -74,6 +74,16 @@ func bankLineMatchable(inv *claude.InvoiceData) bool {
 	return inv.BedragInclBTW > 0 && !math.IsInf(inv.BedragInclBTW, 0)
 }
 
+// assignsBankLine reports whether inv takes part in bank-line matching for
+// booking: the analysis response, the documents list and the "Document
+// gevonden" annotation. A creditnota does not for now, because it cannot be
+// booked (errCreditnotaNotSupported) and pairing it with an incoming line
+// would only lead the user to a refused booking. rankBankLineMatches still
+// knows how to rank one, for when credit notes can be booked.
+func assignsBankLine(inv *claude.InvoiceData) bool {
+	return bankLineMatchable(inv) && strings.ToLower(strings.TrimSpace(inv.DocumentType)) != claude.DocumentTypeCreditnota
+}
+
 // rankBankLineMatches returns the unprocessed bank lines that could belong
 // to inv, best first, at most maxBankLineCandidates. rows are import-grid
 // rows as produced by eboekhouden.ParseImportGrid; ids in exclude are

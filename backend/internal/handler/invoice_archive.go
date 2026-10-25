@@ -94,9 +94,18 @@ func (s archiveSource) archiveName(in archiveNameInput) string {
 	return archiveFileName(in.leverancier, in.kenmerk, datum, in.docType, s.mediaType)
 }
 
+// errCreditnotaNotSupported refuses booking a credit note. SubmitFull books
+// a FactuurOntvangen with positive amounts (and a "betaling verstuurd" for a
+// linked line), which for a credit note is a cost instead of a credit. Until
+// it is known how e-boekhouden books a received credit note, the user books
+// it there; the mail-folder file then shows up as linked and can be cleaned
+// up from Speedy.
+const errCreditnotaNotSupported = "Creditnota's kun je nog niet via Speedy boeken. Boek deze creditnota in e-Boekhouden zelf."
+
 // submitFullDocType reduces the documentType a SubmitFull request may carry
-// to the two types that endpoint books: creditnota when it says so, factuur
-// otherwise. It only influences the archive name.
+// to creditnota when it says so, factuur otherwise. SubmitFull refuses a
+// creditnota (errCreditnotaNotSupported); otherwise the type only influences
+// the archive name.
 func submitFullDocType(s string) string {
 	if strings.ToLower(strings.TrimSpace(s)) == claude.DocumentTypeCreditnota {
 		return claude.DocumentTypeCreditnota

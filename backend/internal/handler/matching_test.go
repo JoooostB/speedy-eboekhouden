@@ -349,6 +349,31 @@ func TestBankLineMatchable(t *testing.T) {
 	}
 }
 
+// A creditnota cannot be booked yet, so it never claims a bank line; the
+// matcher itself still ranks one (see TestRankBankLineMatches).
+func TestAssignsBankLine(t *testing.T) {
+	tests := []struct {
+		name string
+		inv  *claude.InvoiceData
+		want bool
+	}{
+		{"nil", nil, false},
+		{"factuur", testInvoice("factuur", 1, "EUR", "", ""), true},
+		{"bonnetje", testInvoice("bonnetje", 1, "EUR", "", ""), true},
+		{"creditnota", testInvoice("creditnota", 1, "EUR", "", ""), false},
+		{"Creditnota with spaces", testInvoice(" Creditnota ", 1, "EUR", "", ""), false},
+		{"overig", testInvoice("overig", 1, "EUR", "", ""), false},
+		{"zero", testInvoice("factuur", 0, "EUR", "", ""), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := assignsBankLine(tc.inv); got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSupplierNameTokens(t *testing.T) {
 	tests := []struct {
 		name string

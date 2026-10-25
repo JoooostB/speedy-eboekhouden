@@ -720,6 +720,8 @@ func TestSubmitFullMailDocumentRefusedBeforeBooking(t *testing.T) {
 		{"file unknown", map[string]any{"archiveFileId": 999}, "Document niet gevonden in de mailmap"},
 		{"two sources", map[string]any{"archiveFileId": 501, "pdfBase64": "AAAA"}, "Kies één bron voor het document"},
 		{"negative id", map[string]any{"archiveFileId": -3}, "Ongeldig document-id"},
+		{"creditnota from the mail folder", map[string]any{"archiveFileId": 501, "documentType": "creditnota"}, errCreditnotaNotSupported},
+		{"creditnota upload", map[string]any{"pdfBase64": "JVBERi0=", "documentType": " Creditnota "}, errCreditnotaNotSupported},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -323,9 +323,16 @@ export function documentAriaLabel(action: string, doc: MailDocument): string {
   return `${action} ${doc.title.split(" · ").join(", ")}`;
 }
 
+/** Why a credit note has no booking action. Speedy books every document as
+ *  an invoice received (a cost); for a credit note that would be wrong, so
+ *  the backend refuses it and the user books it in e-Boekhouden. Once linked
+ *  there, the file shows up as "Al gekoppeld" and can be cleaned up here. */
+export const CREDITNOTA_NOT_BOOKABLE = "Creditnota's boek je voorlopig in e-Boekhouden zelf";
+
 /** The second line of a row, per status (and per row state). */
 export function documentSubtitle(doc: MailDocument, rowState?: DocumentRowState): string {
   if (rowState?.kind === "error") return rowState.message;
+  if ((doc.status === "matched" || doc.status === "unmatched") && isCreditnota(doc)) return CREDITNOTA_NOT_BOOKABLE;
   switch (doc.status) {
     case "matched": {
       const m = doc.match;
@@ -382,6 +389,7 @@ export function primaryActionFor(
       return { kind: "analyze", label: "Analyseren" };
     case "matched":
     case "unmatched":
+      if (isCreditnota(doc)) return { kind: "wait", label: "Boeken", disabled: true, reason: CREDITNOTA_NOT_BOOKABLE };
       return canBook ? { kind: "book", label: "Boeken" } : null;
     case "receipt_waiting":
       return { kind: "wait", label: "Boeken", disabled: true, reason: "Bonnetjes boek je samen met de betaling" };

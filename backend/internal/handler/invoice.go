@@ -394,7 +394,7 @@ func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData,
 	// to book a number. The frontend sees currencyConverted so it can ask
 	// the user to verify.
 	candidates := []BankLineCandidate{}
-	if ebClient != nil && bankLineMatchable(invoice) {
+	if ebClient != nil && assignsBankLine(invoice) {
 		raw, err := ebClient.GetImportGrid(0, importGridFetchLimit)
 		if errors.Is(err, eboekhouden.ErrSessionExpired) {
 			return nil, err
@@ -499,8 +499,8 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		Filename       string `json:"filename"`
 		ArchiveFileId  int    `json:"archiveFileId,omitempty"`
 		TargetFolderId int    `json:"targetFolderId,omitempty"`
-		// DocumentType only influences the archive name: "creditnota" or
-		// (default) "factuur".
+		// DocumentType influences the archive name ("factuur" by default).
+		// "creditnota" is refused: see errCreditnotaNotSupported.
 		DocumentType string `json:"documentType,omitempty"`
 
 		// FolderID is the e-boekhouden archive folder the user picked for an
@@ -523,6 +523,11 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek"})
+		return
+	}
+
+	if submitFullDocType(req.DocumentType) == claude.DocumentTypeCreditnota {
+		c.JSON(http.StatusBadRequest, gin.H{"error": errCreditnotaNotSupported})
 		return
 	}
 
