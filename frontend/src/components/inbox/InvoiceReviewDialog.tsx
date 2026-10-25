@@ -51,6 +51,8 @@ import {
   submitButtonLabel,
 } from "./mailDocumentReview";
 import { isBooked, submitOutcome } from "./submitOutcome";
+import { formatFormAmount, fxInvoiceNote } from "./reviewAmounts";
+import { formatMoney } from "../../hooks/mailDocumentsModel";
 import type {
   AnalyzedInvoice,
   InvoiceSubmitFullResponse,
@@ -428,8 +430,8 @@ export function InvoiceReviewDialog({
 
       // The result line: for a mail-folder document what happened to the
       // file ("Geboekt · verplaatst naar …"), for an upload the booking.
-      const receiptDetails = `Bonnetje ${inv.leverancier || "onbekend"} · ${formatEuro(inv.bedragIncl)}`;
-      const invoiceDetails = `${inv.leverancier} · ${formatEuro(inv.bedragIncl)} · ${inv.factuurnummer}`;
+      const receiptDetails = `Bonnetje ${inv.leverancier || "onbekend"} · ${formatFormAmount(inv.bedragIncl)}`;
+      const invoiceDetails = `${inv.leverancier} · ${formatFormAmount(inv.bedragIncl)} · ${inv.factuurnummer}`;
       const detailsFor = (resp: SubmitArchiveOutcome) =>
         archiveSource ? archiveResultLine(resp, openBooking) : inv.isReceipt ? receiptDetails : invoiceDetails;
       const confidence = String(Math.round(inv.source.invoice.confidence * 100));
@@ -1099,8 +1101,7 @@ export function InvoiceReviewDialog({
                         </Typography>
                         {inv.bankLine.currencyConverted && inv.bankLine.invoiceCurrency && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-                            Factuur: {inv.bankLine.invoiceAmount?.toFixed(2)} {inv.bankLine.invoiceCurrency}, omgerekend
-                            naar euro om de betaling te vinden. Speedy vult het werkelijke eurobedrag van de bank in.
+                            {fxInvoiceNote(inv.bankLine.invoiceAmount, inv.bankLine.invoiceCurrency)}
                           </Typography>
                         )}
                       </Alert>
@@ -1169,9 +1170,9 @@ export function InvoiceReviewDialog({
                             }
                           >
                             <Typography variant="body2">
-                              Het bonnetje is €{incl.toFixed(2)}, maar op het afschrift
-                              staat €{bankAmount.toFixed(2)}: een verschil van{" "}
-                              <strong>€{delta.toFixed(2)}</strong>. Meestal is dat een
+                              Het bonnetje is {formatMoney(incl)}, maar op het afschrift
+                              staat {formatMoney(bankAmount)}: een verschil van{" "}
+                              <strong>{formatMoney(delta)}</strong>. Meestal is dat een
                               fooi. Zet het verschil op een aparte regel zonder BTW, want
                               op een fooi zit geen BTW.
                             </Typography>
@@ -1274,11 +1275,11 @@ export function InvoiceReviewDialog({
                                 color: balanced ? "success.dark" : "warning.main",
                               }}
                             >
-                              Totaal {formatEuro(totalNow.toFixed(2))}
+                              Totaal {formatMoney(totalNow)}
                               {bankAmount > 0 && (
                                 <>
                                   {" "}
-                                  / afschrift {formatEuro(bankAmount.toFixed(2))}
+                                  / afschrift {formatMoney(bankAmount)}
                                 </>
                               )}
                             </Typography>
@@ -1503,11 +1504,6 @@ function formatBTWCode(code: string, vatCodes: VATCode[]): string {
   return `${match.omschrijving} (${code})`;
 }
 
-function formatEuro(amount: string): string {
-  const num = parseFloat(amount);
-  if (isNaN(num)) return amount;
-  return `\u20AC${num.toFixed(2)}`;
-}
 
 /**
  * Read a File and return the base64-encoded body without the

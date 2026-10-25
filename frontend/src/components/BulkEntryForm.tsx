@@ -19,7 +19,7 @@ import { useEmployees } from "../hooks/useEmployees";
 import { useProjects } from "../hooks/useProjects";
 import { useActivities } from "../hooks/useActivities";
 import { useHourOverview } from "../hooks/useHourOverview";
-import { strictMatchKey, formatHours } from "./hours/hourOverlay";
+import { strictMatchKey, formatHourCount, formatHours, formatHoursValue } from "./hours/hourOverlay";
 import { EmployeeSelector } from "./EmployeeSelector";
 import { ProjectSelector } from "./ProjectSelector";
 import { ActivitySelector } from "./ActivitySelector";
@@ -227,8 +227,8 @@ export function BulkEntryForm() {
       {selectedDates.size > 0 && selectedEmployees.length > 0 && (
         <Typography variant="body2" color="text.secondary">
           {selectedDates.size} {selectedDates.size === 1 ? "dag" : "dagen"} &times; {selectedEmployees.length} medewerker
-          {selectedEmployees.length > 1 ? "s" : ""} &times; {hours}u ={" "}
-          <strong>{totalHours.toFixed(2)} uur totaal</strong>
+          {selectedEmployees.length > 1 ? "s" : ""} &times; {formatHoursValue(hours)} ={" "}
+          <strong>{formatHourCount(totalHours)} uur totaal</strong>
         </Typography>
       )}
 

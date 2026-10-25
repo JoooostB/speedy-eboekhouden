@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   buildHourOverlay,
+  formatHourCount,
   formatHours,
+  formatHoursValue,
   isoToDate,
   strictMatchKey,
 } from "./hourOverlay";
@@ -160,5 +162,23 @@ describe("formatHours", () => {
   it("handles non-finite input safely", () => {
     expect(formatHours(NaN)).toBe("0u");
     expect(formatHours(Infinity)).toBe("0u");
+  });
+});
+
+// The bug: the form said "× 8.00u = 16.00 uur totaal" and the presets
+// read "4.00", "6.00", "8.00".
+describe("formatHourCount and formatHoursValue", () => {
+  it("formats a total in Dutch notation", () => {
+    expect(formatHourCount(16)).toBe("16");
+    expect(formatHourCount(7.5)).toBe("7,5");
+    expect(formatHourCount(0.25)).toBe("0,25");
+    expect(formatHourCount(1240)).toBe("1.240");
+    expect(formatHourCount(NaN)).toBe("0");
+  });
+
+  it("formats the form's hour value as a label", () => {
+    expect(formatHoursValue("8.00")).toBe("8u");
+    expect(formatHoursValue("4.50")).toBe("4,5u");
+    expect(formatHoursValue("")).toBe("0u");
   });
 });

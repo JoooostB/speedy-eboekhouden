@@ -73,3 +73,17 @@ export function formatHours(hours: number): string {
   if (Number.isInteger(rounded)) return `${rounded}u`;
   return `${rounded.toString().replace(".", ",")}u`;
 }
+
+/** A number of hours as a Dutch number for running text ("80 uur
+ *  totaal", "7,5 uur"): at most two decimals, a decimal comma and a
+ *  thousands dot. */
+export function formatHourCount(hours: number): string {
+  if (!Number.isFinite(hours)) return "0";
+  return new Intl.NumberFormat("nl-NL", { maximumFractionDigits: 2 }).format(hours);
+}
+
+/** The hours of the form ("8.00", the value the form keeps and submits) as
+ *  a label: "8u", "4,5u". Empty or invalid input shows as "0u". */
+export function formatHoursValue(value: string): string {
+  return formatHours(parseFloat(value));
+}
