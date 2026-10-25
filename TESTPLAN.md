@@ -116,6 +116,7 @@ The automated tests cover the handler against a fake e-boekhouden; what e-boekho
 - [ ] Pick your passkey (discoverable credential)
 - [ ] You land in the inbox
 - [ ] e-Boekhouden is still connected (chip "Gekoppeld"): the stored token is restored, unless you disconnected. If e-boekhouden ended that token meanwhile, the first bookkeeping call gets 412 and the connect prompt
+- [ ] Recovery with a broken SMTP setup (for example `SMTP_PORT` pointing at a closed port): "Passkey kwijt?" with your own address shows "Als er een account bestaat voor …", exactly like an unknown address does; the backend log has `Recovery: mail for user <id> not sent: smtp_network` and no e-mail address
 
 ## 10. Session expiry
 

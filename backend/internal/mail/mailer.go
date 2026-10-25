@@ -1,9 +1,12 @@
 package mail
 
 import (
+	"errors"
 	"fmt"
 	"html"
+	"net"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 )
 
@@ -107,4 +110,26 @@ func (m *Mailer) deliver(to string, msg []byte) error {
 	auth := smtp.PlainAuth("", m.config.Username, m.config.Password, m.config.Host)
 	addr := m.config.Host + ":" + m.config.Port
 	return smtp.SendMail(addr, auth, m.config.From, []string{to}, msg)
+}
+
+// ErrClass renders a send error for a log line without the recipient. SMTP
+// replies often echo the address ("550 5.1.1 <iemand@voorbeeld.nl>: user
+// unknown"), so only the reply code survives; network errors become their
+// kind, and anything else (TLS, AUTH support) only its Go type.
+func ErrClass(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	var reply *textproto.Error
+	if errors.As(err, &reply) {
+		return fmt.Sprintf("smtp_reply_%d", reply.Code)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return "smtp_timeout"
+		}
+		return "smtp_network"
+	}
+	return fmt.Sprintf("smtp_error(%T)", err)
 }

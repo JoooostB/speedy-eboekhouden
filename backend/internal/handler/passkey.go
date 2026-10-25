@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"time"
 
@@ -235,7 +236,16 @@ func (h *PasskeyHandler) RecoverRequest(c *gin.Context) {
 		return
 	}
 
-	// Always return success to avoid email enumeration
+	// Always answer the same to avoid e-mail enumeration: an address without
+	// an account, a token that could not be stored and a mail that could not
+	// be sent all look like success. A failure for an existing account must
+	// not answer differently, because the difference would tell a caller that
+	// the address has an account (and during an SMTP outage every request
+	// would). The frontend words the success conditionally ("Als er een
+	// account bestaat…"), so it does not promise a mail. Failures are logged
+	// by user id and error class only: never the address, and never the SMTP
+	// reply text, which often echoes it. A server without mailer at all is a
+	// server-wide condition and is reported above.
 	user, err := h.db.GetUserByEmail(c.Request.Context(), req.Email)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -244,12 +254,15 @@ func (h *PasskeyHandler) RecoverRequest(c *gin.Context) {
 
 	token, err := h.db.CreateRecoveryToken(c.Request.Context(), user.ID)
 	if err != nil {
+		log.Printf("Recovery: storing a token for user %s failed: %v", user.ID, err)
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
 
 	recoveryURL := h.config.WebAuthnOrigin + "/app/herstel?token=" + token
-	h.mailer.SendRecoveryEmail(user.Email, user.Name, recoveryURL)
+	if err := h.mailer.SendRecoveryEmail(user.Email, user.Name, recoveryURL); err != nil {
+		log.Printf("Recovery: mail for user %s not sent: %s", user.ID, mail.ErrClass(err))
+	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
