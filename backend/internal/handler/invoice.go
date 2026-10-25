@@ -5,18 +5,17 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/joooostb/speedy-eboekhouden/internal/claude"
 	"github.com/joooostb/speedy-eboekhouden/internal/crypto"
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
@@ -39,6 +38,53 @@ const invoiceAnalysisCacheTTL = 7 * 24 * time.Hour
 // duplicate bookings even at long delays.
 const invoiceSubmittedMarkerTTL = 90 * 24 * time.Hour
 
+// invoicePromptVersion is part of the analysis cache key. Bump it whenever
+// the invoice prompt or the InvoiceData shape changes in a way old cached
+// answers cannot be normalised into. Version 2 added documentType: entries
+// written by the version-1 prompt can never yield "overig" or "creditnota",
+// and waiting for the 7-day TTL to roll them out is too slow. The
+// invoice:submitted marker is deliberately NOT versioned: it must keep
+// recognising files booked before a bump.
+const invoicePromptVersion = "2"
+
+// importGridFetchLimit is the page size used whenever a handler needs the
+// whole unprocessed import grid at once (bank-line matching, bank-account
+// lookup for a booking, batch classification). One page of 2000 covers any
+// realistic backlog; nobody here pages further.
+const importGridFetchLimit = 2000
+
+// maxInvoiceFileSize is the upload limit for a document to analyse (10 MB),
+// matching the security page's claim.
+const maxInvoiceFileSize = 10 << 20
+
+// errFileTooLarge is readUploadedFile's answer for a file above the limit.
+var errFileTooLarge = errors.New("uploaded file too large")
+
+// readUploadedFile reads an uploaded document of at most maxInvoiceFileSize
+// bytes. A file above the limit is errFileTooLarge; a read error (a broken
+// or aborted upload) comes back as itself, so writeUploadReadError can tell
+// the user which of the two happened.
+func readUploadedFile(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxInvoiceFileSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxInvoiceFileSize {
+		return nil, errFileTooLarge
+	}
+	return data, nil
+}
+
+// writeUploadReadError answers a readUploadedFile error: 413 for a file
+// above the limit, 400 for a file that could not be read.
+func writeUploadReadError(c *gin.Context, err error) {
+	if errors.Is(err, errFileTooLarge) {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Het bestand is te groot. Speedy leest bestanden tot 10 MB."})
+		return
+	}
+	c.JSON(http.StatusBadRequest, gin.H{"error": "Het bestand kon niet worden gelezen. Probeer het opnieuw."})
+}
+
 // invoicePDFContentHash returns a stable hex-encoded SHA-256 of the raw
 // PDF bytes. Used as the canonical key for invoice-level caching so a
 // re-upload of the exact same file produces identical analysis results
@@ -54,7 +100,8 @@ func invoicePDFContentHash(pdfBytes []byte) string {
 // per PDF hash, and per ledger-account-set hash because the suggested
 // grootboekcode is a function of the available accounts — re-running an
 // analyze after the user adds/removes an account should produce a fresh
-// suggestion rather than reusing the stale one.
+// suggestion rather than reusing the stale one. The prompt version sits
+// right after the prefix so a bump bypasses every entry of the old prompt.
 func invoiceAnalysisCacheKey(userID string, pdfBytes []byte, accounts []claude.LedgerAccountInfo) string {
 	pdfHash := invoicePDFContentHash(pdfBytes)
 	// Stable ordering — sort accounts by code so callers passing the same
@@ -65,7 +112,7 @@ func invoiceAnalysisCacheKey(userID string, pdfBytes []byte, accounts []claude.L
 	}
 	sort.Strings(codes)
 	accountsHash := sha256.Sum256([]byte(strings.Join(codes, ",")))
-	return fmt.Sprintf("invoice:analyze:%s:%s:%s", userID, pdfHash, hex.EncodeToString(accountsHash[:8]))
+	return fmt.Sprintf("invoice:analyze:v%s:%s:%s:%s", invoicePromptVersion, userID, pdfHash, hex.EncodeToString(accountsHash[:8]))
 }
 
 // invoiceSubmittedMarkerKey returns the Redis key for the "this PDF has
@@ -76,44 +123,80 @@ func invoiceSubmittedMarkerKey(userID, pdfHash string) string {
 	return fmt.Sprintf("invoice:submitted:%s:%s", userID, pdfHash)
 }
 
-// invoiceSubmittedMarker is the value we cache against the submission key.
-// Kept small — the analyze endpoint just needs enough to render a Dutch
-// warning ("Deze factuur is al eerder geboekt op X als mutatie nr Y").
+// invoiceSubmittedMarker is the value we cache against the submission key:
+// only what the UI shows ("Zelfde bestand geboekt op 3 okt (mutatie 1234)").
+// Nothing about the invoice itself is kept. Markers written before Step 10
+// also carry leverancier, factuur and bedragIncl; encoding/json ignores those
+// fields on read and submittedMarkerJSON never echoes them.
 type invoiceSubmittedMarker struct {
 	MutNr        int       `json:"mutNr"`
 	PaymentMutNr int       `json:"paymentMutNr,omitempty"`
-	Leverancier  string    `json:"leverancier,omitempty"`
-	Factuur      string    `json:"factuur,omitempty"`
-	BedragIncl   float64   `json:"bedragIncl,omitempty"`
 	SubmittedAt  time.Time `json:"submittedAt"`
 }
 
 // InvoiceHandler handles invoice processing with Claude.
 type InvoiceHandler struct {
-	claude *claude.Service
-	db     *database.DB
-	encKey crypto.AESKey
-	r2     *storage.Client
-	redis  *redis.Client
+	claude   *claude.Service
+	db       *database.DB
+	encKey   crypto.AESKey
+	r2       *storage.Client
+	redis    *redis.Client
+	sessions *session.Store
 }
 
-// NewInvoiceHandler creates a new invoice handler.
-func NewInvoiceHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, r2 *storage.Client, redisClient *redis.Client) *InvoiceHandler {
-	return &InvoiceHandler{claude: claudeSvc, db: db, encKey: encKey, r2: r2, redis: redisClient}
+// NewInvoiceHandler creates a new invoice handler. sessions is used to clear
+// a stale e-boekhouden token when an analysis runs into an expired session;
+// it may be nil (see HandleEBoekhoudenSessionExpired).
+func NewInvoiceHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, r2 *storage.Client, redisClient *redis.Client, sessions *session.Store) *InvoiceHandler {
+	return &InvoiceHandler{claude: claudeSvc, db: db, encKey: encKey, r2: r2, redis: redisClient, sessions: sessions}
 }
 
-// Analyze handles POST /api/v1/invoices/analyze — reads a PDF via Claude.
-// Returns extracted data for the user to review. Does NOT create any mutation.
+// errNoAPIKey is returned by analyzeBytes when the user has not configured
+// an Anthropic API key. Wrappers answer 400 no_api_key.
+var errNoAPIKey = errors.New("no Anthropic API key configured")
+
+// claudeReadError wraps a Claude failure other than an unsupported media
+// type. Wrappers answer 502 claude_error with the upstream message, as the
+// analyze endpoint always has.
+type claudeReadError struct{ err error }
+
+func (e *claudeReadError) Error() string { return e.err.Error() }
+func (e *claudeReadError) Unwrap() error { return e.err }
+
+// detectDocumentMediaType sniffs the media type from the file's own bytes
+// (never from the client-supplied header) and reports whether it is one the
+// invoice reader accepts: application/pdf, image/png or image/jpeg.
+func detectDocumentMediaType(data []byte) (string, bool) {
+	switch mt := http.DetectContentType(data); mt {
+	case "application/pdf", "image/png", "image/jpeg":
+		return mt, true
+	}
+	return "", false
+}
+
+// documentExtension maps a supported media type to the file extension used
+// for R2 keys and default filenames: pdf, jpg or png. Unsupported types
+// yield "".
+func documentExtension(mediaType string) string {
+	switch mediaType {
+	case "application/pdf":
+		return "pdf"
+	case "image/jpeg":
+		return "jpg"
+	case "image/png":
+		return "png"
+	}
+	return ""
+}
+
+// Analyze handles POST /api/v1/invoices/analyze — reads an uploaded PDF, JPG
+// or PNG via Claude and returns the extracted data for the user to review.
+// Does NOT create any mutation. It is a thin multipart wrapper around
+// analyzeBytes.
 func (h *InvoiceHandler) Analyze(c *gin.Context) {
 	sess := session.FromContext(c)
 	if sess == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
-		return
-	}
-
-	apiKey, err := h.getAPIKey(c, sess.UserID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Stel eerst een Anthropic API-sleutel in"})
 		return
 	}
 
@@ -124,24 +207,112 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 	}
 	defer file.Close()
 
-	const maxFileSize = 10 << 20
-	pdfBytes, err := io.ReadAll(io.LimitReader(file, maxFileSize+1))
+	data, err := readUploadedFile(file)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read file"})
-		return
-	}
-	if len(pdfBytes) > maxFileSize {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "bestand is te groot (max 10 MB)"})
+		writeUploadReadError(c, err)
 		return
 	}
 
-	pdfBase64 := base64.StdEncoding.EncodeToString(pdfBytes)
+	mediaType, ok := detectDocumentMediaType(data)
+	if !ok {
+		writeUnsupportedMediaType(c)
+		return
+	}
 
-	// Fetch the user's actual ledger accounts so Claude only suggests valid codes
+	filename := "document." + documentExtension(mediaType)
+	if header != nil && header.Filename != "" {
+		filename = header.Filename
+	}
+
+	resp, err := h.analyzeBytes(c, sess, data, mediaType, filename, analyzeOptions{})
+	if err != nil {
+		h.writeAnalyzeError(c, sess, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// analyzeOptions tunes analyzeBytes for its callers. The zero value is the
+// upload flow's behaviour.
+type analyzeOptions struct {
+	// refresh bypasses the invoice:analyze cache read (the result is still
+	// written), so a forced re-analysis really asks Claude again.
+	refresh bool
+}
+
+// writeUnsupportedMediaType answers 415 for a file that is not a PDF, JPG or PNG.
+func writeUnsupportedMediaType(c *gin.Context) {
+	c.JSON(http.StatusUnsupportedMediaType, gin.H{
+		"error":   "unsupported_media_type",
+		"message": "Speedy kan alleen PDF-, JPG- en PNG-bestanden lezen.",
+	})
+}
+
+// writeAnalyzeError maps an analyzeBytes error onto the HTTP response. It is
+// kept apart from analyzeBytes so other endpoints can reuse the core together
+// with this exact mapping.
+func (h *InvoiceHandler) writeAnalyzeError(c *gin.Context, sess *session.SessionData, err error) {
+	var readErr *claudeReadError
+	switch {
+	case errors.Is(err, errNoAPIKey):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Vul eerst je Anthropic API-sleutel in bij Instellingen."})
+	case errors.Is(err, claude.ErrUnsupportedMediaType):
+		writeUnsupportedMediaType(c)
+	case HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err):
+		// Response written: the frontend shows the reconnect prompt.
+	case errors.As(err, &readErr):
+		log.Printf("Claude invoice read error: %s", errClass(readErr.err))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": readErr.err.Error()})
+	default:
+		log.Printf("Invoice analyze error: %s", errClass(err))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "analyze_failed", "message": "Analyse mislukt. Probeer het opnieuw."})
+	}
+}
+
+// analyzeBytes is the analysis core shared by Analyze and, later, the
+// document inbox. Starting from the file bytes it:
+//
+//   - loads the user's ledger accounts (Claude only suggests codes from that
+//     list) and takes the crediteuren account id from the same response,
+//   - serves the analysis from the per-user Redis cache or reads the
+//     document with Claude,
+//   - flags an earlier booking of the same bytes (duplicate marker),
+//   - looks up the supplier relation and ranks the candidate bank lines.
+//
+// It keeps no copy of the file: an upload stays in the browser, which inlines
+// it as pdfBase64 when booking, and a mail-folder document already lives in
+// e-boekhouden. Nothing is written to R2.
+//
+// It writes nothing to the response. The returned gin.H is the
+// InvoiceAnalyzeResponse body; errors are typed so callers can map them with
+// writeAnalyzeError: errNoAPIKey, claude.ErrUnsupportedMediaType,
+// eboekhouden.ErrSessionExpired and *claudeReadError. e-boekhouden lookups
+// that fail for any other reason are best-effort and leave their part of the
+// response empty, as the endpoint always did.
+func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData, data []byte, mediaType, filename string, opts analyzeOptions) (gin.H, error) {
+	ctx := c.Request.Context()
+
+	ext := documentExtension(mediaType)
+	if ext == "" {
+		return nil, claude.ErrUnsupportedMediaType
+	}
+
+	apiKey, err := h.getAPIKey(c, sess.UserID)
+	if err != nil {
+		return nil, errNoAPIKey
+	}
+
+	// Fetch the user's actual ledger accounts so Claude only suggests valid
+	// codes. The crediteuren account the frontend needs comes from the same
+	// rows (first account in category CRED).
 	var accounts []claude.LedgerAccountInfo
+	var crediteurenId int
 	ebClient := session.ClientFromContext(c)
 	if ebClient != nil {
 		raw, err := ebClient.GetActiveLedgerAccounts()
+		if errors.Is(err, eboekhouden.ErrSessionExpired) {
+			return nil, err
+		}
 		if err == nil {
 			var accs []map[string]any
 			if json.Unmarshal(raw, &accs) == nil {
@@ -151,24 +322,32 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 					if code != "" && omschr != "" {
 						accounts = append(accounts, claude.LedgerAccountInfo{Code: code, Omschrijving: omschr})
 					}
+					if cat, _ := a["rekeningCategorie"].(string); crediteurenId == 0 && strings.EqualFold(cat, "CRED") {
+						if id, ok := a["id"].(float64); ok {
+							crediteurenId = int(id)
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// Content-addressed analysis cache: hash the PDF bytes + the user's
+	// Content-addressed analysis cache: hash the file bytes + the user's
 	// ledger accounts (because the suggested grootboekcode is a function
 	// of the available accounts) and check Redis before calling Claude.
-	// A second upload of the same PDF returns the same JSON instantly,
+	// A second upload of the same file returns the same JSON instantly,
 	// instead of re-classifying with non-deterministic outputs.
-	pdfHash := invoicePDFContentHash(pdfBytes)
-	cacheKey := invoiceAnalysisCacheKey(sess.UserID, pdfBytes, accounts)
+	pdfHash := invoicePDFContentHash(data)
+	cacheKey := invoiceAnalysisCacheKey(sess.UserID, data, accounts)
 	var invoice *claude.InvoiceData
 	cacheHit := false
-	if h.redis != nil {
-		if cached, err := h.redis.Get(c.Request.Context(), cacheKey).Bytes(); err == nil {
+	if h.redis != nil && !opts.refresh {
+		if cached, err := h.redis.Get(ctx, cacheKey).Bytes(); err == nil {
 			var cachedInvoice claude.InvoiceData
 			if json.Unmarshal(cached, &cachedInvoice) == nil {
+				// Entries cached before documentType existed have it empty;
+				// derive it from isReceipt so the response shape is stable.
+				claude.NormalizeDocumentType(&cachedInvoice)
 				invoice = &cachedInvoice
 				cacheHit = true
 				log.Printf("Invoice analyze cache HIT for user %s pdfHash=%s", sess.UserID, pdfHash[:16])
@@ -176,17 +355,18 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		}
 	}
 	if invoice == nil {
-		fresh, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, pdfBase64, accounts)
+		fresh, err := h.claude.ReadInvoice(ctx, apiKey, mediaType, base64.StdEncoding.EncodeToString(data), accounts)
 		if err != nil {
-			log.Printf("Claude invoice read error: %v", err)
-			c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
-			return
+			if errors.Is(err, claude.ErrUnsupportedMediaType) {
+				return nil, err
+			}
+			return nil, &claudeReadError{err: err}
 		}
 		invoice = fresh
 		// Best-effort cache write — failures are logged but never fail the request.
 		if h.redis != nil {
 			if body, err := json.Marshal(invoice); err == nil {
-				if setErr := h.redis.Set(c.Request.Context(), cacheKey, body, invoiceAnalysisCacheTTL).Err(); setErr != nil {
+				if setErr := h.redis.Set(ctx, cacheKey, body, invoiceAnalysisCacheTTL).Err(); setErr != nil {
 					log.Printf("Invoice analyze cache write error: %v", setErr)
 				}
 			}
@@ -194,13 +374,13 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 	}
 
 	// Duplicate-upload detection: if the user previously booked the same
-	// PDF (same content hash) we surface the prior mutNr + datum in the
+	// file (same content hash) we surface the prior mutNr + datum in the
 	// response so the dialog can warn before they accidentally book it
 	// again. Scoped per user via the submission marker key.
 	var alreadySubmitted *invoiceSubmittedMarker
 	if h.redis != nil {
 		markerKey := invoiceSubmittedMarkerKey(sess.UserID, pdfHash)
-		if raw, err := h.redis.Get(c.Request.Context(), markerKey).Bytes(); err == nil {
+		if raw, err := h.redis.Get(ctx, markerKey).Bytes(); err == nil {
 			var marker invoiceSubmittedMarker
 			if json.Unmarshal(raw, &marker) == nil {
 				alreadySubmitted = &marker
@@ -210,160 +390,111 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		}
 	}
 
-	// Store PDF temporarily in R2 for later submission
-	var uploadKey string
-	var pdfURL string
-	if h.r2 != nil {
-		uploadKey = fmt.Sprintf("uploads/%s/document.pdf", uuid.New().String())
-		h.r2.Upload(c.Request.Context(), uploadKey, pdfBytes, "application/pdf")
-		// Generate a signed URL (15 min TTL) — never expose raw public URLs for financial docs
-		signed, err := h.r2.GeneratePresignedURL(c.Request.Context(), uploadKey)
-		if err == nil {
-			pdfURL = signed
-		}
-	}
-
 	// Search for matching relation
 	var matchedRelation *gin.H
-	if invoice.Leverancier != "" {
-		client := session.ClientFromContext(c)
-		if client != nil {
-			raw, err := client.SearchRelations(invoice.Leverancier)
-			if err == nil {
-				var relations []map[string]any
-				if json.Unmarshal(raw, &relations) == nil && len(relations) > 0 {
-					r := relations[0]
-					matchedRelation = &gin.H{
-						"id":      r["id"],
-						"code":    r["code"],
-						"bedrijf": r["bedrijf"],
-					}
-				}
-			}
+	if invoice.Leverancier != "" && ebClient != nil {
+		raw, err := ebClient.SearchRelations(invoice.Leverancier)
+		if errors.Is(err, eboekhouden.ErrSessionExpired) {
+			return nil, err
 		}
-	}
-
-	// Try to match against unprocessed bank statement lines.
-	//
-	// For EUR invoices the bedrag matches the bank line within 2 cents.
-	// For non-EUR invoices (Tesla Supercharger receipts in CHF, foreign
-	// hotels, USD/GBP SaaS) we convert the invoice total to an approximate
-	// EUR value and match within a wider tolerance to absorb the FX margin
-	// the user's bank applied. The matched bank line carries the user's
-	// real EUR amount — the FX estimate is only used to FIND the right
-	// line, not to book any number. We surface the fuzzy match to the
-	// frontend via "currencyConverted" so the user knows to verify.
-	var matchedBankLine *gin.H
-	if invoice.BedragInclBTW > 0 {
-		client := session.ClientFromContext(c)
-		if client != nil {
-			raw, err := client.GetImportGrid(0, 500)
-			if err == nil {
-				rows, _, _ := eboekhouden.ParseImportGrid(raw)
-
-				eurEstimate, fxConverted := convertToEUR(invoice.BedragInclBTW, invoice.Currency)
-				for _, row := range rows {
-					bedrag, _ := toFloat(row["mutBedrag"])
-					if bedrag >= 0 {
-						continue // we only match outgoing payments to invoices
-					}
-					absBedrag := abs(bedrag)
-
-					var hit bool
-					if !fxConverted {
-						// EUR: tight 2-cent tolerance to avoid false positives
-						hit = abs(absBedrag-invoice.BedragInclBTW) < 0.02
-					} else {
-						// Non-EUR: relative tolerance around the FX estimate
-						diff := abs(absBedrag - eurEstimate)
-						hit = diff/eurEstimate < currencyMatchTolerance
-					}
-
-					if hit {
-						id, _ := toInt(row["id"])
-						matchedBankLine = &gin.H{
-							"id":                 id,
-							"datum":              toString(row["mutDatum"]),
-							"bedrag":             bedrag,
-							"omschrijving":       toString(row["mutOmschrijving"]),
-							"currencyConverted":  fxConverted,
-							"invoiceCurrency":    strings.ToUpper(invoice.Currency),
-							"invoiceAmount":      invoice.BedragInclBTW,
-						}
-						break
-					}
-				}
-			}
-		}
-	}
-
-	filename := "document.pdf"
-	if header != nil && header.Filename != "" {
-		filename = header.Filename
-	}
-
-	// Find crediteuren account ID by category for the frontend
-	var crediteurenId int
-	if ebClient != nil {
-		raw, err := ebClient.GetActiveLedgerAccounts()
 		if err == nil {
-			var fullAccs []map[string]any
-			if json.Unmarshal(raw, &fullAccs) == nil {
-				for _, fa := range fullAccs {
-					cat, _ := fa["rekeningCategorie"].(string)
-					if strings.EqualFold(cat, "CRED") {
-						if id, ok := fa["id"].(float64); ok {
-							crediteurenId = int(id)
-						}
-						break
-					}
+			var relations []map[string]any
+			if json.Unmarshal(raw, &relations) == nil && len(relations) > 0 {
+				r := relations[0]
+				matchedRelation = &gin.H{
+					"id":      r["id"],
+					"code":    r["code"],
+					"bedrijf": r["bedrijf"],
 				}
 			}
 		}
+	}
+
+	// Rank the unprocessed bank statement lines that could be this
+	// document's payment (see rankBankLineMatches for eligibility, the
+	// tolerances and the score). For non-EUR invoices the amount test goes
+	// through an approximate FX conversion; the candidate carries the user's
+	// real EUR amount and the estimate only serves to FIND the line, never
+	// to book a number. The frontend sees currencyConverted so it can ask
+	// the user to verify.
+	candidates := []BankLineCandidate{}
+	if ebClient != nil && assignsBankLine(invoice) {
+		raw, err := ebClient.GetImportGrid(0, importGridFetchLimit)
+		if errors.Is(err, eboekhouden.ErrSessionExpired) {
+			return nil, err
+		}
+		if err == nil {
+			rows, _, _ := eboekhouden.ParseImportGrid(raw)
+			candidates = rankBankLineMatches(invoice, rows, nil)
+		}
+	}
+	var matchedBankLine map[string]any
+	if len(candidates) > 0 {
+		matchedBankLine = candidates[0].legacyJSON()
 	}
 
 	resp := gin.H{
-		"invoice":         invoice,
-		"uploadKey":       uploadKey,
-		"pdfUrl":          pdfURL,
+		"invoice": invoice,
+		// uploadKey and pdfUrl are always empty since Step 10: the analyser
+		// keeps no copy of the file (nothing goes to R2). They stay in the
+		// response so older clients keep parsing it; the booking carries the
+		// bytes inline (pdfBase64) or names a mail-folder file (archiveFileId).
+		"uploadKey":       "",
+		"pdfUrl":          "",
 		"matchedBankLine": matchedBankLine,
-		"filename":        filename,
-		"matchedRelation": matchedRelation,
-		"crediteurenId":   crediteurenId,
+		// bankLineCandidates is the full ranking (best first, at most three)
+		// so the UI can offer a choice. Always an array, never null.
+		"bankLineCandidates": candidates,
+		"filename":           filename,
+		"matchedRelation":    matchedRelation,
+		"crediteurenId":      crediteurenId,
 		// pdfHash is echoed back so SubmitFull can write the submission
-		// marker without rehashing the PDF (which we'd otherwise need to
+		// marker without rehashing the file (which we'd otherwise need to
 		// re-download from R2). The frontend treats it as opaque.
-		"pdfHash":         pdfHash,
+		"pdfHash": pdfHash,
 		// cachedAnalysis lets the UI surface a small "eerder geanalyseerd"
 		// hint so the user knows why the result feels familiar.
-		"cachedAnalysis":  cacheHit,
+		"cachedAnalysis": cacheHit,
 	}
-	// alreadySubmitted is set when the same PDF (by content hash) was
+	// alreadySubmitted is set when the same file (by content hash) was
 	// previously booked successfully via SubmitFull. The dialog renders a
 	// loud Dutch warning so the user can decide whether they really want
 	// to book it again — typical case is accidentally re-uploading from
 	// an archive folder that's already been processed.
 	if alreadySubmitted != nil {
-		resp["alreadySubmitted"] = gin.H{
-			"mutNr":        alreadySubmitted.MutNr,
-			"paymentMutNr": alreadySubmitted.PaymentMutNr,
-			"leverancier":  alreadySubmitted.Leverancier,
-			"factuur":      alreadySubmitted.Factuur,
-			"bedragIncl":   alreadySubmitted.BedragIncl,
-			"submittedAt":  alreadySubmitted.SubmittedAt.Format(time.RFC3339),
-		}
+		resp["alreadySubmitted"] = submittedMarkerJSON(alreadySubmitted)
 	}
-	c.JSON(http.StatusOK, resp)
+	return resp, nil
 }
 
+// submittedMarkerJSON renders the duplicate marker the way the analyze
+// response has always done; the document inbox reuses it so both flows
+// describe an earlier booking identically.
+func submittedMarkerJSON(m *invoiceSubmittedMarker) gin.H {
+	return gin.H{
+		"mutNr":        m.MutNr,
+		"paymentMutNr": m.PaymentMutNr,
+		"submittedAt":  m.SubmittedAt.Format(time.RFC3339),
+	}
+}
+
+// warnPaymentSessionExpired is SubmitFull's paymentWarning when the
+// e-boekhouden session expired after the invoice was booked but before its
+// payment was: the invoice stands, the bank line is still open.
+const warnPaymentSessionExpired = "De factuur is geboekt, maar de betaling niet, want je sessie bij e-Boekhouden is verlopen. De afschriftregel staat dus nog open. Koppel e-Boekhouden opnieuw en boek de betaling daarna vanuit Afschriften."
+
 // SubmitFull handles POST /api/v1/invoices/submit-full
-// This is the complete chain: archive upload → mutation → file link.
+// This is the complete chain: archive file → mutation → file link → (for a
+// mail-folder document) rename and move. See invoice_archive.go for the
+// archive phases.
 func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
+	sess := session.FromContext(c)
 	client := session.ClientFromContext(c)
-	if client == nil {
+	if sess == nil || client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
 		return
 	}
+	ctx := c.Request.Context()
 
 	var req struct {
 		// Invoice details (from Claude + user review)
@@ -382,18 +513,30 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		TegenRekeningId int `json:"tegenRekeningId"` // cost account
 		RekeningId      int `json:"rekeningId"`      // crediteuren account
 
-		// PDF reference. Two sources are supported and PdfBase64 wins when
-		// both are provided so a client can opt out of R2 entirely:
-		//   - PdfBase64: PDF inlined as base64 (self-hosted, no R2 needed)
+		// Document source. Three are supported; at most one may be given
+		// together with ArchiveFileId:
+		//   - PdfBase64: document inlined as base64 (self-hosted, no R2 needed);
+		//     wins over UploadKey when both are present
 		//   - UploadKey: R2 object key from a prior /invoices/analyze call
-		UploadKey string `json:"uploadKey"`
-		PdfBase64 string `json:"pdfBase64,omitempty"`
-		Filename  string `json:"filename"`
+		//   - ArchiveFileId: a file that already sits in the Mail & herken
+		//     folder; nothing is uploaded, the file is linked, renamed and
+		//     moved to TargetFolderId (or Facturen/<jaar>/<maand> when 0)
+		// Filename is accepted for compatibility but no longer used: the
+		// archive name follows archiveFileName.
+		UploadKey      string `json:"uploadKey"`
+		PdfBase64      string `json:"pdfBase64,omitempty"`
+		Filename       string `json:"filename"`
+		ArchiveFileId  int    `json:"archiveFileId,omitempty"`
+		TargetFolderId int    `json:"targetFolderId,omitempty"`
+		// DocumentType influences the archive name ("factuur" by default).
+		// "creditnota" is refused: see errCreditnotaNotSupported.
+		DocumentType string `json:"documentType,omitempty"`
 
-		// FolderID is the e-boekhouden archive folder the user picked. When
-		// zero we fall back to the legacy findOrCreateArchiveFolder behavior
-		// (only relevant for R2 deployments — self-hosted clients should
-		// always send a FolderID or skip archiving entirely).
+		// FolderID is the e-boekhouden archive folder the user picked for an
+		// upload. When zero we fall back to the legacy
+		// findOrCreateArchiveFolder behavior (only relevant for R2
+		// deployments — self-hosted clients should always send a FolderID or
+		// skip archiving entirely).
 		FolderID int `json:"folderId,omitempty"`
 
 		// Optional: bank statement line to mark as processed
@@ -408,28 +551,33 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek."})
+		return
+	}
+
+	if submitFullDocType(req.DocumentType) == claude.DocumentTypeCreditnota {
+		c.JSON(http.StatusBadRequest, gin.H{"error": errCreditnotaNotSupported})
 		return
 	}
 
 	// Validate monetary amounts
 	if req.BedragExcl <= 0 || req.BedragIncl <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Bedrag moet positief zijn"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Het bedrag moet groter zijn dan nul."})
 		return
 	}
 	if math.IsNaN(req.BedragExcl) || math.IsInf(req.BedragExcl, 0) ||
 		math.IsNaN(req.BedragIncl) || math.IsInf(req.BedragIncl, 0) ||
 		math.IsNaN(req.BTWBedrag) || math.IsInf(req.BTWBedrag, 0) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig bedrag"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig bedrag."})
 		return
 	}
 
 	if req.RelatieId == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Selecteer een relatie (leverancier)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een relatie (crediteur)."})
 		return
 	}
 	if req.TegenRekeningId == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Selecteer een kostenrekening (grootboekrekening)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een grootboekrekening."})
 		return
 	}
 
@@ -454,7 +602,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 			}
 		}
 		if req.RekeningId == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geen crediteurenrekening gevonden in je administratie. Controleer je grootboekrekeningen in e-Boekhouden."})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Speedy vindt geen crediteurenrekening in je administratie. Controleer je grootboekrekeningen in e-Boekhouden."})
 			return
 		}
 	}
@@ -465,53 +613,28 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		req.BTWCode = "HOOG_INK_21"
 	}
 
-	// Step 1: Upload PDF to e-boekhouden digitaal archief.
-	//
-	// PDF source: prefer the inlined PdfBase64 from the client (no R2 required)
-	// and fall back to an R2 download keyed by UploadKey for backward compat
-	// with deployments that still use the analyze→R2→submit flow.
-	//
-	// Folder selection: prefer the explicit user choice (FolderID from the
-	// frontend picker); when zero AND R2 is in play, keep the legacy auto
-	// "Inkoopfacturen/jaar/maand" behavior so R2 deployments don't regress.
-	// Self-hosted clients without R2 that omit FolderID skip archiving — an
-	// explicit opt-out, not a silent failure.
-	var archiefFileId int
-	var pdfBytes []byte
-	if req.PdfBase64 != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(req.PdfBase64); err != nil {
-			log.Printf("SubmitFull: invalid pdfBase64: %v", err)
-		} else {
-			pdfBytes = decoded
-		}
-	} else if req.UploadKey != "" && h.r2 != nil {
-		if downloaded, _, err := h.r2.Download(c.Request.Context(), req.UploadKey); err != nil {
-			log.Printf("R2 download error for %s: %v", req.UploadKey, err)
-		} else {
-			pdfBytes = downloaded
-		}
+	// Step 1: Resolve the document and stage the archive file. Every check
+	// that can fail the request happens here, before anything is booked; the
+	// upload itself stays best-effort as it always was.
+	src, err := h.prepareArchiveSource(ctx, client, archiveSourceInput{
+		archiveFileID:  req.ArchiveFileId,
+		targetFolderID: req.TargetFolderId,
+		pdfBase64:      req.PdfBase64,
+		uploadKey:      req.UploadKey,
+	})
+	if err != nil {
+		h.writeArchiveSourceError(c, sess, err)
+		return
 	}
-	if len(pdfBytes) > 0 {
-		folderID := req.FolderID
-		if folderID == 0 && h.r2 != nil {
-			datum, _ := time.Parse("2006-01-02", req.Datum)
-			if datum.IsZero() {
-				datum = time.Now()
-			}
-			if id, err := h.findOrCreateArchiveFolder(client, datum); err != nil {
-				log.Printf("Archive folder error: %v", err)
-			} else {
-				folderID = id
-			}
-		}
-		if folderID > 0 {
-			filename := req.Filename
-			if filename == "" {
-				filename = fmt.Sprintf("factuur_%s.pdf", req.Factuurnummer)
-			}
-			archiefFileId = h.uploadAndResolveArchiveFile(client, pdfBytes, folderID, filename)
-		}
-	}
+	datum := bookingDate(req.Datum)
+	archiveName := src.archiveName(archiveNameInput{
+		leverancier: req.Leverancier,
+		kenmerk:     req.Factuurnummer,
+		datum:       req.Datum,
+		docType:     submitFullDocType(req.DocumentType),
+	})
+	arch := h.stageArchiveFile(client, src, req.FolderID, datum, archiveName)
+	archiefFileId := arch.fileID
 
 	// Step 2: Create "Factuur ontvangen" mutation (soort 1)
 	// This books: debit cost account (tegenRekening), credit crediteuren (rekening)
@@ -539,8 +662,14 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 
 	mutResp, err := client.CreateMutatie(invoiceMutPayload)
 	if err != nil {
-		log.Printf("SubmitFull CreateMutatie error: %v", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Factuur ontvangen mislukt: " + err.Error()})
+		log.Printf("SubmitFull CreateMutatie error: %s", errClass(err))
+		if bookingRefused(err) {
+			discardStagedUpload(client, src, arch)
+		}
+		if HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err) {
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": "De factuur is niet geboekt: " + err.Error()})
 		return
 	}
 
@@ -549,13 +678,15 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		MutId int `json:"mutId"`
 	}
 	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
-		log.Printf("SubmitFull invoice unmarshal error: %v body=%s", jsonErr, string(mutResp))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden bij factuur ontvangen"})
+		// Whether the invoice was booked is unknown, so the staged file stays.
+		log.Printf("SubmitFull invoice unmarshal error: %v (%d bytes)", jsonErr, len(mutResp))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden gaf een onverwacht antwoord. Kijk in e-Boekhouden of de factuur is geboekt voordat je het opnieuw probeert."})
 		return
 	}
 	if mutResult.MutNr == 0 {
-		log.Printf("SubmitFull invoice mutNr=0, body=%s", string(mutResp))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Factuur ontvangen niet aangemaakt — controleer de gegevens"})
+		log.Printf("SubmitFull invoice mutNr=0 (%d bytes)", len(mutResp))
+		discardStagedUpload(client, src, arch)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden heeft de factuur niet geboekt en gaf geen reden. Controleer de gegevens en probeer het opnieuw."})
 		return
 	}
 
@@ -577,6 +708,9 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	// in the inbox, leading to duplicate bookings on retry.
 	var paymentMutNr int
 	var paymentWarning string
+	// paymentSessionExpired: e-boekhouden ended the session after the invoice
+	// was booked. The invoice stands; the token is cleared below.
+	paymentSessionExpired := false
 	if req.ImportId > 0 {
 		bankAccountId := 0
 		// Capture the bank line's own omschrijving so we can use it on the
@@ -586,7 +720,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		// "Betaling X Y" string because it's literally what shows up on
 		// the bank statement.
 		bankLineOmschrijving := ""
-		raw, err := client.GetImportGrid(0, 500)
+		raw, err := client.GetImportGrid(0, importGridFetchLimit)
 		if err == nil {
 			rows, _, _ := eboekhouden.ParseImportGrid(raw)
 			for _, row := range rows {
@@ -597,9 +731,14 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 					break
 				}
 			}
+		} else if errors.Is(err, eboekhouden.ErrSessionExpired) {
+			paymentSessionExpired = true
 		}
 
-		if bankAccountId > 0 {
+		if paymentSessionExpired {
+			log.Printf("SubmitFull: session expired before the payment for invoice mutNr=%d", mutResult.MutNr)
+			paymentWarning = warnPaymentSessionExpired
+		} else if bankAccountId > 0 {
 			// Prefer the bank line's own description; fall back to a
 			// synthetic "Betaling …" if for some reason it's empty.
 			paymentOmschrijving := bankLineOmschrijving
@@ -626,62 +765,61 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 
 			payResp, err := client.CreateMutatie(paymentPayload)
 			if err != nil {
-				log.Printf("SubmitFull payment mutation error for invoice mutNr=%d: %v", mutResult.MutNr, err)
-				paymentWarning = "Factuur is geboekt, maar de afschriftregel kon niet worden gemarkeerd: " + err.Error()
+				log.Printf("SubmitFull payment mutation error for invoice mutNr=%d: %s", mutResult.MutNr, errClass(err))
+				if errors.Is(err, eboekhouden.ErrSessionExpired) {
+					paymentSessionExpired = true
+					paymentWarning = warnPaymentSessionExpired
+				} else {
+					paymentWarning = "De factuur is geboekt, maar de betaling niet, dus de afschriftregel staat nog open. Reden: " + err.Error()
+				}
 			} else {
 				var payResult struct {
 					MutNr int `json:"mutNr"`
 				}
 				if jsonErr := json.Unmarshal(payResp, &payResult); jsonErr != nil {
-					log.Printf("SubmitFull payment unmarshal error: %v body=%s", jsonErr, string(payResp))
-					paymentWarning = "Factuur is geboekt, maar het antwoord van e-Boekhouden voor de betaling was onverwacht. Controleer de afschriftregel handmatig."
+					log.Printf("SubmitFull payment unmarshal error: %v (%d bytes)", jsonErr, len(payResp))
+					paymentWarning = "De factuur is geboekt. Op de betaling gaf e-Boekhouden een onverwacht antwoord: kijk in e-Boekhouden of de afschriftregel is verwerkt."
 				} else if payResult.MutNr == 0 {
-					log.Printf("SubmitFull payment returned mutNr=0; body=%s", string(payResp))
-					paymentWarning = "Factuur is geboekt, maar de betalingsmutatie is niet aangemaakt — afschriftregel is mogelijk niet gemarkeerd. Controleer in e-Boekhouden."
+					log.Printf("SubmitFull payment returned mutNr=0 (%d bytes)", len(payResp))
+					paymentWarning = "De factuur is geboekt, maar e-Boekhouden heeft de betaling niet geboekt en gaf geen reden. De afschriftregel staat dus nog open."
 				} else {
 					paymentMutNr = payResult.MutNr
 				}
 			}
 		} else {
 			log.Printf("SubmitFull: could not resolve bankAccountId for importId=%d (bank line not found in grid)", req.ImportId)
-			paymentWarning = "Factuur is geboekt, maar de afschriftregel kon niet worden gevonden. Controleer in e-Boekhouden."
+			paymentWarning = "De factuur is geboekt, maar de betaling niet: Speedy vond de afschriftregel niet meer. Kijk in e-Boekhouden of die al is verwerkt."
 		}
 	}
 
-	// Step 4: Link archived file to the invoice mutation
-	if archiefFileId > 0 && mutResult.MutNr > 0 {
-		linkPayload, _ := json.Marshal(map[string]any{
-			"koppelId":   mutResult.MutNr,
-			"folders":    []map[string]any{{"id": archiefFileId, "soort": "F"}},
-			"koppelType": "MUT",
-		})
-		_, err := client.LinkFileToMutation(linkPayload)
-		if err != nil {
-			log.Printf("File link error: %v", err)
-		}
+	// Step 4: Link the archive file to the invoice mutation, then (for a
+	// mail-folder document) rename it and move it out of the mail folder.
+	linkErr := linkArchiveFile(client, archiefFileId, mutResult.MutNr)
+	arch = h.completeArchive(ctx, client, sess.UserID, src, arch, linkErr, datum, archiveName)
+
+	// The invoice is booked, so the answer stays a success with warnings; a
+	// session that expired on the way is still cleared like everywhere else.
+	if paymentSessionExpired || arch.sessionExpired {
+		clearExpiredEBoekhoudenToken(c, sess, h.sessions, h.db)
 	}
 
 	// Invalidate inbox classification cache so "Vernieuwen" fetches fresh data
-	sess := session.FromContext(c)
-	if sess != nil && h.redis != nil {
-		h.redis.Del(c.Request.Context(), fmt.Sprintf("inbox:classify:%s", sess.UserID))
+	if h.redis != nil {
+		h.redis.Del(ctx, inboxClassifyKey(sess.UserID))
 	}
 
 	// Write the duplicate-detection marker so a future re-upload of this
 	// exact PDF surfaces an "already booked" warning at /analyze time.
 	// Best-effort: a marker write failure never blocks the booking response.
-	if sess != nil && h.redis != nil && req.PdfHash != "" && mutResult.MutNr > 0 {
+	if h.redis != nil && req.PdfHash != "" && mutResult.MutNr > 0 {
 		marker := invoiceSubmittedMarker{
 			MutNr:        mutResult.MutNr,
 			PaymentMutNr: paymentMutNr,
-			Leverancier:  req.Leverancier,
-			Factuur:      req.Factuurnummer,
-			BedragIncl:   req.BedragIncl,
 			SubmittedAt:  time.Now(),
 		}
 		if body, mErr := json.Marshal(marker); mErr == nil {
 			if setErr := h.redis.Set(
-				c.Request.Context(),
+				ctx,
 				invoiceSubmittedMarkerKey(sess.UserID, req.PdfHash),
 				body,
 				invoiceSubmittedMarkerTTL,
@@ -695,9 +833,10 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		"mutNr":        mutResult.MutNr,
 		"mutId":        mutResult.MutId,
 		"paymentMutNr": paymentMutNr,
-		"archived":     archiefFileId > 0,
-		"linked":       archiefFileId > 0 && mutResult.MutNr > 0,
 	}
+	// archived, linked, renamed, moved and, when set, archiveName,
+	// targetFolderId, targetFolderPath and archiveWarning.
+	arch.addTo(resp)
 	// Surface a Dutch payment-step warning to the frontend so the user
 	// sees that the bank-line clearing didn't happen. The FactuurOntvangen
 	// itself succeeded so we still return 200, but the warning lets the UI
@@ -717,11 +856,13 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 // This is the lightweight cousin of SubmitFull: one mutation instead of two,
 // no crediteurenrekening lookup, no relatie required.
 func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
+	sess := session.FromContext(c)
 	client := session.ClientFromContext(c)
-	if client == nil {
+	if sess == nil || client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
 		return
 	}
+	ctx := c.Request.Context()
 
 	// extraLine is one additional booking line within the same mutation.
 	// Used most commonly for restaurant tips: the receipt itself shows
@@ -749,12 +890,16 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		BTWBedrag       float64 `json:"btwBedrag"`
 		BTWCode         string  `json:"btwCode"`
 		TegenRekeningId int     `json:"tegenRekeningId"`
-		// PDF source: PdfBase64 (preferred, no R2 needed) or UploadKey + R2.
-		UploadKey string `json:"uploadKey"`
-		PdfBase64 string `json:"pdfBase64,omitempty"`
-		Filename  string `json:"filename"`
-		// FolderID is the picked archive folder; zero falls back to legacy
-		// auto-folder when R2 is configured.
+		// Document source: PdfBase64 (preferred, no R2 needed), UploadKey + R2,
+		// or ArchiveFileId for a file in the mail folder; see SubmitFull.
+		// Filename is accepted for compatibility but no longer used.
+		UploadKey      string `json:"uploadKey"`
+		PdfBase64      string `json:"pdfBase64,omitempty"`
+		Filename       string `json:"filename"`
+		ArchiveFileId  int    `json:"archiveFileId,omitempty"`
+		TargetFolderId int    `json:"targetFolderId,omitempty"`
+		// FolderID is the picked archive folder for an upload; zero falls
+		// back to legacy auto-folder when R2 is configured.
 		FolderID int `json:"folderId,omitempty"`
 		ImportId int `json:"importId,omitempty"`
 		// BankAccountId is the e-boekhouden internal ID of the bank account
@@ -767,22 +912,22 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek."})
 		return
 	}
 
 	if req.BedragIncl <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Bedrag moet positief zijn"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Het bedrag moet groter zijn dan nul."})
 		return
 	}
 	if math.IsNaN(req.BedragIncl) || math.IsInf(req.BedragIncl, 0) ||
 		math.IsNaN(req.BedragExcl) || math.IsInf(req.BedragExcl, 0) ||
 		math.IsNaN(req.BTWBedrag) || math.IsInf(req.BTWBedrag, 0) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig bedrag"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig bedrag."})
 		return
 	}
 	if req.TegenRekeningId == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Selecteer een kostenrekening (grootboekrekening)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een grootboekrekening."})
 		return
 	}
 	if req.BTWCode == "" {
@@ -797,19 +942,19 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	// tegenrekening. Derive bedragExcl when missing, same as the main line.
 	const maxExtraLines = 10
 	if len(req.ExtraLines) > maxExtraLines {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Maximaal %d extra regels per boeking", maxExtraLines)})
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Een boeking kan maximaal %d extra regels hebben.", maxExtraLines)})
 		return
 	}
 	for i := range req.ExtraLines {
 		el := &req.ExtraLines[i]
 		if el.BedragIncl <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: bedrag moet positief zijn", i+1)})
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: het bedrag moet groter zijn dan nul.", i+1)})
 			return
 		}
 		if math.IsNaN(el.BedragIncl) || math.IsInf(el.BedragIncl, 0) ||
 			math.IsNaN(el.BedragExcl) || math.IsInf(el.BedragExcl, 0) ||
 			math.IsNaN(el.BTWBedrag) || math.IsInf(el.BTWBedrag, 0) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: ongeldig bedrag", i+1)})
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: ongeldig bedrag.", i+1)})
 			return
 		}
 		if el.TegenRekeningId == 0 {
@@ -834,7 +979,7 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	// in the same administration (e.g. savings, investment).
 	bankAccountId := 0
 	if req.ImportId > 0 {
-		raw, err := client.GetImportGrid(0, 500)
+		raw, err := client.GetImportGrid(0, importGridFetchLimit)
 		if err == nil {
 			rows, _, _ := eboekhouden.ParseImportGrid(raw)
 			for _, row := range rows {
@@ -868,50 +1013,31 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		}
 	}
 	if bankAccountId == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Geen bankrekening gevonden voor deze boeking. Koppel een afschriftregel."})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Speedy weet niet van welke bankrekening dit bonnetje is betaald. Koppel het aan een afschriftregel die nog openstaat."})
 		return
 	}
 
-	// Step 1: Upload PDF to e-boekhouden archive — see SubmitFull for the
-	// dual-source (PdfBase64 vs R2) + dual-folder (explicit vs legacy auto)
-	// rationale. Identical decision tree here, only the default filename
-	// differs ("bonnetje_…" instead of "factuur_…").
-	var archiefFileId int
-	var pdfBytes []byte
-	if req.PdfBase64 != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(req.PdfBase64); err != nil {
-			log.Printf("SubmitReceipt: invalid pdfBase64: %v", err)
-		} else {
-			pdfBytes = decoded
-		}
-	} else if req.UploadKey != "" && h.r2 != nil {
-		if downloaded, _, err := h.r2.Download(c.Request.Context(), req.UploadKey); err != nil {
-			log.Printf("R2 download error for %s: %v", req.UploadKey, err)
-		} else {
-			pdfBytes = downloaded
-		}
+	// Step 1: Resolve the document and stage the archive file — see SubmitFull
+	// and invoice_archive.go. A receipt has no invoice number, so its archive
+	// name ends in "bonnetje".
+	src, err := h.prepareArchiveSource(ctx, client, archiveSourceInput{
+		archiveFileID:  req.ArchiveFileId,
+		targetFolderID: req.TargetFolderId,
+		pdfBase64:      req.PdfBase64,
+		uploadKey:      req.UploadKey,
+	})
+	if err != nil {
+		h.writeArchiveSourceError(c, sess, err)
+		return
 	}
-	if len(pdfBytes) > 0 {
-		folderID := req.FolderID
-		if folderID == 0 && h.r2 != nil {
-			datum, _ := time.Parse("2006-01-02", req.Datum)
-			if datum.IsZero() {
-				datum = time.Now()
-			}
-			if id, err := h.findOrCreateArchiveFolder(client, datum); err != nil {
-				log.Printf("Archive folder error: %v", err)
-			} else {
-				folderID = id
-			}
-		}
-		if folderID > 0 {
-			filename := req.Filename
-			if filename == "" {
-				filename = fmt.Sprintf("bonnetje_%s_%s.pdf", req.Datum, req.Leverancier)
-			}
-			archiefFileId = h.uploadAndResolveArchiveFile(client, pdfBytes, folderID, filename)
-		}
-	}
+	datum := bookingDate(req.Datum)
+	archiveName := src.archiveName(archiveNameInput{
+		leverancier: req.Leverancier,
+		datum:       req.Datum,
+		docType:     claude.DocumentTypeBonnetje,
+	})
+	arch := h.stageArchiveFile(client, src, req.FolderID, datum, archiveName)
+	archiefFileId := arch.fileID
 
 	// Step 2: Create the "Geld uitgegeven" mutation (soort 6).
 	// Bank account is debited (rekening), cost account is credited (tegenRekening).
@@ -966,8 +1092,14 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 
 	mutResp, err := client.CreateMutatie(mutPayload)
 	if err != nil {
-		log.Printf("SubmitReceipt CreateMutatie error: %v", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje boeken mislukt: " + err.Error()})
+		log.Printf("SubmitReceipt CreateMutatie error: %s", errClass(err))
+		if bookingRefused(err) {
+			discardStagedUpload(client, src, arch)
+		}
+		if HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err) {
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Het bonnetje is niet geboekt: " + err.Error()})
 		return
 	}
 
@@ -976,84 +1108,38 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		MutId int `json:"mutId"`
 	}
 	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
-		log.Printf("SubmitReceipt unmarshal error: %v body=%s", jsonErr, string(mutResp))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden"})
+		// Whether the receipt was booked is unknown, so the staged file stays.
+		log.Printf("SubmitReceipt unmarshal error: %v (%d bytes)", jsonErr, len(mutResp))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden gaf een onverwacht antwoord. Kijk in e-Boekhouden of het bonnetje is geboekt voordat je het opnieuw probeert."})
 		return
 	}
 	if mutResult.MutNr == 0 {
-		log.Printf("SubmitReceipt mutNr=0, body=%s", string(mutResp))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje niet aangemaakt — controleer de gegevens"})
+		log.Printf("SubmitReceipt mutNr=0 (%d bytes)", len(mutResp))
+		discardStagedUpload(client, src, arch)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden heeft het bonnetje niet geboekt en gaf geen reden. Controleer de gegevens en probeer het opnieuw."})
 		return
 	}
 
-	// Step 3: Link the archived file to the mutation.
-	if archiefFileId > 0 && mutResult.MutNr > 0 {
-		linkPayload, _ := json.Marshal(map[string]any{
-			"koppelId":   mutResult.MutNr,
-			"folders":    []map[string]any{{"id": archiefFileId, "soort": "F"}},
-			"koppelType": "MUT",
-		})
-		if _, err := client.LinkFileToMutation(linkPayload); err != nil {
-			log.Printf("File link error: %v", err)
-		}
+	// Step 3: Link the archive file to the mutation, then (for a mail-folder
+	// document) rename it and move it out of the mail folder.
+	linkErr := linkArchiveFile(client, archiefFileId, mutResult.MutNr)
+	arch = h.completeArchive(ctx, client, sess.UserID, src, arch, linkErr, datum, archiveName)
+	if arch.sessionExpired {
+		// The receipt is booked: answer with the warning, clear the token.
+		clearExpiredEBoekhoudenToken(c, sess, h.sessions, h.db)
 	}
 
 	// Invalidate inbox cache so the bank line disappears from the inbox view.
-	sess := session.FromContext(c)
-	if sess != nil && h.redis != nil {
-		h.redis.Del(c.Request.Context(), fmt.Sprintf("inbox:classify:%s", sess.UserID))
+	if h.redis != nil {
+		h.redis.Del(ctx, inboxClassifyKey(sess.UserID))
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"mutNr":    mutResult.MutNr,
-		"mutId":    mutResult.MutId,
-		"archived": archiefFileId > 0,
-		"linked":   archiefFileId > 0 && mutResult.MutNr > 0,
-	})
-}
-
-// uploadAndResolveArchiveFile uploads pdfBytes into folderID and returns the
-// archive file ID assigned by e-boekhouden. The /folder/upload endpoint
-// returns the destination folder ID — not the file ID — so we list the folder
-// after upload and match on filename to recover the real ID, which the caller
-// needs to link the file to a mutation. Returns 0 on any failure (logged).
-//
-// The filename is sanitized internally; an empty input becomes "document.pdf".
-// Callers that want a more descriptive name (e.g. "factuur_X.pdf") should pass
-// that string in rawFilename — sanitization keeps it but adds ".pdf" if missing.
-func (h *InvoiceHandler) uploadAndResolveArchiveFile(client *eboekhouden.Client, pdfBytes []byte, folderID int, rawFilename string) int {
-	if len(pdfBytes) == 0 || folderID == 0 {
-		return 0
+	resp := gin.H{
+		"mutNr": mutResult.MutNr,
+		"mutId": mutResult.MutId,
 	}
-	filename := sanitizeFilename(rawFilename)
-	uploadPayload, _ := json.Marshal(map[string]any{
-		"fileName":  filename,
-		"data":      base64.StdEncoding.EncodeToString(pdfBytes),
-		"overwrite": false,
-		"folderId":  folderID,
-	})
-	if _, err := client.UploadArchiveFile(uploadPayload); err != nil {
-		log.Printf("Archive upload error: %v", err)
-		return 0
-	}
-	filesRaw, err := client.GetArchiveFiles(folderID)
-	if err != nil {
-		log.Printf("Archive file list error after upload: %v", err)
-		return 0
-	}
-	var files []map[string]any
-	if err := json.Unmarshal(filesRaw, &files); err != nil {
-		log.Printf("Archive file list parse error: %v", err)
-		return 0
-	}
-	for _, f := range files {
-		if naam, _ := f["naam"].(string); naam == filename {
-			if id, ok := f["id"].(float64); ok {
-				return int(id)
-			}
-		}
-	}
-	return 0
+	arch.addTo(resp)
+	c.JSON(http.StatusOK, resp)
 }
 
 // findOrCreateArchiveFolder finds or creates the Facturen/year/month folder
@@ -1070,6 +1156,12 @@ func (h *InvoiceHandler) uploadAndResolveArchiveFile(client *eboekhouden.Client,
 // For backwards-compat with users who have the doubled structure from the
 // previous broken behavior, we look for an existing "Facturen" folder at
 // any depth so we don't strand old files.
+//
+// Deleted folders (isDeleted, still listed by e-boekhouden) are never
+// reused: a document filed there would vanish with the folder. A level that
+// only exists as a deleted folder is created afresh. A create call whose
+// answer carries no folder id is an error, not id 0: id 0 is the root, so
+// carrying on would create the next level at the top of the archive.
 func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, datum time.Time) (int, error) {
 	maandNamen := []string{
 		"01 Januari", "02 Februari", "03 Maart", "04 April", "05 Mei", "06 Juni",
@@ -1079,19 +1171,24 @@ func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, d
 	jaar := fmt.Sprintf("%d", datum.Year())
 	maand := maandNamen[datum.Month()-1]
 
-	// Get all folders
-	raw, err := client.GetArchiveFolders()
+	all, err := listArchiveFolders(client)
 	if err != nil {
 		return 0, fmt.Errorf("getting folders: %w", err)
 	}
-
-	var folders []struct {
-		ID       int    `json:"id"`
-		Naam     string `json:"naam"`
-		ParentId int    `json:"parentId"`
+	folders := make([]archiveFolder, 0, len(all))
+	for _, f := range all {
+		if !f.IsDeleted {
+			folders = append(folders, f)
+		}
 	}
-	if err := json.Unmarshal(raw, &folders); err != nil {
-		return 0, fmt.Errorf("parsing folders: %w", err)
+	// childNamed returns the live folder called name directly under parent.
+	childNamed := func(parent int, name string) int {
+		for _, f := range folders {
+			if f.Naam == name && f.ParentID == parent {
+				return f.ID
+			}
+		}
+		return 0
 	}
 
 	// Find "Facturen" — preferring one at the top level (parentId == 0,
@@ -1099,85 +1196,58 @@ func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, d
 	// there IS one under a folder literally named "Basismap" (legacy doubled
 	// structure from the old broken code), reuse that one so old files stay
 	// findable. If neither exists, create a fresh Facturen at the root.
-	var rootId int
-	for _, f := range folders {
-		if f.Naam == "Facturen" && f.ParentId == 0 {
-			rootId = f.ID
-			break
-		}
-	}
+	rootId := childNamed(0, "Facturen")
 	if rootId == 0 {
 		// Legacy fallback: look for Facturen under any "Basismap" parent.
-		basismapIDs := map[int]bool{}
 		for _, f := range folders {
 			if f.Naam == "Basismap" {
-				basismapIDs[f.ID] = true
-			}
-		}
-		for _, f := range folders {
-			if f.Naam == "Facturen" && basismapIDs[f.ParentId] {
-				rootId = f.ID
-				break
+				if id := childNamed(f.ID, "Facturen"); id != 0 {
+					rootId = id
+					break
+				}
 			}
 		}
 	}
 	if rootId == 0 {
 		// Create Facturen directly at the implicit root.
-		payload, _ := json.Marshal(map[string]any{"parentFolderId": 0, "name": "Facturen"})
-		resp, err := client.CreateArchiveFolder(payload)
-		if err != nil {
+		if rootId, err = createArchiveFolder(client, 0, "Facturen"); err != nil {
 			return 0, fmt.Errorf("creating Facturen folder: %w", err)
 		}
-		var created struct {
-			ID int `json:"id"`
-		}
-		json.Unmarshal(resp, &created)
-		rootId = created.ID
 	}
 
-	// Find or create year folder
-	var yearId int
-	for _, f := range folders {
-		if f.Naam == jaar && f.ParentId == rootId {
-			yearId = f.ID
-			break
-		}
-	}
+	yearId := childNamed(rootId, jaar)
 	if yearId == 0 {
-		payload, _ := json.Marshal(map[string]any{"parentFolderId": rootId, "name": jaar})
-		resp, err := client.CreateArchiveFolder(payload)
-		if err != nil {
+		if yearId, err = createArchiveFolder(client, rootId, jaar); err != nil {
 			return 0, fmt.Errorf("creating year folder: %w", err)
 		}
-		var created struct {
-			ID int `json:"id"`
-		}
-		json.Unmarshal(resp, &created)
-		yearId = created.ID
 	}
 
-	// Find or create month folder
-	var monthId int
-	for _, f := range folders {
-		if f.Naam == maand && f.ParentId == yearId {
-			monthId = f.ID
-			break
-		}
-	}
+	monthId := childNamed(yearId, maand)
 	if monthId == 0 {
-		payload, _ := json.Marshal(map[string]any{"parentFolderId": yearId, "name": maand})
-		resp, err := client.CreateArchiveFolder(payload)
-		if err != nil {
+		if monthId, err = createArchiveFolder(client, yearId, maand); err != nil {
 			return 0, fmt.Errorf("creating month folder: %w", err)
 		}
-		var created struct {
-			ID int `json:"id"`
-		}
-		json.Unmarshal(resp, &created)
-		monthId = created.ID
 	}
 
 	return monthId, nil
+}
+
+// errFolderCreateNoID is a create-folder answer without a usable folder id.
+var errFolderCreateNoID = errors.New("e-boekhouden answered the folder creation without a folder id")
+
+// createArchiveFolder creates a folder called name under parentID (0 is the
+// root) and returns the new folder's id.
+func createArchiveFolder(client *eboekhouden.Client, parentID int, name string) (int, error) {
+	payload, _ := json.Marshal(map[string]any{"parentFolderId": parentID, "name": name})
+	raw, err := client.CreateArchiveFolder(payload)
+	if err != nil {
+		return 0, err
+	}
+	var created archiveFolder
+	if err := json.Unmarshal(raw, &created); err != nil || created.ID <= 0 {
+		return 0, errFolderCreateNoID
+	}
+	return created.ID, nil
 }
 
 // Submit handles POST /api/v1/invoices/submit — simple mutation passthrough (legacy).
@@ -1203,32 +1273,21 @@ func (h *InvoiceHandler) Submit(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", raw)
 }
 
+// getAPIKey returns the user's decrypted Anthropic key, or an error when
+// none is configured. GetSettings returns defaults (no error) for a user
+// without a settings row, so the HasAnthropicKey check must produce its own
+// error — returning ("", nil) here used to let Analyze call Claude with an
+// empty key.
 func (h *InvoiceHandler) getAPIKey(c *gin.Context, userID string) (string, error) {
 	settings, err := h.db.GetSettings(c.Request.Context(), userID)
 	if err != nil || !settings.HasAnthropicKey {
-		return "", err
+		return "", fmt.Errorf("no API key")
 	}
 	decrypted, err := crypto.Decrypt(h.encKey, settings.AnthropicKeyEnc)
 	if err != nil {
 		return "", err
 	}
 	return string(decrypted), nil
-}
-
-var safeFilenameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
-
-func sanitizeFilename(s string) string {
-	s = safeFilenameRe.ReplaceAllString(s, "_")
-	if len(s) > 100 {
-		s = s[:100]
-	}
-	if s == "" || s == "_" {
-		s = "document"
-	}
-	if len(s) < 5 || s[len(s)-4:] != ".pdf" {
-		s += ".pdf"
-	}
-	return s
 }
 
 func truncate(s string, maxLen int) string {

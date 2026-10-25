@@ -2,8 +2,11 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -15,17 +18,98 @@ import (
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
 	"github.com/joooostb/speedy-eboekhouden/internal/eboekhouden"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
+	"github.com/redis/go-redis/v9"
 )
 
 // SettingsHandler manages user settings (API keys, preferences).
 type SettingsHandler struct {
 	db     *database.DB
 	encKey crypto.AESKey
+	// redis caches a positive API-key check (apiKeyStatusKey); nil checks
+	// every time. Tests pass a fake.
+	redis apiKeyStatusStore
+	// probeKey asks Anthropic about a key; defaults to probeAnthropicKey,
+	// tests replace it.
+	probeKey func(ctx context.Context, apiKey string) gin.H
 }
 
-// NewSettingsHandler creates a new settings handler.
-func NewSettingsHandler(db *database.DB, encKey crypto.AESKey) *SettingsHandler {
-	return &SettingsHandler{db: db, encKey: encKey}
+// apiKeyStatusStore is the part of the Redis client the API-key status cache
+// needs. *redis.Client satisfies it.
+type apiKeyStatusStore interface {
+	Get(ctx context.Context, key string) *redis.StringCmd
+	Set(ctx context.Context, key string, value any, expiration time.Duration) *redis.StatusCmd
+	Del(ctx context.Context, keys ...string) *redis.IntCmd
+}
+
+// NewSettingsHandler creates a new settings handler. redisClient may be nil;
+// the API-key status is then checked with Anthropic on every request.
+func NewSettingsHandler(db *database.DB, encKey crypto.AESKey, redisClient *redis.Client) *SettingsHandler {
+	h := &SettingsHandler{db: db, encKey: encKey, probeKey: probeAnthropicKey}
+	if redisClient != nil {
+		h.redis = redisClient
+	}
+	return h
+}
+
+// apiKeyStatusTTL is how long an "active" verdict is reused. The check is a
+// real, billed Messages call, and the inbox asks for it every time it opens.
+// Running out of credit within this window shows up as soon as an analysis
+// or classification fails, with the same message.
+const apiKeyStatusTTL = 15 * time.Minute
+
+// apiKeyStatusKey caches that the user's stored API key was "active". The
+// value is a fingerprint of the stored, encrypted key (keyFingerprint), so a
+// key saved by another session or instance is never vouched for by an old
+// entry.
+func apiKeyStatusKey(userID string) string {
+	return "apikey:status:" + userID
+}
+
+// keyFingerprint identifies a stored API key by a hash of its ciphertext.
+// Every save encrypts with a fresh nonce, so a new (or re-saved) key gets a
+// new fingerprint. Nothing about the key itself can be learned from it, and
+// a cache hit needs no decryption: the key is still only decrypted for a
+// call to Anthropic.
+func keyFingerprint(keyEnc []byte) string {
+	sum := sha256.Sum256(keyEnc)
+	return hex.EncodeToString(sum[:])
+}
+
+// apiKeyStatus answers the status check for the user's stored, encrypted
+// key. Only "active" is cached: that is the outcome of a billed call, while a
+// refusal (no credit, invalid key) costs nothing and must clear as soon as
+// the user tops up or replaces the key. A Redis failure only means one more
+// check.
+func (h *SettingsHandler) apiKeyStatus(ctx context.Context, userID string, keyEnc []byte) gin.H {
+	fp := keyFingerprint(keyEnc)
+	if h.redis != nil {
+		if cached, err := h.redis.Get(ctx, apiKeyStatusKey(userID)).Result(); err == nil && cached == fp {
+			return gin.H{"status": "active"}
+		}
+	}
+	decrypted, err := crypto.Decrypt(h.encKey, keyEnc)
+	if err != nil {
+		return gin.H{"status": "error", "message": "Speedy kan je opgeslagen API-sleutel niet meer ontsleutelen. Vul de sleutel opnieuw in."}
+	}
+	status := h.probeKey(ctx, string(decrypted))
+	if status["status"] == "active" && h.redis != nil {
+		if err := h.redis.Set(ctx, apiKeyStatusKey(userID), fp, apiKeyStatusTTL).Err(); err != nil {
+			log.Printf("Settings: caching the API-key status for user %s failed: %v", userID, err)
+		}
+	}
+	return status
+}
+
+// forgetAPIKeyStatus drops the cached verdict after the key changed. The
+// fingerprint already keeps an old entry from vouching for a new key; this
+// just does not keep it around.
+func (h *SettingsHandler) forgetAPIKeyStatus(ctx context.Context, userID string) {
+	if h.redis == nil {
+		return
+	}
+	if err := h.redis.Del(ctx, apiKeyStatusKey(userID)).Err(); err != nil {
+		log.Printf("Settings: dropping the API-key status for user %s failed: %v", userID, err)
+	}
 }
 
 // GetSettings handles GET /api/v1/settings
@@ -50,7 +134,10 @@ func (h *SettingsHandler) GetSettings(c *gin.Context) {
 	})
 }
 
-// CheckAPIKey handles GET /api/v1/settings/api-key/status — validates the stored key and checks billing.
+// CheckAPIKey handles GET /api/v1/settings/api-key/status — validates the
+// stored key and checks billing. An "active" answer is reused for
+// apiKeyStatusTTL (apiKeyStatus), because the check costs a billed call and
+// the inbox asks on every visit.
 func (h *SettingsHandler) CheckAPIKey(c *gin.Context) {
 	sess := session.FromContext(c)
 	if sess == nil {
@@ -64,23 +151,18 @@ func (h *SettingsHandler) CheckAPIKey(c *gin.Context) {
 		return
 	}
 
-	decrypted, err := crypto.Decrypt(h.encKey, settings.AnthropicKeyEnc)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status": "error", "message": "Sleutel kon niet worden ontsleuteld"})
-		return
-	}
+	c.JSON(http.StatusOK, h.apiKeyStatus(c.Request.Context(), sess.UserID, settings.AnthropicKeyEnc))
+}
 
-	apiKey := string(decrypted)
-
-	// Try a minimal API call — list models is the cheapest possible
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+// probeAnthropicKey checks a key and its credit with Anthropic. Listing the
+// models is free but does not check billing, so this sends the smallest
+// possible message, which Anthropic bills (a refused one is not billed).
+func probeAnthropicKey(ctx context.Context, apiKey string) gin.H {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
-
-	// Try to send a tiny message to check billing status
-	// (list models doesn't check billing, but a message does)
-	_, err = client.Messages.New(ctx, anthropic.MessageNewParams{
+	_, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.ModelClaudeHaiku4_5,
 		MaxTokens: 1,
 		Messages: []anthropic.MessageParam{
@@ -90,27 +172,23 @@ func (h *SettingsHandler) CheckAPIKey(c *gin.Context) {
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "credit balance") || strings.Contains(msg, "billing") {
-			c.JSON(http.StatusOK, gin.H{
+			return gin.H{
 				"status":  "no_credits",
-				"message": "Je API-sleutel is geldig, maar je tegoed is op. Vul je tegoed aan op console.anthropic.com/settings/plans.",
-			})
-			return
+				"message": "Je API-sleutel werkt, maar je tegoed bij Anthropic is op. Vul het aan op console.anthropic.com/settings/plans.",
+			}
 		}
 		if strings.Contains(msg, "invalid_api_key") || strings.Contains(msg, "authentication") {
-			c.JSON(http.StatusOK, gin.H{
+			return gin.H{
 				"status":  "invalid",
-				"message": "Je API-sleutel is ongeldig. Controleer of je de juiste sleutel hebt.",
-			})
-			return
+				"message": "Anthropic accepteert je API-sleutel niet. Controleer de sleutel of maak een nieuwe aan in de Anthropic Console.",
+			}
 		}
-		c.JSON(http.StatusOK, gin.H{
+		return gin.H{
 			"status":  "error",
-			"message": "Kon de API-sleutel niet verifiëren. Probeer het later opnieuw.",
-		})
-		return
+			"message": "Speedy kon je API-sleutel niet controleren bij Anthropic. Probeer het later opnieuw.",
+		}
 	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "active"})
+	return gin.H{"status": "active"}
 }
 
 type setAPIKeyRequest struct {
@@ -133,7 +211,7 @@ func (h *SettingsHandler) SetAPIKey(c *gin.Context) {
 
 	// Format check
 	if !strings.HasPrefix(req.APIKey, "sk-ant-") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldige sleutel. Een Anthropic API-sleutel begint met sk-ant-"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Dit is geen Anthropic API-sleutel. Die begint met sk-ant-."})
 		return
 	}
 
@@ -153,6 +231,7 @@ func (h *SettingsHandler) SetAPIKey(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save"})
 		return
 	}
+	h.forgetAPIKeyStatus(c.Request.Context(), sess.UserID)
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -169,6 +248,7 @@ func (h *SettingsHandler) DeleteAPIKey(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete"})
 		return
 	}
+	h.forgetAPIKeyStatus(c.Request.Context(), sess.UserID)
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -189,7 +269,7 @@ func (h *SettingsHandler) SetSoapCredentials(c *gin.Context) {
 
 	var req setSoapCredentialsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Alle drie de velden zijn verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vul alle drie de velden in."})
 		return
 	}
 
@@ -240,7 +320,7 @@ func (h *SettingsHandler) SetRestAccessToken(c *gin.Context) {
 
 	var req setRestTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "accessToken is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vul je access token in."})
 		return
 	}
 
@@ -286,12 +366,12 @@ func validateAnthropicKey(ctx context.Context, apiKey string) error {
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "invalid_api_key") || strings.Contains(msg, "authentication") {
-			return fmt.Errorf("Ongeldige API-sleutel. Controleer of je de juiste sleutel hebt gekopieerd.")
+			return fmt.Errorf("Anthropic accepteert deze API-sleutel niet. Controleer of je de hele sleutel hebt gekopieerd.")
 		}
 		if strings.Contains(msg, "credit balance") || strings.Contains(msg, "billing") {
-			return fmt.Errorf("API-sleutel is geldig, maar je tegoed is op. Vul je tegoed aan op console.anthropic.com.")
+			return fmt.Errorf("Deze API-sleutel werkt, maar je tegoed bij Anthropic is op. Vul het aan op console.anthropic.com en sla de sleutel daarna opnieuw op.")
 		}
-		return fmt.Errorf("API-sleutel kon niet worden geverifieerd. Probeer het opnieuw.")
+		return fmt.Errorf("Speedy kon de API-sleutel niet controleren bij Anthropic en heeft hem niet opgeslagen. Probeer het opnieuw.")
 	}
 	return nil
 }
@@ -303,9 +383,9 @@ func validateSoapCredentials(username, code1, code2 string) error {
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "session") || strings.Contains(msg, "SecurityCode") || strings.Contains(msg, "Username") {
-			return fmt.Errorf("Ongeldige SOAP-gegevens. Controleer je gebruikersnaam en beveiligingscodes.")
+			return fmt.Errorf("Inloggen bij de SOAP-API van e-Boekhouden is mislukt. Controleer je gebruikersnaam en beide beveiligingscodes.")
 		}
-		return fmt.Errorf("SOAP-verbinding mislukt: %s", sanitizeError(msg))
+		return fmt.Errorf("De verbinding met de SOAP-API van e-Boekhouden is mislukt: %s", sanitizeError(msg))
 	}
 	return nil
 }
@@ -317,9 +397,9 @@ func validateRestToken(accessToken string) error {
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "401") || strings.Contains(msg, "403") {
-			return fmt.Errorf("Ongeldig access token. Controleer of je het juiste token hebt gekopieerd.")
+			return fmt.Errorf("e-Boekhouden accepteert dit access token niet. Controleer of je het hele token hebt gekopieerd.")
 		}
-		return fmt.Errorf("REST API-verbinding mislukt. Controleer je token.")
+		return fmt.Errorf("Speedy kon het access token niet controleren bij e-Boekhouden en heeft het niet opgeslagen. Probeer het opnieuw.")
 	}
 	return nil
 }
@@ -340,7 +420,7 @@ func (h *SettingsHandler) SetEntityType(c *gin.Context) {
 		EntityType string `json:"entityType"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ongeldig verzoek"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek."})
 		return
 	}
 
@@ -349,7 +429,7 @@ func (h *SettingsHandler) SetEntityType(c *gin.Context) {
 	case "BV", "ZZP", "EM", "ANDERS", "":
 		// allowed (empty string clears the preference)
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Onbekend type onderneming"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Onbekend type onderneming."})
 		return
 	}
 
@@ -366,7 +446,7 @@ func (h *SettingsHandler) SetEntityType(c *gin.Context) {
 	}
 	body, _ := json.Marshal(prefs)
 	if err := h.db.SetPreferences(c.Request.Context(), sess.UserID, body); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Opslaan mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Opslaan is mislukt. Probeer het opnieuw."})
 		return
 	}
 

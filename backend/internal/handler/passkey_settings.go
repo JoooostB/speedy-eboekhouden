@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
@@ -21,10 +22,29 @@ func NewPasskeySettingsHandler(db *database.DB) *PasskeySettingsHandler {
 	return &PasskeySettingsHandler{db: db}
 }
 
+// maxPasskeyNameLength is the longest friendly name in characters (runes),
+// the unit the message and the frontend's maxLength speak of.
+const maxPasskeyNameLength = 64
+
+// passkeyName trims a requested friendly name and checks it. It returns the
+// name to store, or a Dutch message saying why it cannot be used. The limit
+// counts characters, not bytes: "Sleutel van Zoë" must not lose room for the
+// ë, which takes two bytes in UTF-8.
+func passkeyName(raw string) (string, string) {
+	name := strings.TrimSpace(raw)
+	switch {
+	case name == "":
+		return "", "Geef de passkey een naam."
+	case utf8.RuneCountInString(name) > maxPasskeyNameLength:
+		return "", "De naam mag maximaal 64 tekens lang zijn."
+	}
+	return name, ""
+}
+
 type passkeyListItem struct {
-	ID           string `json:"id"`
-	FriendlyName string `json:"friendlyName"`
-	CreatedAt    string `json:"createdAt"`
+	ID           string   `json:"id"`
+	FriendlyName string   `json:"friendlyName"`
+	CreatedAt    string   `json:"createdAt"`
 	Transport    []string `json:"transport"`
 }
 
@@ -66,7 +86,7 @@ func (h *PasskeySettingsHandler) Rename(c *gin.Context) {
 
 	credID, err := base64.RawURLEncoding.DecodeString(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ongeldige passkey id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig passkey-id."})
 		return
 	}
 
@@ -74,21 +94,17 @@ func (h *PasskeySettingsHandler) Rename(c *gin.Context) {
 		FriendlyName string `json:"friendlyName"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "naam is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Geef de passkey een naam."})
 		return
 	}
-	name := strings.TrimSpace(req.FriendlyName)
-	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "naam mag niet leeg zijn"})
-		return
-	}
-	if len(name) > 64 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "naam is te lang (max 64 tekens)"})
+	name, problem := passkeyName(req.FriendlyName)
+	if problem != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": problem})
 		return
 	}
 
 	if err := h.db.RenameCredential(c.Request.Context(), credID, sess.UserID, name); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "passkey hernoemen mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Hernoemen is mislukt. Probeer het opnieuw."})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -105,24 +121,24 @@ func (h *PasskeySettingsHandler) Delete(c *gin.Context) {
 
 	credID, err := base64.RawURLEncoding.DecodeString(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ongeldige passkey id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig passkey-id."})
 		return
 	}
 
 	creds, err := h.db.GetCredentialsByUserID(c.Request.Context(), sess.UserID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "passkeys laden mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Je passkeys konden niet worden geladen, dus er is niets verwijderd. Probeer het opnieuw."})
 		return
 	}
 	if len(creds) <= 1 {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Je kunt je laatste passkey niet verwijderen — je zou jezelf buitensluiten.",
+			"error": "Je laatste passkey kun je niet verwijderen, want zonder passkey kun je niet meer inloggen.",
 		})
 		return
 	}
 
 	if err := h.db.DeleteCredential(c.Request.Context(), credID, sess.UserID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "passkey verwijderen mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Verwijderen is mislukt. Probeer het opnieuw."})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

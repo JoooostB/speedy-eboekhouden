@@ -19,6 +19,30 @@ import { useAuth } from "../../context/AuthContext";
 import { track } from "../../analytics";
 import { PasskeysSection } from "./PasskeysSection";
 import { LearnedSection } from "./LearnedSection";
+import { EBoekhoudenDisconnectDialog } from "../EBoekhoudenDisconnectDialog";
+import { userInitials } from "../shared/userInitials";
+
+/** Display names of the onderneming types; the stored values are codes. */
+const ENTITY_TYPE_LABELS: Record<"BV" | "ZZP" | "EM" | "ANDERS", string> = {
+  BV: "B.V.",
+  ZZP: "ZZP",
+  EM: "Eenmanszaak",
+  ANDERS: "Anders",
+};
+
+/** Inline SVG icon: Link / connection */
+function LinkIcon(props: { sx?: object }) {
+  return (
+    <Box
+      component="svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true" sx={{ width: 20, height: 20, ...props.sx }}
+    >
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </Box>
+  );
+}
 
 /** Inline SVG icon: Key (Lucide-style) */
 function KeyIcon(props: { sx?: object }) {
@@ -102,13 +126,17 @@ function GlobeIcon(props: { sx?: object }) {
 }
 
 export function SettingsPage() {
-  const { user, team, avatarUrl, setAvatarUrl } = useAuth();
+  const { user, team, avatarUrl, setAvatarUrl, eboekhoudenConnected } = useAuth();
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [hasSoapCredentials, setHasSoapCredentials] = useState(false);
   const [hasRestAccessToken, setHasRestAccessToken] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
+  // Every card has its own message, shown in that card: a shared one put
+  // "Type onderneming opgeslagen" and avatar errors in the API-key card.
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [avatarMessage, setAvatarMessage] = useState<string | null>(null);
 
   // SOAP credential fields
   const [soapUsername, setSoapUsername] = useState("");
@@ -125,6 +153,7 @@ export function SettingsPage() {
   // Onderneming type — drives Claude's classification rules
   const [entityType, setEntityType] = useState<"BV" | "ZZP" | "EM" | "ANDERS" | "">("");
   const [entitySaving, setEntitySaving] = useState(false);
+  const [entityMessage, setEntityMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -140,13 +169,14 @@ export function SettingsPage() {
 
   const handleSaveEntityType = async (value: "BV" | "ZZP" | "EM" | "ANDERS" | "") => {
     setEntitySaving(true);
+    setEntityMessage(null);
     try {
       await api.setEntityType(value);
       setEntityType(value);
       track("Entity Type Set", { type: value || "none" });
-      setMessage({ type: "success", text: "Type onderneming opgeslagen" });
+      setEntityMessage({ type: "success", text: "Type onderneming opgeslagen" });
     } catch (err: any) {
-      setMessage({ type: "error", text: err?.message || "Opslaan mislukt" });
+      setEntityMessage({ type: "error", text: err?.message || "Opslaan mislukt" });
     } finally {
       setEntitySaving(false);
     }
@@ -250,9 +280,9 @@ export function SettingsPage() {
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Nodig voor AI-functies: factuurherkenning en boekingsuggesties.
-          Je sleutel wordt versleuteld opgeslagen en nooit gedeeld.
-          Nog geen sleutel?{" "}
+          Nodig voor de AI-functies: facturen uitlezen en boekingen voorstellen.
+          Speedy bewaart je sleutel versleuteld en gebruikt hem alleen voor jouw
+          aanvragen bij Anthropic. Nog geen sleutel?{" "}
           <Typography
             component="a"
             variant="body2"
@@ -288,19 +318,49 @@ export function SettingsPage() {
         </Box>
       </Paper>
 
+      {/* e-Boekhouden connection: status, connect, disconnect */}
+      <Paper sx={{ p: 3, mb: 3 }}>
+        <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
+          <LinkIcon sx={{ mr: 1, color: "primary.main", flexShrink: 0 }} />
+          <Typography variant="h6" component="h2">Verbinding met e-Boekhouden</Typography>
+          <Chip
+            label={eboekhoudenConnected ? "Gekoppeld" : "Niet gekoppeld"}
+            color={eboekhoudenConnected ? "success" : "default"}
+            size="small"
+            sx={{ ml: 1 }}
+          />
+        </Box>
+
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          {eboekhoudenConnected
+            ? "Speedy is gekoppeld aan je administratie in e-Boekhouden. Verbreek je de verbinding, dan meldt Speedy je af bij e-Boekhouden en wist het de tijdelijk bewaarde gegevens. Je wachtwoord bewaart Speedy nooit."
+            : "Speedy is niet gekoppeld aan e-Boekhouden. Koppel je administratie om afschriften, documenten en uren te verwerken."}
+        </Typography>
+
+        {eboekhoudenConnected ? (
+          <Button variant="outlined" color="error" onClick={() => setDisconnectOpen(true)}>
+            Verbinding verbreken
+          </Button>
+        ) : (
+          <Button variant="contained" onClick={() => window.dispatchEvent(new CustomEvent("eb:connect"))}>
+            e-Boekhouden koppelen
+          </Button>
+        )}
+      </Paper>
+
       {/* Onderneming type — drives Claude's BV-vs-ZZP classification rules */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
           <ServerIcon sx={{ mr: 1, color: "primary.main", flexShrink: 0 }} />
           <Typography variant="h6" component="h2">Type onderneming</Typography>
-          {entityType && <Chip label={entityType} color="success" size="small" sx={{ ml: 1 }} />}
+          {entityType && <Chip label={ENTITY_TYPE_LABELS[entityType]} color="success" size="small" sx={{ ml: 1 }} />}
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Bepaalt hoe Speedy je transacties classificeert. Voor een <strong>B.V.</strong> is elke
-          transactie zakelijk — beleggingen komen op de balans als Effecten, niet als privé vermogen.
-          Voor een <strong>ZZP</strong>'er of eenmanszaak mag privégebruik gemengd worden met
-          zakelijk.
+          Speedy houdt hier rekening mee bij de boekingsvoorstellen voor je afschriften. Bij een{" "}
+          <strong>B.V.</strong> is elke transactie zakelijk: beleggingen komen op de balans als
+          Effecten, niet als privévermogen. Bij een <strong>zzp'er</strong> of eenmanszaak kunnen
+          privé en zakelijk op dezelfde rekening door elkaar lopen.
         </Typography>
 
         <ToggleButtonGroup
@@ -326,6 +386,12 @@ export function SettingsPage() {
             Anders
           </ToggleButton>
         </ToggleButtonGroup>
+
+        {entityMessage && (
+          <Alert severity={entityMessage.type} sx={{ mt: 2 }} role="status">
+            {entityMessage.text}
+          </Alert>
+        )}
       </Paper>
 
       {/* SOAP API Credentials */}
@@ -337,8 +403,9 @@ export function SettingsPage() {
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Nodig voor relaties, saldi, openstaande posten en mutaties.
-          Je vindt deze gegevens in e-Boekhouden onder Beheer &gt; Instellingen &gt; API/SOAP.
+          Optioneel. De schermen van Speedy werken zonder deze gegevens: relaties en openstaande
+          posten haalt Speedy op via je gewone koppeling met e-Boekhouden. Je vindt de gegevens in
+          e-Boekhouden onder Beheer &gt; Instellingen &gt; API/SOAP.
         </Typography>
 
         {soapMessage && (
@@ -400,8 +467,8 @@ export function SettingsPage() {
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Nodig voor verkoopfacturen en kostenplaatsen.
-          Je vindt je access token in e-Boekhouden onder Beheer &gt; Instellingen &gt; API/SOAP.
+          Optioneel. Speedy gebruikt dit token op dit moment nergens voor. Je vindt je access token
+          in e-Boekhouden onder Beheer &gt; Instellingen &gt; API/SOAP.
         </Typography>
 
         {restMessage && (
@@ -447,7 +514,7 @@ export function SettingsPage() {
             src={avatarUrl || undefined}
             sx={{ width: 72, height: 72, fontSize: "1.5rem", bgcolor: "primary.main" }}
           >
-            {(user?.name || "?").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
+            {userInitials(user?.name)}
           </Avatar>
           <Box>
             <Button variant="outlined" size="small" component="label" sx={{ mr: 1 }}>
@@ -459,11 +526,12 @@ export function SettingsPage() {
                 onChange={async (e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
+                  setAvatarMessage(null);
                   try {
                     const result = await api.uploadAvatar(file);
                     setAvatarUrl(result.avatarUrl);
                   } catch (err: any) {
-                    setMessage({ type: "error", text: err.message });
+                    setAvatarMessage(err.message);
                   }
                 }}
               />
@@ -473,11 +541,12 @@ export function SettingsPage() {
                 size="small"
                 color="error"
                 onClick={async () => {
+                  setAvatarMessage(null);
                   try {
                     await api.deleteAvatar();
                     setAvatarUrl("");
                   } catch (err: any) {
-                    setMessage({ type: "error", text: err.message });
+                    setAvatarMessage(err.message);
                   }
                 }}
               >
@@ -485,10 +554,12 @@ export function SettingsPage() {
               </Button>
             )}
             <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
-              Max 2 MB. JPEG, PNG of WebP.
+              Maximaal 2 MB, als JPEG, PNG of WebP.
             </Typography>
           </Box>
         </Box>
+
+        {avatarMessage && <Alert severity="error" sx={{ mb: 2 }}>{avatarMessage}</Alert>}
 
         <List dense>
           <ListItem>
@@ -522,6 +593,8 @@ export function SettingsPage() {
           </List>
         </Paper>
       )}
+
+      <EBoekhoudenDisconnectDialog open={disconnectOpen} onClose={() => setDisconnectOpen(false)} />
     </Box>
   );
 }

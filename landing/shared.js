@@ -30,7 +30,7 @@
       '<div class="footer-content">' +
         '<div class="footer-brand">' +
           '<span class="logo">⚡ Speedy e-Boekhouden</span>' +
-          "<p>Supercharge je e-boekhouden.nl administratie met AI.</p>" +
+          "<p>Minder klikken in e-Boekhouden.nl, met AI die het voorwerk doet.</p>" +
         "</div>" +
         '<div class="footer-links">' +
           '<p class="footer-heading">Product</p>' +
@@ -52,7 +52,7 @@
           "<p>Speedy e-Boekhouden is niet gelieerd aan e-Boekhouden B.V. " +
           'Gebruik op eigen risico. Zie onze <a href="/disclaimer" style="color:#94a3b8;text-decoration:underline">volledige disclaimer</a>.</p>' +
         "</div>" +
-        '<p class="copyright">&copy; 2026 Speedy e-Boekhouden. Alle rechten voorbehouden.</p>' +
+        '<p class="copyright">&copy; 2026 Speedy e-Boekhouden Contributors. Uitgebracht onder de MIT-licentie.</p>' +
       "</div>" +
     "</div>";
 

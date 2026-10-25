@@ -1,4 +1,5 @@
 import type {
+  ArchiveDocumentsResponse,
   ArchiveFolder,
   AuthResponse,
   BankStatementsResponse,
@@ -8,6 +9,7 @@ import type {
   ClassifyRequest,
   ClassifyResult,
   CreateInvoiceRequest,
+  EBDisconnectResponse,
   EBStatusResponse,
   EmailTemplate,
   Employee,
@@ -20,11 +22,18 @@ import type {
   InvoiceAnalyzeResponse,
   InvoiceMatchResponse,
   InvoiceSubmitFullRequest,
+  InvoiceSubmitFullResponse,
   InvoiceSubmitReceiptRequest,
+  InvoiceSubmitReceiptResponse,
   LedgerAccount,
+  MailDocumentAnalyzeResponse,
+  MailDocumentsResponse,
+  MailFolderInfo,
   MeResponse,
   Mutatie,
   OpenPost,
+  OpenPostGridItem,
+  OpenPostSoort,
   Relation,
   RestCostCenter,
   RestInvoicesResponse,
@@ -36,12 +45,52 @@ import type {
 const BASE = "/api/v1";
 
 class ApiError extends Error {
+  /** The backend's machine-readable code: its `code` field when it sent one
+   *  (e.g. "analysis_in_progress", "new_ip"), otherwise its `error` field,
+   *  which is a code when a human `message` comes with it (e.g.
+   *  "no_api_key", "claude_error"). Callers that need to branch on the kind
+   *  of failure use this, not the Dutch message. */
+  code?: string;
+
   constructor(
     public status: number,
     message: string,
+    code?: string,
   ) {
     super(message);
+    this.code = code;
   }
+}
+
+/**
+ * Turns a failed response into an ApiError and dispatches the session
+ * events the app listens for. Shared by request() and the binary fetch so a
+ * 401 or an expired e-boekhouden session is handled the same way everywhere.
+ */
+async function throwApiError(res: Response, path: string): Promise<never> {
+  const body = await res.json().catch(() => ({ error: res.statusText }));
+  const message = body.message || body.error || res.statusText;
+
+  if (res.status === 401 && !path.startsWith("/auth/") && !path.startsWith("/eboekhouden/")) {
+    window.dispatchEvent(new CustomEvent("auth:expired"));
+  }
+
+  // 412 Precondition Failed with eboekhouden_session_expired means the
+  // upstream e-boekhouden cookie is no longer valid. The backend has
+  // already cleared the stored token; the frontend needs to update its
+  // own connection state and prompt the user to reconnect.
+  if (res.status === 412 && body.error === "eboekhouden_session_expired") {
+    window.dispatchEvent(new CustomEvent("eb:session-expired"));
+  }
+
+  throw new ApiError(res.status, message, errorCode(body));
+}
+
+/** The machine-readable code of an error body: `code` when present, else
+ *  `error` (see ApiError.code). */
+function errorCode(body: { code?: unknown; error?: unknown }): string | undefined {
+  if (typeof body.code === "string" && body.code !== "") return body.code;
+  return typeof body.error === "string" ? body.error : undefined;
 }
 
 async function request<T>(
@@ -55,25 +104,19 @@ async function request<T>(
   });
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    const message = body.message || body.error || res.statusText;
-
-    if (res.status === 401 && !path.startsWith("/auth/") && !path.startsWith("/eboekhouden/")) {
-      window.dispatchEvent(new CustomEvent("auth:expired"));
-    }
-
-    // 412 Precondition Failed with eboekhouden_session_expired means the
-    // upstream e-boekhouden cookie is no longer valid. The backend has
-    // already cleared the stored token; the frontend needs to update its
-    // own connection state and prompt the user to reconnect.
-    if (res.status === 412 && body.error === "eboekhouden_session_expired") {
-      window.dispatchEvent(new CustomEvent("eb:session-expired"));
-    }
-
-    throw new ApiError(res.status, message);
+    await throwApiError(res, path);
   }
 
   return res.json();
+}
+
+/** Like request() but returns the raw body for binary endpoints. */
+async function requestBlob(path: string): Promise<Blob> {
+  const res = await fetch(`${BASE}${path}`, { credentials: "include" });
+  if (!res.ok) {
+    await throwApiError(res, path);
+  }
+  return res.blob();
 }
 
 export const api = {
@@ -179,7 +222,7 @@ export const api = {
   },
 
   ebDisconnect() {
-    return request<{ status: string }>("/eboekhouden/disconnect", { method: "POST" });
+    return request<EBDisconnectResponse>("/eboekhouden/disconnect", { method: "POST" });
   },
 
   ebKeepalive() {
@@ -295,10 +338,10 @@ export const api = {
       credentials: "include",
       body: formData,
     }).then(async (res) => {
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        throw new ApiError(res.status, body.error || body.message || res.statusText);
-      }
+      // Through throwApiError like every other call: an expired e-boekhouden
+      // session (412) must open the reconnect prompt, and the user reads the
+      // Dutch message, not the machine code (that one is on err.code).
+      if (!res.ok) await throwApiError(res, "/invoices/analyze");
       return res.json() as Promise<InvoiceAnalyzeResponse>;
     });
   },
@@ -311,29 +354,17 @@ export const api = {
   },
 
   submitInvoiceFull(data: InvoiceSubmitFullRequest) {
-    return request<{
-      mutNr: number;
-      mutId: number;
-      paymentMutNr?: number;
-      archived?: boolean;
-      linked?: boolean;
-      /** Set when FactuurOntvangen succeeded but the bank-line-clearing
-       *  payment mutation didn't — UI should treat as warning, not success. */
-      paymentWarning?: string;
-    }>("/invoices/submit-full", {
+    return request<InvoiceSubmitFullResponse>("/invoices/submit-full", {
       method: "POST",
       body: JSON.stringify(data),
     });
   },
 
   submitReceipt(data: InvoiceSubmitReceiptRequest) {
-    return request<{ mutNr: number; mutId: number; archived: boolean; linked: boolean }>(
-      "/invoices/submit-receipt",
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      },
-    );
+    return request<InvoiceSubmitReceiptResponse>("/invoices/submit-receipt", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
   },
 
   // Claude classification
@@ -515,6 +546,70 @@ export const api = {
     return request<{ status: string; entityType: string }>("/settings/entity-type", {
       method: "PUT",
       body: JSON.stringify({ entityType }),
+    });
+  },
+
+  // Open posts from the web-UI grid (needs only the e-boekhouden session)
+  getOpenPosts(soort: OpenPostSoort) {
+    return request<OpenPostGridItem[]>(`/openposts?soort=${encodeURIComponent(soort)}`);
+  },
+
+  // Mail & herken documents (the mail folder of the digitaal archief)
+  getDocuments() {
+    return request<MailDocumentsResponse>("/documents");
+  },
+
+  /** Analyses one mail-folder document with Claude. 409 with code
+   *  "analysis_in_progress" means another analysis of the same file is still
+   *  running (a 409 "mail_folder_not_configured" means what it says);
+   *  force=true discards the cached analysis first. */
+  analyzeDocument(id: number, force = false) {
+    const qs = force ? "?force=true" : "";
+    return request<MailDocumentAnalyzeResponse>(`/documents/${id}/analyze${qs}`, { method: "POST" });
+  },
+
+  /** URL of the inline preview, for opening the file in a new tab. The
+   *  cookie session authenticates the request, so a plain link works. */
+  getDocumentContentUrl(id: number) {
+    return `${BASE}/documents/${id}/content`;
+  },
+
+  getDocumentContent(id: number) {
+    return requestBlob(`/documents/${id}/content`);
+  },
+
+  ignoreDocument(id: number) {
+    return request<{ id: number; ignored: boolean }>(`/documents/${id}/ignore`, { method: "POST" });
+  },
+
+  unignoreDocument(id: number) {
+    return request<{ id: number; ignored: boolean }>(`/documents/${id}/ignore`, { method: "DELETE" });
+  },
+
+  /** Permanently deletes the file from the e-boekhouden archive. 409 when
+   *  the file is linked to a booking. */
+  deleteDocument(id: number) {
+    return request<{ id: number; deleted: boolean }>(`/documents/${id}`, { method: "DELETE" });
+  },
+
+  /** Renames the files by the archive naming convention and moves them out
+   *  of the mail folder. Without targetFolderId each file goes to
+   *  Facturen/<jaar>/<maand>. */
+  archiveDocuments(fileIds: number[], targetFolderId?: number) {
+    const body: { fileIds: number[]; targetFolderId?: number } = { fileIds };
+    if (targetFolderId) body.targetFolderId = targetFolderId;
+    return request<ArchiveDocumentsResponse>("/documents/archive", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+
+  /** Makes folderId the mail folder, or without one creates (or reuses) a
+   *  root folder "Inbox" and uses that. */
+  setupMailFolder(folderId?: number) {
+    return request<{ folder: MailFolderInfo }>("/documents/setup", {
+      method: "POST",
+      body: JSON.stringify(folderId ? { folderId } : {}),
     });
   },
 

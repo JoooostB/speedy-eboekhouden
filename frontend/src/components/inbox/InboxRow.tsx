@@ -15,7 +15,6 @@ import {
 import type {
   InboxClassification,
   InboxCategory,
-  InboxProcessItem,
   LedgerAccount,
   MutatieSoort,
   Relation,
@@ -27,6 +26,8 @@ import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { RelationPicker } from "../shared/RelationPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
 import { BookingConfirmDialog } from "./BookingConfirmDialog";
+import { documentMatchIndicator, koppelenLabel, toInboxProcessItem } from "./inboxBooking";
+import { INVOICE_FILE_ACCEPT, isAcceptedInvoiceFile } from "./mailDocumentReview";
 
 /**
  * Category config: color, label, and whether inline editing is shown.
@@ -34,7 +35,7 @@ import { BookingConfirmDialog } from "./BookingConfirmDialog";
  */
 const CATEGORY_CONFIG: Record<InboxCategory, { label: string; color: string; bgcolor: string }> = {
   auto: { label: "Auto", color: "#166534", bgcolor: "rgba(22, 163, 74, 0.1)" },
-  review: { label: "Controleer", color: "#92400e", bgcolor: "rgba(245, 158, 11, 0.1)" },
+  review: { label: "Controleren", color: "#92400e", bgcolor: "rgba(245, 158, 11, 0.1)" },
   invoice: { label: "Factuur", color: "#1e40af", bgcolor: "rgba(59, 130, 246, 0.1)" },
   manual: { label: "Handmatig", color: "#991b1b", bgcolor: "rgba(220, 38, 38, 0.1)" },
 };
@@ -62,6 +63,11 @@ interface Props {
   onProcessed: (id: number) => void;
   /** Called when user uploads an invoice PDF on this row — parent opens review dialog */
   onInvoiceUpload?: (file: File, bankLineId: number) => void;
+  /** Called with the mail-folder file id when the user wants to book this
+   *  line together with the document that matches it. Only when provided
+   *  does a row with a documentMatch offer "Factuur koppelen en boeken"
+   *  instead of the upload zone. */
+  onOpenDocument?: (fileId: number) => void;
   /** Whether this row has already been processed (show success state). */
   processed?: boolean;
 }
@@ -136,6 +142,14 @@ function TruncatedText({
  * - File drop zone is keyboard-accessible via a hidden <input type="file">.
  * - Amount color is always paired with +/- text prefix (not color alone).
  * - Category badge includes text label (not color alone).
+ *
+ * Two overlays from the backend change the row:
+ * - openPostMatch: the line pays an outstanding invoice in e-boekhouden. The
+ *   row shows "Betaalt open factuur" and a "Koppelen" button that opens the
+ *   confirm dialog prefilled; there is nothing to expand.
+ * - documentMatch: the line is the payment of an analysed mail-folder
+ *   document. The row shows "Document gevonden" and, when the parent passes
+ *   onOpenDocument, "Factuur koppelen en boeken" replaces the upload zone.
  */
 export function InboxRow({
   item,
@@ -145,6 +159,7 @@ export function InboxRow({
   vatCodes,
   onProcessed,
   onInvoiceUpload,
+  onOpenDocument,
   processed = false,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
@@ -180,7 +195,12 @@ export function InboxRow({
     month: "short",
   }).format(new Date(item.datum));
 
-  const canExpand = item.category !== "auto";
+  // An open-post row has nothing to edit inline: the booking is fixed by the
+  // open invoice and confirmed through the dialog.
+  const isOpenPost = !!item.openPostMatch;
+  const documentMatch = item.documentMatch;
+  const canExpand = item.category !== "auto" && !isOpenPost;
+  const indicatorText = documentMatch ? documentMatchIndicator(documentMatch.title) : item.indicator;
 
   const handleExpand = () => {
     if (canExpand) setExpanded((prev) => !prev);
@@ -193,23 +213,7 @@ export function InboxRow({
     setError(null);
 
     const edited = editedItems[0] ?? item;
-
-    const soortCodes: Record<string, number> = {
-      FactuurOntvangen: 1, FactuurVerstuurd: 2,
-      FactuurbetalingOntvangen: 3, FactuurbetalingVerstuurd: 4,
-      GeldOntvangen: 5, GeldUitgegeven: 6, Memoriaal: 7,
-    };
-
-    const payload: InboxProcessItem = {
-      id: edited.id,
-      grootboekId: edited.grootboekId,
-      soort: soortCodes[edited.soort] || 6,
-      grootboekcode: edited.grootboekcode,
-      btwCode: edited.btwCode,
-      omschrijving: edited.aiOmschrijving || edited.omschrijving,
-      relatieId: relatie?.id,
-      bedrag: Math.abs(edited.bedrag),
-    };
+    const payload = toInboxProcessItem(edited, relatie?.id);
 
     try {
       const res = await api.processInboxBatch([payload]);
@@ -253,7 +257,7 @@ export function InboxRow({
       e.preventDefault();
       setDragOver(false);
       const file = e.dataTransfer.files[0];
-      if (file && file.type === "application/pdf") {
+      if (file && isAcceptedInvoiceFile(file)) {
         handleFileSelect(file);
       }
     },
@@ -361,14 +365,57 @@ export function InboxRow({
             variant="body2"
             sx={{ fontWeight: 500 }}
           />
-          {item.indicator && (
+          {indicatorText && (
             <TruncatedText
-              text={item.indicator}
+              text={indicatorText}
               variant="caption"
               color="text.secondary"
             />
           )}
         </Box>
+
+        {/* "Betaalt open factuur" — the line settles an outstanding invoice in
+            e-boekhouden. Text label, never colour alone. */}
+        {isOpenPost && !processed && (
+          <Tooltip
+            title="Het bedrag past bij een openstaande factuur in e-Boekhouden. Met Koppelen boek je de betaling op die factuur."
+            arrow
+          >
+            <Chip
+              label="Betaalt open factuur"
+              size="small"
+              sx={{
+                fontWeight: 600,
+                fontSize: "0.6875rem",
+                height: 22,
+                flexShrink: 0,
+                bgcolor: "rgba(13, 148, 136, 0.12)",
+                color: "#0f766e",
+                cursor: "help",
+              }}
+            />
+          </Tooltip>
+        )}
+
+        {/* "Document gevonden" — an analysed document in the mail folder
+            matches this line. */}
+        {documentMatch && !isOpenPost && !processed && (
+          <Tooltip title={documentMatchIndicator(documentMatch.title)} arrow>
+            <Chip
+              label="Document gevonden"
+              size="small"
+              sx={{
+                fontWeight: 600,
+                fontSize: "0.6875rem",
+                height: 22,
+                flexShrink: 0,
+                bgcolor: "rgba(2, 132, 199, 0.12)",
+                color: "#075985",
+                cursor: "help",
+              }}
+            />
+          </Tooltip>
+        )}
 
         {/* "Eerder geboekt" badge — only shown when this row was auto-filled
             from the user's learned classification memory. Helps the user
@@ -377,7 +424,7 @@ export function InboxRow({
             previously only fired on mouse hover). */}
         {item.learned && !processed && (
           <Tooltip
-            title="Deze suggestie komt uit je eerdere boekingen, niet van de AI"
+            title="Dit voorstel komt uit je eerdere boekingen, niet van de AI"
             arrow
           >
             <Chip
@@ -397,7 +444,7 @@ export function InboxRow({
                 color: "#4338ca",
                 cursor: "help",
               }}
-              aria-label="Eerder geboekt — suggestie uit je geschiedenis"
+              aria-label="Eerder geboekt: voorstel uit je eigen boekingen"
             />
           </Tooltip>
         )}
@@ -415,6 +462,24 @@ export function InboxRow({
             color: processed ? "#166534" : cat.color,
           }}
         />
+
+        {/* "Koppelen" — an open-post row is confirmed straight from the
+            header; it takes the place of the expand arrow. */}
+        {isOpenPost && !processed && (
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              setConfirmOpen(true);
+            }}
+            disabled={processing}
+            aria-label={koppelenLabel(item)}
+            sx={{ flexShrink: 0, fontWeight: 600, minHeight: 32 }}
+          >
+            Koppelen
+          </Button>
+        )}
 
         {/* Expand arrow — only for expandable categories */}
         {canExpand && (
@@ -473,8 +538,29 @@ export function InboxRow({
                 they were performing. We intentionally don't render a second
                 error here to avoid duplication once the dialog closes. */}
 
+            {/* Document match — the invoice is already in the mail folder, so
+                offer to book it with this line instead of asking for an
+                upload. Only when the parent can open the document. */}
+            {item.category === "invoice" && documentMatch && onOpenDocument && (
+              <Box sx={{ mb: 2, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1.5 }}>
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={() => onOpenDocument(documentMatch.fileId)}
+                  disabled={processing || processed}
+                  aria-label={`Factuur ${documentMatch.title} koppelen aan deze betaling en boeken`}
+                  sx={{ fontWeight: 600 }}
+                >
+                  Factuur koppelen en boeken
+                </Button>
+                <Typography variant="caption" color="text.secondary">
+                  {documentMatch.title}
+                </Typography>
+              </Box>
+            )}
+
             {/* Invoice upload zone — for "invoice" category, delegates to parent review dialog */}
-            {item.category === "invoice" && onInvoiceUpload && (
+            {item.category === "invoice" && onInvoiceUpload && !(documentMatch && onOpenDocument) && (
               <Box
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
@@ -483,7 +569,7 @@ export function InboxRow({
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
                 role="button"
                 tabIndex={0}
-                aria-label="Upload een PDF-factuur"
+                aria-label="Upload een factuur (PDF, JPG of PNG)"
                 sx={{
                   border: "2px dashed",
                   borderColor: dragOver ? "primary.main" : "grey.300",
@@ -497,12 +583,12 @@ export function InboxRow({
                 }}
               >
                 <Typography variant="body2" color="text.secondary">
-                  Sleep een PDF hierheen of klik om te uploaden
+                  Sleep een PDF, JPG of PNG hierheen of klik om te uploaden
                 </Typography>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="application/pdf"
+                  accept={INVOICE_FILE_ACCEPT}
                   onChange={handleFileInput}
                   style={{ display: "none" }}
                   aria-hidden="true"

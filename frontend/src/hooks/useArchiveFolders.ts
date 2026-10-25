@@ -55,6 +55,29 @@ export function enrichArchiveFolders(folders: ArchiveFolder[]): ArchiveFolderWit
 }
 
 /**
+ * Drops the folders in rootIds together with everything nested under them.
+ * The documents inbox uses this to keep the mail folder (and its subfolders)
+ * out of every "move to" choice: a file moved there would still be in the
+ * inbox. Bounded like buildArchiveFolderPath so a parentId cycle can't loop.
+ */
+export function excludeFolderTree<T extends ArchiveFolder>(folders: T[], rootIds: readonly number[]): T[] {
+  if (rootIds.length === 0) return folders;
+  const roots = new Set(rootIds);
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const isExcluded = (folder: ArchiveFolder): boolean => {
+    const seen = new Set<number>();
+    let current: ArchiveFolder | undefined = folder;
+    while (current && !seen.has(current.id)) {
+      if (roots.has(current.id)) return true;
+      seen.add(current.id);
+      current = current.parentId === 0 ? undefined : byId.get(current.parentId);
+    }
+    return false;
+  };
+  return folders.filter((f) => !isExcluded(f));
+}
+
+/**
  * Lowercase + strip everything that isn't a letter or digit. Used so
  * "Anthropic, PBC" and "anthropic" collapse to the same token "anthropic"
  * for fuzzy supplier→folder matching.
@@ -75,10 +98,15 @@ function normalizeSupplierToken(s: string): string {
  * or "EU" don't produce spurious matches across the whole tree. Returns
  * null when nothing matches; the picker then stays empty so the user
  * makes an explicit choice.
+ *
+ * Folders in excludeFolderIds, and everything nested under them, are never
+ * suggested: the Mail & herken folder goes here, because a document archived
+ * into it (or a subfolder of it) would still be in the inbox.
  */
 export function findArchiveFolderForSupplier(
   folders: ArchiveFolderWithPath[],
   supplier: string,
+  excludeFolderIds: readonly number[] = [],
 ): ArchiveFolderWithPath | null {
   const supplierNorm = normalizeSupplierToken(supplier);
   if (supplierNorm.length < 3) return null;
@@ -87,7 +115,7 @@ export function findArchiveFolderForSupplier(
 
   let best: ArchiveFolderWithPath | null = null;
   let bestScore = 0;
-  for (const folder of folders) {
+  for (const folder of excludeFolderTree(folders, excludeFolderIds)) {
     const folderNorm = normalizeSupplierToken(folder.naam);
     if (folderNorm.length < 3) continue;
     // Match if the folder name appears as a whole token in the supplier or
@@ -123,7 +151,7 @@ export function useArchiveFolders(): State {
       setFolders(data);
       setError(null);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Kon archiefmappen niet ophalen");
+      setError(err instanceof Error ? err.message : "Archiefmappen laden mislukt");
     } finally {
       setLoading(false);
     }
@@ -141,7 +169,7 @@ export function useArchiveFolders(): State {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Kon archiefmappen niet ophalen");
+        setError(err instanceof Error ? err.message : "Archiefmappen laden mislukt");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

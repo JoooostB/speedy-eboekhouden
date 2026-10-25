@@ -1,4 +1,5 @@
 import { Box, TextField, ToggleButton, ToggleButtonGroup } from "@mui/material";
+import { formatHoursValue } from "./hours/hourOverlay";
 
 interface Props {
   value: string;
@@ -24,9 +25,10 @@ export function HoursInput({ value, onChange }: Props) {
         onChange={(_, v) => v && onChange(v)}
         size="small"
       >
+        {/* The value stays "8.00" (what the form submits); the label is Dutch. */}
         {PRESETS.map((p) => (
           <ToggleButton key={p} value={p}>
-            {p}
+            {formatHoursValue(p)}
           </ToggleButton>
         ))}
       </ToggleButtonGroup>

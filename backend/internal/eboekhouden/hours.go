@@ -148,7 +148,7 @@ func asString(v any) string {
 
 // SubmitHourEntry submits a single hour entry to e-boekhouden.
 func (c *Client) SubmitHourEntry(entry HourEntry) error {
-	reqURL := baseURLSecure20 + "/v1/api/uur"
+	reqURL := c.baseURL + "/v1/api/uur"
 
 	payload, err := json.Marshal(entry)
 	if err != nil {
@@ -170,8 +170,15 @@ func (c *Client) SubmitHourEntry(entry HourEntry) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("hour submission returned %d: %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		// e-boekhouden's validation message tells the user what to fix in
+		// the row, so an error envelope keeps it (APIError.Message, shown in
+		// the submit results; LogString leaves it out). Any other body is
+		// reduced to status and length.
+		if env, isErr := parseErrorEnvelope(body); isErr {
+			return newEnvelopeError("/v1/api/uur", resp.StatusCode, env, len(body))
+		}
+		return newStatusError("/v1/api/uur", resp.StatusCode, len(body))
 	}
 
 	return nil

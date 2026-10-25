@@ -6,13 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/joooostb/speedy-eboekhouden/internal/claude"
 	"github.com/joooostb/speedy-eboekhouden/internal/crypto"
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
@@ -42,6 +40,36 @@ type inboxClassifiedRow struct {
 	// shows a small "eerder geboekt" badge so the user knows where the
 	// suggestion came from.
 	Learned bool `json:"learned"`
+	// The fields below are set by the overlays (see applyInboxOverlays) and
+	// are never cached. RelatieID, RelatieNaam and Factuurnummer identify the
+	// open post this line pays; OpenPostMatch says the suggestion came from
+	// the open-post grid. DocumentMatch names the analysed mail-folder
+	// document whose payment this line is.
+	RelatieID     int                 `json:"relatieId,omitempty"`
+	RelatieNaam   string              `json:"relatieNaam,omitempty"`
+	Factuurnummer string              `json:"factuurnummer,omitempty"`
+	OpenPostMatch bool                `json:"openPostMatch,omitempty"`
+	DocumentMatch *inboxDocumentMatch `json:"documentMatch,omitempty"`
+}
+
+// inboxClassifyBase is the cached part of a classify response: the rows as
+// the learned memory and Claude produced them, before the open-post and
+// document overlays, which are recomputed on every response. Summary is the
+// summary of the overlaid response at the time the cache was written, so
+// DashboardSummary shows the counts the user last saw.
+type inboxClassifyBase struct {
+	Classifications []inboxClassifiedRow `json:"classifications"`
+	TotalCount      int                  `json:"totalCount"`
+	Summary         map[string]int       `json:"summary"`
+}
+
+// inboxClassifyCacheTTL is how long a classification is reused before Claude
+// is asked again.
+const inboxClassifyCacheTTL = time.Hour
+
+// inboxClassifyKey is the Redis key of the user's cached classification.
+func inboxClassifyKey(userID string) string {
+	return "inbox:classify:" + userID
 }
 
 // InboxHandler handles the bookkeeping inbox workflow.
@@ -64,7 +92,16 @@ func (h *InboxHandler) handleEBError(c *gin.Context, sess *session.SessionData, 
 	return HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err)
 }
 
-// ClassifyBatch handles POST /api/v1/inbox/classify — classifies all unprocessed bank lines with AI.
+// ClassifyBatch handles POST /api/v1/inbox/classify — classifies all
+// unprocessed bank lines.
+//
+// The response is a cached base (learned memory and Claude, one hour, see
+// inboxClassifyBase) with two overlays recomputed on every response, cache
+// hit or not: bank lines that pay an open post in e-boekhouden become
+// factuurbetaling suggestions, and lines that are the assigned payment of an
+// analysed mail-folder document are annotated with that document. On a cache
+// miss the open posts are matched before Claude is called, so those lines
+// never cost tokens. ?force=true drops the cached base first.
 func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 	sess := session.FromContext(c)
 	if sess == nil {
@@ -77,55 +114,110 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
 		return
 	}
+	ctx := c.Request.Context()
+	cacheKey := inboxClassifyKey(sess.UserID)
 
-	// Check for cached classifications (skip if ?force=true)
-	cacheKey := fmt.Sprintf("inbox:classify:%s", sess.UserID)
-	if c.Query("force") != "true" {
-		if cached, err := h.redis.Get(c.Request.Context(), cacheKey).Bytes(); err == nil {
-			c.Data(http.StatusOK, "application/json", cached)
+	var base *inboxClassifyBase
+	if c.Query("force") == "true" {
+		h.redis.Del(ctx, cacheKey)
+	} else if cached, err := h.redis.Get(ctx, cacheKey).Bytes(); err == nil {
+		var b inboxClassifyBase
+		if json.Unmarshal(cached, &b) == nil && b.Classifications != nil {
+			base = &b
+		}
+	}
+	fresh := base == nil
+
+	var openMatches map[int]openPostMatch
+	if fresh {
+		var ok bool
+		base, openMatches, ok = h.classifyFresh(c, sess, client)
+		if !ok {
 			return
 		}
 	} else {
-		// Force refresh — delete the cache
-		h.redis.Del(c.Request.Context(), cacheKey)
+		// The cached rows carry everything the matcher needs; only the open
+		// posts are fetched again so the overlay is current. Best-effort: a
+		// cache hit made no upstream call before the overlays existed and
+		// must not fail because of them.
+		openMatches = matchOpenPosts(bankLinesFromClassified(base.Classifications), fetchOpenPosts(client))
 	}
 
-	// Get API key
+	docMatches := mailDocumentMatches(ctx, h.redis, client, sess.UserID, bankLinesFromClassified(base.Classifications))
+
+	rows := applyInboxOverlays(base.Classifications, openMatches, docMatches)
+	summary := summarizeInbox(rows)
+
+	if fresh {
+		base.Summary = summary
+		if data, err := json.Marshal(base); err == nil {
+			h.redis.Set(ctx, cacheKey, data, inboxClassifyCacheTTL)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"classifications": rows,
+		"totalCount":      base.TotalCount,
+		"summary":         summary,
+	})
+}
+
+// writeEBError answers an e-boekhouden error: the reconnect prompt for an
+// expired session, 502 with the upstream message otherwise.
+func (h *InboxHandler) writeEBError(c *gin.Context, sess *session.SessionData, err error) {
+	if h.handleEBError(c, sess, err) {
+		return
+	}
+	c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+}
+
+// classifyFresh fetches the unprocessed bank lines and builds the base
+// classification: lines that pay an open post or hit the confirmed learned
+// memory are decided locally, the rest goes to Claude in one batch. It
+// returns the base and the open-post matches it found; ok is false when it
+// already wrote the response (an error, or an empty inbox).
+func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, client *eboekhouden.Client) (base *inboxClassifyBase, openMatches map[int]openPostMatch, ok bool) {
+	ctx := c.Request.Context()
+
 	apiKey, err := h.getAPIKey(c, sess.UserID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Stel eerst een Anthropic API-sleutel in"})
-		return
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Vul eerst je Anthropic API-sleutel in bij Instellingen."})
+		return nil, nil, false
 	}
 
-	// Fetch unprocessed lines
-	raw, err := client.GetImportGrid(0, 2000)
+	raw, err := client.GetImportGrid(0, importGridFetchLimit)
 	if err != nil {
-		if h.handleEBError(c, sess, err) {
-			return
-		}
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
+		h.writeEBError(c, sess, err)
+		return nil, nil, false
 	}
-
 	rows, totalCount, err := eboekhouden.ParseImportGrid(raw)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse bank statements"})
-		return
+		return nil, nil, false
 	}
-
 	if totalCount == 0 {
 		c.JSON(http.StatusOK, gin.H{"classifications": []any{}, "totalCount": 0})
-		return
+		return nil, nil, false
 	}
+
+	// Lines that settle an open invoice need no classification at all: the
+	// booking is a factuurbetaling on that invoice, so match them before
+	// anything is sent to Claude. Best-effort (see fetchOpenPosts).
+	openMatches = matchOpenPosts(bankLinesFromRows(rows), fetchOpenPosts(client))
 
 	// Pre-fetch learned mappings for this user. Lines whose normalized
 	// signal matches a confirmed mapping are auto-classified locally and
 	// never reach Claude — saves API tokens and gives the user instant
 	// feedback for recurring transactions they've already booked once.
-	learned, _ := h.db.LookupLearnedBatch(c.Request.Context(), sess.UserID)
+	learned, _ := h.db.LookupLearnedBatch(ctx, sess.UserID)
 
 	// Convert to batch lines, but skip lines that have a confirmed learned
-	// mapping (count >= 2 with confirmed_at set).
+	// mapping (count >= 2 with confirmed_at set) and lines that pay an open
+	// post by name. The learned hit is still recorded for open-post lines so
+	// the row keeps a suggestion should the open post disappear from a later
+	// overlay. A line that matches an open post on the amount alone still
+	// goes to Claude: that overlay is only a "review" suggestion, and the row
+	// needs its own classification when the user turns it down.
 	var lines []claude.BatchLine
 	learnedHits := make(map[int]*database.LearnedClassification)
 	for _, row := range rows {
@@ -139,6 +231,9 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 			learnedHits[id] = hit
 			continue
 		}
+		if m, ok := openMatches[id]; ok && m.NameHit {
+			continue
+		}
 
 		lines = append(lines, claude.BatchLine{
 			ID:            id,
@@ -149,17 +244,17 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 		})
 	}
 
-	// Classify with AI — only the lines that didn't hit the learned cache.
+	// Classify with AI — only the lines that were not decided locally.
 	// Pass the user's entity type so the prompt can apply BV-vs-ZZP rules
 	// (e.g. investments on a B.V. account are business assets, not private).
-	entityType := readEntityType(c.Request.Context(), h.db, sess.UserID)
+	entityType := readEntityType(ctx, h.db, sess.UserID)
 	var results []claude.BatchClassifyResult
 	if len(lines) > 0 {
-		results, err = h.claude.ClassifyBatch(c.Request.Context(), apiKey, entityType, lines)
+		results, err = h.claude.ClassifyBatch(ctx, apiKey, entityType, lines)
 		if err != nil {
-			log.Printf("Claude API error for user %s: %v", sess.UserID, err)
+			log.Printf("Claude API error for user %s: %s", sess.UserID, errClass(err))
 			c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
-			return
+			return nil, nil, false
 		}
 	}
 
@@ -169,7 +264,7 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 		classMap[r.ID] = r
 	}
 
-	var classified []inboxClassifiedRow
+	classified := make([]inboxClassifiedRow, 0, len(rows))
 	for _, row := range rows {
 		id, _ := toInt(row["id"])
 		bedrag, _ := toFloat(row["mutBedrag"])
@@ -212,23 +307,7 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 		classified = append(classified, cr)
 	}
 
-	response := gin.H{
-		"classifications": classified,
-		"totalCount":      totalCount,
-		"summary": gin.H{
-			"auto":    countCategory(classified, "auto"),
-			"review":  countCategory(classified, "review"),
-			"invoice": countCategory(classified, "invoice"),
-			"manual":  countCategory(classified, "manual"),
-		},
-	}
-
-	// Cache for 1 hour
-	if data, err := json.Marshal(response); err == nil {
-		h.redis.Set(c.Request.Context(), cacheKey, data, 1*time.Hour)
-	}
-
-	c.JSON(http.StatusOK, response)
+	return &inboxClassifyBase{Classifications: classified, TotalCount: totalCount}, openMatches, true
 }
 
 // DashboardSummary handles GET /api/v1/inbox/summary — aggregated dashboard data.
@@ -258,9 +337,16 @@ func (h *InboxHandler) DashboardSummary(c *gin.Context) {
 			client = nil
 		}
 
+		// Mail-folder documents still to handle (not ignored, not linked,
+		// readable). Best-effort: a failure leaves the field out.
+		if client != nil {
+			if n, err := countOpenMailDocuments(c.Request.Context(), h.redis, client, sess.UserID); err == nil {
+				summary["documentsCount"] = n
+			}
+		}
+
 		// Check for cached classifications summary
-		cacheKey := fmt.Sprintf("inbox:classify:%s", sess.UserID)
-		if cached, err := h.redis.Get(c.Request.Context(), cacheKey).Bytes(); err == nil {
+		if cached, err := h.redis.Get(c.Request.Context(), inboxClassifyKey(sess.UserID)).Bytes(); err == nil {
 			var cached_data struct {
 				Summary map[string]int `json:"summary"`
 			}
@@ -340,7 +426,7 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 	// Get API key
 	apiKey, err := h.getAPIKey(c, sess.UserID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Stel eerst een Anthropic API-sleutel in"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Vul eerst je Anthropic API-sleutel in bij Instellingen."})
 		return
 	}
 
@@ -354,7 +440,7 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 
 	file, _, err := c.Request.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "PDF-bestand is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een PDF-bestand."})
 		return
 	}
 	defer file.Close()
@@ -365,28 +451,20 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 	bankLine.Datum = c.PostForm("datum")
 	bankLine.GrootboekId = parseInt(c.PostForm("grootboekId"))
 
-	const maxFileSize = 10 << 20
-	pdfBytes, err := io.ReadAll(io.LimitReader(file, maxFileSize+1))
-	if err != nil || len(pdfBytes) > maxFileSize {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Bestand is te groot (max 10 MB)"})
+	pdfBytes, err := readUploadedFile(file)
+	if err != nil {
+		writeUploadReadError(c, err)
 		return
 	}
 
 	pdfBase64 := base64.StdEncoding.EncodeToString(pdfBytes)
 
 	// Read invoice with Claude (no account list in inbox context — uses defaults)
-	invoice, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, pdfBase64, nil)
+	invoice, err := h.claude.ReadInvoice(c.Request.Context(), apiKey, "application/pdf", pdfBase64, nil)
 	if err != nil {
-		log.Printf("Claude API error for user %s: %v", sess.UserID, err)
+		log.Printf("Claude API error for user %s: %s", sess.UserID, errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
 		return
-	}
-
-	// Upload PDF to R2
-	var uploadKey string
-	if h.r2 != nil {
-		uploadKey = fmt.Sprintf("uploads/%s/document.pdf", uuid.New().String())
-		h.r2.Upload(c.Request.Context(), uploadKey, pdfBytes, "application/pdf")
 	}
 
 	// Verify match between invoice and bank line
@@ -398,8 +476,10 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"invoice":     invoice,
-		"uploadKey":   uploadKey,
+		"invoice": invoice,
+		// No copy of the file is kept (see analyzeBytes); the field stays
+		// for the response shape.
+		"uploadKey":   "",
 		"bankLineId":  bankLineID,
 		"amountMatch": amountMatch,
 		"amountDiff":  amountDiff,
@@ -416,20 +496,8 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 
 	sess := session.FromContext(c)
 
-	type batchItem struct {
-		ID            int     `json:"id"`            // bank line ID (importId)
-		GrootboekId   int     `json:"grootboekId"`   // bank account internal ID
-		Soort         int     `json:"soort"`         // mutation type code
-		Grootboekcode string  `json:"grootboekcode"` // tegenrekening code (from AI)
-		BTWCode       string  `json:"btwCode"`
-		Omschrijving  string  `json:"omschrijving"`
-		Bedrag        float64 `json:"bedrag"`
-		RelatieId     int     `json:"relatieId,omitempty"`
-		Factuurnummer string  `json:"factuurnummer,omitempty"`
-	}
-
 	var req struct {
-		Items []batchItem `json:"items"`
+		Items []inboxBatchItem `json:"items"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
@@ -438,7 +506,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 
 	const maxBatchItems = 100
 	if len(req.Items) > maxBatchItems {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Maximaal %d regels per batch", maxBatchItems)})
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Je kunt maximaal %d regels tegelijk boeken.", maxBatchItems)})
 		return
 	}
 
@@ -459,7 +527,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		datum        string
 	}
 	bankLineMetaByID := make(map[int]bankLineMeta)
-	if gridRaw, gridErr := client.GetImportGrid(0, 2000); gridErr == nil {
+	if gridRaw, gridErr := client.GetImportGrid(0, importGridFetchLimit); gridErr == nil {
 		if rows, _, parseErr := eboekhouden.ParseImportGrid(gridRaw); parseErr == nil {
 			for _, row := range rows {
 				id, _ := toInt(row["id"])
@@ -516,75 +584,23 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 			}
 		}
 
-		// e-Boekhouden enforces a direction match between BTW code and soort:
-		// income soorten (3 FactuurbetalingOntvangen, 5 GeldOntvangen) require
-		// a *_VERK_* code, expense soorten (4, 6) require *_INK_*. Claude
-		// regularly picks the wrong direction (especially for refunds of past
-		// purchases — it sees the original purchase mental model and reaches
-		// for INK), so we normalize the code to match the direction here.
-		btwCode := normalizeBTWForSoort(item.BTWCode, item.Soort)
-
-		// Same direction-aware logic for inEx: bank shows the gross amount,
-		// so we always use IN for incoming and EX for outgoing.
-		inEx := "EX"
-		if item.Soort == 3 || item.Soort == 5 {
-			inEx = "IN"
+		// Build the mutation payload. A factuurbetaling (soort 3/4) settles
+		// an open invoice and has its own shape; it is refused here when the
+		// relation or invoice number is missing instead of being sent to
+		// e-boekhouden, which would reject it silently.
+		payload, err := buildBatchMutatiePayload(item, mutDatum, tegenRekeningId)
+		if err != nil {
+			results = append(results, result{ID: item.ID, Status: "error", Error: err.Error()})
+			continue
 		}
-
-		// The bank line bedrag is always gross (inclusive of BTW). Split it
-		// according to the BTW code so e-boekhouden can include the booking
-		// in the BTW-aangifte.
-		rate := btwRateFromCode(btwCode)
-		bedragIncl := item.Bedrag
-		bedragExcl := item.Bedrag
-		btwBedrag := 0.0
-		if rate > 0 {
-			btwBedrag = roundCents(bedragIncl * rate / (100 + rate))
-			bedragExcl = roundCents(bedragIncl - btwBedrag)
-		}
-
-		// Build the mutation payload — mirrors what the e-boekhouden web UI
-		// sends when manually creating a Geld uitgegeven / Geld ontvangen
-		// mutation. The inEx field on the mutation is REQUIRED ("EX" or "IN");
-		// for money-out/money-in soorten the bank shows the gross amount, so
-		// we pair inEx with explicit bedragInclusief/bedragExclusief on the
-		// regel.
-		regel := map[string]any{
-			"index":           0,
-			"bedrag":          bedragExcl,
-			"btw":             btwBedrag,
-			"btwCode":         btwCode,
-			"tegenRekening":   tegenRekeningId,
-			"bedragInclusief": bedragIncl,
-			"bedragExclusief": bedragExcl,
-		}
-		// Optional fields — only include when actually set so the e-boekhouden
-		// validator doesn't choke on empty strings or zero IDs.
-		if item.RelatieId != 0 {
-			regel["relatieId"] = item.RelatieId
-		}
-		if item.Factuurnummer != "" {
-			regel["factuur"] = item.Factuurnummer
-		}
-
-		mutPayload, _ := json.Marshal(map[string]any{
-			"mutatie": map[string]any{
-				"rekening":     item.GrootboekId,
-				"datum":        mutDatum,
-				"soort":        item.Soort,
-				"inEx":         inEx,
-				"omschrijving": item.Omschrijving,
-			},
-			"mutatieRegels": []map[string]any{regel},
-			"importId":       item.ID,
-		})
+		mutPayload, _ := json.Marshal(payload)
 
 		mutResp, err := client.CreateMutatie(mutPayload)
 		if err != nil {
 			// Surface the real error message — the client now extracts the
 			// e-Boekhouden message from JSON error envelopes, so this is
 			// human-readable instead of just "Boeking mislukt".
-			log.Printf("CreateMutatie error for item %d: %v", item.ID, err)
+			log.Printf("CreateMutatie error for item %d: %s", item.ID, errClass(err))
 			results = append(results, result{ID: item.ID, Status: "error", Error: err.Error()})
 			continue
 		}
@@ -592,16 +608,16 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 			MutNr int `json:"mutNr"`
 		}
 		if jsonErr := json.Unmarshal(mutResp, &resp); jsonErr != nil {
-			log.Printf("CreateMutatie response unmarshal error for item %d: %v body=%s", item.ID, jsonErr, string(mutResp))
-			results = append(results, result{ID: item.ID, Status: "error", Error: "Onverwacht antwoord van e-Boekhouden"})
+			log.Printf("CreateMutatie response unmarshal error for item %d: %v (%d bytes)", item.ID, jsonErr, len(mutResp))
+			results = append(results, result{ID: item.ID, Status: "error", Error: "e-Boekhouden gaf een onverwacht antwoord. Kijk in e-Boekhouden of deze regel is geboekt voordat je het opnieuw probeert."})
 			continue
 		}
 		// Defense-in-depth: even if the client missed an error envelope,
 		// a successful mutation always carries a non-zero mutNr. Anything
 		// else means nothing was actually booked.
 		if resp.MutNr == 0 {
-			log.Printf("CreateMutatie returned mutNr=0 for item %d, body=%s", item.ID, string(mutResp))
-			results = append(results, result{ID: item.ID, Status: "error", Error: "Boeking niet aangemaakt — controleer de gegevens"})
+			log.Printf("CreateMutatie returned mutNr=0 for item %d (%d bytes)", item.ID, len(mutResp))
+			results = append(results, result{ID: item.ID, Status: "error", Error: "e-Boekhouden heeft de boeking niet aangemaakt en gaf geen reden. Controleer de gegevens en probeer het opnieuw."})
 			continue
 		}
 		results = append(results, result{ID: item.ID, Status: "ok", MutNr: fmt.Sprintf("%d", resp.MutNr)})
@@ -610,15 +626,17 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		// definitely succeeded. Best-effort: failures are logged but never
 		// block the main flow. The sample description is truncated to keep
 		// the table from growing unbounded if e-boekhouden ever returns a
-		// pathologically long mutOmschrijving.
-		if sess != nil && bankLineMetaByID != nil {
+		// pathologically long mutOmschrijving. A factuurbetaling is tied to
+		// one invoice, not a recurring pattern, so it is not learned.
+		if sess != nil && bankLineMetaByID != nil && !isFactuurbetaling(item.Soort) {
 			if meta, ok := bankLineMetaByID[item.ID]; ok {
 				signal := database.BuildClassificationSignal(meta.omschrijving, meta.rekening)
 				if signal != "" {
 					sample := truncate(meta.omschrijving, 200)
 					if upsertErr := h.db.UpsertLearned(c.Request.Context(), sess.UserID, signal,
 						item.Grootboekcode, item.BTWCode, soortName[item.Soort], sample); upsertErr != nil {
-						log.Printf("UpsertLearned error for user %s signal %s: %v", sess.UserID, signal, upsertErr)
+						// The signal is built from the bank description and IBAN; log the user only.
+						log.Printf("UpsertLearned error for user %s: %v", sess.UserID, upsertErr)
 					}
 				}
 			}
@@ -627,7 +645,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 
 	// Invalidate classification cache
 	if sess != nil {
-		h.redis.Del(c.Request.Context(), fmt.Sprintf("inbox:classify:%s", sess.UserID))
+		h.redis.Del(c.Request.Context(), inboxClassifyKey(sess.UserID))
 	}
 
 	c.JSON(http.StatusOK, gin.H{"results": results})

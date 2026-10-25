@@ -18,7 +18,7 @@ export function ProjectSelector({
     <Autocomplete
       options={projects}
       getOptionLabel={(opt) =>
-        opt.relatieBedrijf ? `${opt.naam} — ${opt.relatieBedrijf}` : opt.naam
+        opt.relatieBedrijf ? `${opt.naam} · ${opt.relatieBedrijf}` : opt.naam
       }
       value={selected}
       onChange={(_, value) => onChange(value)}

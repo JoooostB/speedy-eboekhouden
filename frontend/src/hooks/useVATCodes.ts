@@ -27,7 +27,7 @@ export function useVATCodes() {
         if (!cancelled) setData(res);
       })
       .catch((err) => {
-        if (!cancelled) setError(err?.message || "Kon BTW-codes niet laden");
+        if (!cancelled) setError(err?.message || "BTW-codes laden mislukt");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

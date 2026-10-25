@@ -110,7 +110,7 @@ export function LearnedSection() {
   }, [load]);
 
   const remove = async (signal: string) => {
-    if (!window.confirm("Deze geleerde boeking verwijderen? De AI zal de volgende keer opnieuw classificeren.")) return;
+    if (!window.confirm("Deze geleerde boeking verwijderen? Daarna doet de AI weer zelf een voorstel voor deze afschriftregels.")) return;
     setBusy(true);
     setError(null);
     try {
@@ -181,8 +181,8 @@ export function LearnedSection() {
         </DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>
-            Hiermee verwijder je {items?.length ?? 0} geleerde {items?.length === 1 ? "boeking" : "boekingen"}.
-            Dit kan <strong>niet</strong> ongedaan gemaakt worden — Speedy moet daarna opnieuw leren hoe je
+            Je verwijdert {items?.length ?? 0} geleerde {items?.length === 1 ? "boeking" : "boekingen"}.
+            Dat kun je <strong>niet</strong> ongedaan maken: Speedy moet daarna opnieuw leren hoe je
             terugkerende transacties boekt.
           </DialogContentText>
           <DialogContentText sx={{ mb: 1 }}>
@@ -221,9 +221,10 @@ export function LearnedSection() {
       </Dialog>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Speedy onthoudt hoe je terugkerende transacties boekt. Na <strong>twee</strong> keer dezelfde
-        keuze wordt de boeking automatisch toegepast op nieuwe afschriftregels — zonder de AI te
-        raadplegen. Verwijder een regel hier als je hem wilt herzien.
+        Speedy onthoudt hoe je terugkerende transacties boekt. Boek je zo'n afschriftregel{" "}
+        <strong>twee</strong> keer op dezelfde manier, dan stelt Speedy die boeking daarna meteen voor,
+        zonder de AI te vragen. Boeken doe je nog steeds zelf. Heeft Speedy iets verkeerd geleerd,
+        verwijder de regel dan hier.
       </Typography>
 
       {error && (
@@ -240,12 +241,12 @@ export function LearnedSection() {
         </Box>
       ) : items.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
-          Nog geen geleerde boekingen. Verwerk een paar afschriftregels om Speedy te trainen.
+          Nog geen geleerde boekingen. Boek een paar afschriftregels, dan leert Speedy hoe jij ze boekt.
         </Typography>
       ) : (
         <>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-            {items.length} {items.length === 1 ? "regel" : "regels"} • {confirmedCount} bevestigd (auto-toegepast)
+            {items.length} {items.length === 1 ? "regel" : "regels"} • {confirmedCount} bevestigd en direct voorgesteld
           </Typography>
           <Box sx={{ overflow: "auto" }}>
             <Table size="small">
@@ -298,7 +299,7 @@ export function LearnedSection() {
                           }}
                         />
                       ) : (
-                        <Tooltip title="Wordt pas auto-toegepast na de tweede bevestiging">
+                        <Tooltip title="Speedy stelt deze boeking pas vanzelf voor als je hem een tweede keer zo boekt">
                           <Chip
                             label="In afwachting"
                             size="small"

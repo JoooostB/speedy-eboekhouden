@@ -13,7 +13,8 @@ import {
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { api } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
-import { track } from "../../analytics";
+import { errorClass, track } from "../../analytics";
+import { passkeyErrorMessage } from "./passkeyErrors";
 
 /**
  * PasskeyLogin handles both login and registration.
@@ -61,7 +62,7 @@ export function PasskeyLogin() {
       track("Passkey Login");
       await refreshMe();
     } catch (err: any) {
-      track("Passkey Login Error", { reason: err.message || "unknown" });
+      track("Passkey Login Error", { reason: errorClass(err) });
       setError(translateError(err, "login"));
     } finally {
       setLoading(false);
@@ -88,53 +89,15 @@ export function PasskeyLogin() {
       track("Passkey Register");
       await refreshMe();
     } catch (err: any) {
-      track("Passkey Register Error", { reason: err.message || "unknown" });
+      track("Passkey Register Error", { reason: errorClass(err) });
       setError(translateError(err, "register"));
     } finally {
       setLoading(false);
     }
   };
 
-  /** Translate WebAuthn and API errors to Dutch */
-  const translateError = (err: any, context: "login" | "register"): string => {
-    const name = err?.name || "";
-    const msg = (err?.message || "").toLowerCase();
-
-    // WebAuthn browser errors
-    if (name === "NotAllowedError" || msg.includes("not allowed") || msg.includes("timed out")) {
-      return context === "login"
-        ? "Passkey-aanvraag geannuleerd of verlopen. Probeer het opnieuw."
-        : "Passkey-registratie geannuleerd of verlopen. Probeer het opnieuw.";
-    }
-    if (name === "SecurityError" || msg.includes("security")) {
-      return "Beveiligingsfout: controleer of je de app opent via het juiste adres (localhost of het eigen domein).";
-    }
-    if (name === "InvalidStateError" || msg.includes("already registered") || msg.includes("invalid state")) {
-      return "Deze passkey is al geregistreerd op dit apparaat.";
-    }
-    if (name === "AbortError" || msg.includes("abort")) {
-      return "Aanvraag afgebroken. Probeer het opnieuw.";
-    }
-    if (msg.includes("no credentials") || msg.includes("no passkey")) {
-      return "Geen passkey gevonden. Heb je al een account aangemaakt?";
-    }
-    if (msg.includes("user handle") || msg.includes("user id") || msg.includes("do not match")) {
-      return "Passkey komt niet overeen met je account. Verwijder de oude passkey uit je browser/apparaat en registreer opnieuw.";
-    }
-    if (msg.includes("credential not found") || msg.includes("finishing login") || msg.includes("not found")) {
-      return "Deze passkey is niet meer geldig. Verwijder hem uit je browser (Instellingen → Wachtwoorden/Passkeys) en maak een nieuw account aan.";
-    }
-
-    // API errors (already in Dutch from our backend)
-    if (msg.includes("e-mailadres") || msg.includes("geregistreerd") || msg.includes("challenge")) {
-      return err.message;
-    }
-
-    // Fallback — generic Dutch message
-    return context === "login"
-      ? "Inloggen mislukt. Probeer het opnieuw."
-      : "Registratie mislukt. Probeer het opnieuw.";
-  };
+  /** Translate WebAuthn and API errors to Dutch (passkeyErrors.ts). */
+  const translateError = (err: unknown, context: "login" | "register"): string => passkeyErrorMessage(err, context);
 
   const switchMode = (newMode: "login" | "register") => {
     setMode(newMode);
@@ -215,7 +178,7 @@ export function PasskeyLogin() {
                 color="text.secondary"
                 sx={{ mb: 3, textAlign: "center" }}
               >
-                Log in met je passkey — geen wachtwoord nodig.
+                Log in met je passkey. Een wachtwoord heb je niet nodig.
               </Typography>
 
               {error && (
@@ -280,7 +243,7 @@ export function PasskeyLogin() {
                 color="text.secondary"
                 sx={{ mb: 3, textAlign: "center" }}
               >
-                Je apparaat wordt je sleutel. Geen wachtwoord om te onthouden.
+                Je logt in met je apparaat, zonder wachtwoord.
               </Typography>
 
               {error && (
@@ -346,10 +309,10 @@ export function PasskeyLogin() {
                 }}
               >
                 <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
-                  <strong>Wat is een passkey?</strong> Een passkey gebruikt de
-                  beveiliging van je apparaat (vingerafdruk, gezichtsherkenning
-                  of pincode) om je te identificeren. Veiliger dan een
-                  wachtwoord en niets om te onthouden.
+                  <strong>Wat is een passkey?</strong> Met een passkey log je
+                  in via de beveiliging van je apparaat: vingerafdruk,
+                  gezichtsherkenning of pincode. Dat is veiliger dan een
+                  wachtwoord en je hoeft niets te onthouden.
                 </Typography>
               </Box>
 

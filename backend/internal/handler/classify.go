@@ -33,7 +33,7 @@ func (h *ClassifyHandler) Classify(c *gin.Context) {
 	// Get API key from database
 	settings, err := h.db.GetSettings(c.Request.Context(), sess.UserID)
 	if err != nil || !settings.HasAnthropicKey {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Stel eerst een Anthropic API-sleutel in"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Vul eerst je Anthropic API-sleutel in bij Instellingen."})
 		return
 	}
 

@@ -6,16 +6,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
 	baseURLSecure   = "https://secure.e-boekhouden.nl"
 	baseURLSecure20 = "https://secure20.e-boekhouden.nl"
 )
+
+// requestTimeout bounds every request to e-boekhouden, from connecting to
+// the last byte of the body. Without it a stalled e-boekhouden kept a
+// handler, and the user's spinner, waiting until the connection dropped.
+// 60 s leaves room for the largest transfers Speedy makes (a 10 MB archive
+// download or upload, a 2000-line import grid); SOAP and REST use 30 s.
+const requestTimeout = 60 * time.Second
 
 // ErrSessionExpired is returned by api calls when e-boekhouden has invalidated
 // the session cookie (typically because too much time has passed since login).
@@ -70,14 +79,20 @@ func parseErrorEnvelope(body []byte) (errorEnvelope, bool) {
 
 // Client holds an authenticated session with e-boekhouden.
 type Client struct {
-	httpClient  *http.Client
-	authToken   string
+	httpClient *http.Client
+	authToken  string
+	// baseURL is the secure20 API origin used by the api* helpers. It is set
+	// at construction and never changes afterwards; tests point it at an
+	// httptest.Server via setBaseURL.
+	baseURL     string
 	mu          sync.RWMutex
 	MFARequired bool
 }
 
-// NewClient creates a new unauthenticated client with a cookie jar.
-func NewClient() (*Client, error) {
+// newClient builds a client with a cookie jar, redirects disabled and the
+// production API base URL. All exported constructors go through here so the
+// base URL default cannot be forgotten.
+func newClient(token string) (*Client, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
@@ -85,31 +100,31 @@ func NewClient() (*Client, error) {
 
 	return &Client{
 		httpClient: &http.Client{
-			Jar: jar,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
-	}, nil
-}
-
-// NewClientWithToken creates a client with an existing auth token (from a Redis session).
-func NewClientWithToken(token string) (*Client, error) {
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		return nil, err
-	}
-
-	c := &Client{
-		httpClient: &http.Client{
-			Jar: jar,
+			Jar:     jar,
+			Timeout: requestTimeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
 		},
 		authToken: token,
-	}
-	return c, nil
+		baseURL:   baseURLSecure20,
+	}, nil
+}
+
+// NewClient creates a new unauthenticated client with a cookie jar.
+func NewClient() (*Client, error) {
+	return newClient("")
+}
+
+// NewClientWithToken creates a client with an existing auth token (from a Redis session).
+func NewClientWithToken(token string) (*Client, error) {
+	return newClient(token)
+}
+
+// setBaseURL overrides the API origin. Only tests use this, to talk to an
+// httptest.Server instead of e-boekhouden.
+func (c *Client) setBaseURL(u string) {
+	c.baseURL = u
 }
 
 // SetAuthToken stores the given auth token.
@@ -136,7 +151,34 @@ func addCommonHeaders(req *http.Request) {
 
 // apiGet performs a GET request to the secure20 API and returns the raw JSON response.
 func (c *Client) apiGet(path string) (json.RawMessage, error) {
-	req, err := http.NewRequest("GET", baseURLSecure20+path, nil)
+	return c.apiDo(http.MethodGet, path, nil)
+}
+
+// apiPost performs a POST request to the secure20 API with a JSON body and returns the raw JSON response.
+func (c *Client) apiPost(path string, payload json.RawMessage) (json.RawMessage, error) {
+	return c.apiDo(http.MethodPost, path, payload)
+}
+
+// apiPut performs a PUT request to the secure20 API with a JSON body and returns the raw JSON response.
+func (c *Client) apiPut(path string, payload json.RawMessage) (json.RawMessage, error) {
+	return c.apiDo(http.MethodPut, path, payload)
+}
+
+// apiDelete performs a DELETE request to the secure20 API and returns the raw JSON response.
+func (c *Client) apiDelete(path string) (json.RawMessage, error) {
+	return c.apiDo(http.MethodDelete, path, nil)
+}
+
+// apiDo performs a JSON request against the secure20 API and applies the error
+// handling shared by every verb: session-expired detection, the e-boekhouden
+// error envelope (HTTP 200 with errorType) and non-2xx statuses. payload may
+// be nil for body-less requests.
+func (c *Client) apiDo(method, path string, payload json.RawMessage) (json.RawMessage, error) {
+	var reqBody io.Reader
+	if payload != nil {
+		reqBody = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequest(method, c.baseURL+path, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("creating request for %s: %w", path, err)
 	}
@@ -157,18 +199,100 @@ func (c *Client) apiGet(path string) (json.RawMessage, error) {
 		return nil, ErrSessionExpired
 	}
 	if env, isErr := parseErrorEnvelope(body); isErr {
-		return nil, fmt.Errorf("e-Boekhouden: %s", envelopeMessage(env))
+		return nil, newEnvelopeError(path, resp.StatusCode, env, len(body))
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("request to %s returned %d: %s", path, resp.StatusCode, string(body))
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		// Status and length only: the body may be anything e-boekhouden
+		// renders and must not end up in an error that gets logged.
+		return nil, newStatusError(path, resp.StatusCode, len(body))
 	}
 	return json.RawMessage(body), nil
 }
 
+// apiGetBinary performs a GET request for a file rather than JSON. It reads at
+// most maxBytes and fails when the response is larger, so a huge upload can
+// never be buffered in full. e-Boekhouden reports errors for file endpoints
+// the same way as for JSON endpoints (HTTP 401, or HTTP 200 with a JSON
+// envelope), so those are mapped to the usual errors before the body is
+// treated as file content. filename comes from Content-Disposition and is
+// empty when that header is missing or unparseable.
+func (c *Client) apiGetBinary(path string, maxBytes int64) (data []byte, contentType, filename string, err error) {
+	req, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("creating request for %s: %w", path, err)
+	}
+	addAPIHeaders(req)
+	c.setAuthCookie(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("request to %s failed: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	// Read one byte past the limit so an oversize file is detectable without
+	// ever buffering more than maxBytes+1.
+	data, err = io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, "", "", fmt.Errorf("reading response from %s: %w", path, err)
+	}
+
+	contentType = resp.Header.Get("Content-Type")
+	// Only sniff the body for error markers when it is not the file itself: a
+	// PDF or image is never an error envelope, and scanning megabytes of
+	// binary for "SECURITY_010" would be both wasteful and a false-positive
+	// risk.
+	if resp.StatusCode != http.StatusOK || isJSONContentType(contentType) {
+		if isSessionExpiredBody(resp.StatusCode, data) {
+			return nil, "", "", ErrSessionExpired
+		}
+		if env, isErr := parseErrorEnvelope(data); isErr {
+			return nil, "", "", newEnvelopeError(path, resp.StatusCode, env, len(data))
+		}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", "", newStatusError(path, resp.StatusCode, len(data))
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, "", "", fmt.Errorf("file from %s exceeds %d bytes", path, maxBytes)
+	}
+	return data, contentType, contentDispositionFilename(resp.Header.Get("Content-Disposition")), nil
+}
+
+// isJSONContentType reports whether a Content-Type header denotes JSON,
+// ignoring parameters such as charset.
+func isJSONContentType(header string) bool {
+	mediaType, _, err := mime.ParseMediaType(header)
+	if err != nil {
+		return false
+	}
+	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
+}
+
+// contentDispositionFilename extracts the filename from a Content-Disposition
+// header such as "attachment; filename=a.pdf" with an optional RFC 2231/5987
+// filename* parameter (percent-encoded UTF-8). mime.ParseMediaType decodes
+// filename* into the plain "filename" key after the plain one has been read,
+// so the UTF-8 variant wins whenever both are present. Any directory part is
+// dropped because the value is upstream input. A missing or malformed header
+// yields "": a download without a usable name is still a successful download.
+func contentDispositionFilename(header string) string {
+	if header == "" {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(header)
+	if err != nil {
+		return ""
+	}
+	name := params["filename"]
+	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+		name = name[i+1:]
+	}
+	return name
+}
+
 // envelopeMessage returns the most user-friendly string from an error
-// envelope, capped to 200 characters. The cap prevents an unusually long or
-// maliciously crafted upstream message from inflating our API responses or
-// causing rendering issues in the frontend.
+// envelope, capped by capMessage.
 func envelopeMessage(env errorEnvelope) string {
 	msg := env.Message
 	if msg == "" {
@@ -177,42 +301,18 @@ func envelopeMessage(env errorEnvelope) string {
 	if msg == "" {
 		msg = env.ErrorType
 	}
+	return capMessage(msg)
+}
+
+// capMessage truncates upstream message text to 200 characters. The cap
+// prevents an unusually long or maliciously crafted upstream message from
+// inflating our API responses or causing rendering issues in the frontend.
+func capMessage(msg string) string {
 	const maxLen = 200
 	if len(msg) > maxLen {
 		msg = msg[:maxLen]
 	}
 	return msg
-}
-
-// apiPost performs a POST request to the secure20 API with a JSON body and returns the raw JSON response.
-func (c *Client) apiPost(path string, payload json.RawMessage) (json.RawMessage, error) {
-	req, err := http.NewRequest("POST", baseURLSecure20+path, bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("creating request for %s: %w", path, err)
-	}
-	addAPIHeaders(req)
-	c.setAuthCookie(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request to %s failed: %w", path, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response from %s: %w", path, err)
-	}
-	if isSessionExpiredBody(resp.StatusCode, body) {
-		return nil, ErrSessionExpired
-	}
-	if env, isErr := parseErrorEnvelope(body); isErr {
-		return nil, fmt.Errorf("e-Boekhouden: %s", envelopeMessage(env))
-	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("request to %s returned %d: %s", path, resp.StatusCode, string(body))
-	}
-	return json.RawMessage(body), nil
 }
 
 // addAPIHeaders adds headers for JSON API calls.

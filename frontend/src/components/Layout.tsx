@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   AppBar,
+  Avatar,
   Toolbar,
   Typography,
   Container,
@@ -18,7 +19,9 @@ import {
   Divider,
 } from "@mui/material";
 import { useAuth } from "../context/AuthContext";
+import { userInitials } from "./shared/userInitials";
 import { EBoekhoudenConnectDialog } from "./EBoekhoudenConnectDialog";
+import { EBoekhoudenDisconnectDialog } from "./EBoekhoudenDisconnectDialog";
 
 /**
  * Layout provides the app shell: header with navigation, connection
@@ -28,15 +31,16 @@ import { EBoekhoudenConnectDialog } from "./EBoekhoudenConnectDialog";
  * - Navy AppBar continues the Stopwatch brand from landing page.
  * - Connection status chip uses a filled style for connected (green on
  *   dark reads well) and outlined + pulsing dot for disconnected.
- * - User menu consolidates settings and logout into one interaction
- *   point, keeping the toolbar clean.
+ * - User menu consolidates settings, the e-boekhouden connection and
+ *   logout into one interaction point, keeping the toolbar clean.
  * - Tab navigation uses aria-current via MUI's built-in handling.
  *
  * Accessibility:
  * - <nav> landmark wraps the tab navigation with aria-label.
  * - Skip link (visually hidden, appears on focus) jumps to main content.
  * - Each Tab has an aria-current derived from the selected state.
- * - Connection chip is a button when action is available, static when not.
+ * - Connection chip is always a button: it opens the connect dialog when
+ *   disconnected and the disconnect confirmation when connected.
  * - User menu is a proper menu with keyboard navigation.
  */
 
@@ -50,10 +54,11 @@ interface Props {
 }
 
 export function Layout({ children }: Props) {
-  const { user, eboekhoudenConnected, logout } = useAuth();
+  const { user, avatarUrl, eboekhoudenConnected, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [connectOpen, setConnectOpen] = useState(false);
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
 
   // Listen for connect requests from child components (e.g. Dashboard "Nu koppelen")
@@ -159,22 +164,23 @@ export function Layout({ children }: Props) {
             ))}
           </Tabs>
 
-          {/* Connection status */}
+          {/* Connection status: connect when disconnected, disconnect
+              (after confirmation) when connected */}
           <Tooltip
             title={
               eboekhoudenConnected
-                ? "e-Boekhouden is gekoppeld"
+                ? "e-Boekhouden is gekoppeld. Klik om de verbinding te verbreken."
                 : "Klik om e-Boekhouden te koppelen"
             }
           >
             <Chip
               label={eboekhoudenConnected ? "Gekoppeld" : "Niet gekoppeld"}
               size="small"
-              onClick={eboekhoudenConnected ? undefined : () => setConnectOpen(true)}
-              role={eboekhoudenConnected ? "status" : "button"}
+              onClick={() => (eboekhoudenConnected ? setDisconnectOpen(true) : setConnectOpen(true))}
+              role="button"
               aria-label={
                 eboekhoudenConnected
-                  ? "e-Boekhouden is gekoppeld"
+                  ? "e-Boekhouden is gekoppeld. Klik om de verbinding te verbreken."
                   : "e-Boekhouden is niet gekoppeld. Klik om te koppelen."
               }
               sx={{
@@ -182,7 +188,7 @@ export function Layout({ children }: Props) {
                 fontWeight: 600,
                 fontSize: "0.75rem",
                 height: 28,
-                cursor: eboekhoudenConnected ? "default" : "pointer",
+                cursor: "pointer",
                 ...(eboekhoudenConnected
                   ? {
                       bgcolor: "rgba(22, 163, 74, 0.15)",
@@ -213,19 +219,27 @@ export function Layout({ children }: Props) {
               sx={{
                 width: 36,
                 height: 36,
-                fontSize: "0.875rem",
-                fontWeight: 600,
+                p: 0,
                 bgcolor: "rgba(255,255,255,0.1)",
                 "&:hover": { bgcolor: "rgba(255,255,255,0.18)" },
               }}
             >
-              {/* Initials avatar */}
-              {(user?.name || "?")
-                .split(" ")
-                .map((w) => w[0])
-                .join("")
-                .slice(0, 2)
-                .toUpperCase()}
+              {/* The profile photo from Instellingen; initials without one
+                  or when it fails to load. The button carries the name. */}
+              <Avatar
+                src={avatarUrl || undefined}
+                alt=""
+                sx={{
+                  width: 36,
+                  height: 36,
+                  fontSize: "0.875rem",
+                  fontWeight: 600,
+                  bgcolor: "transparent",
+                  color: "inherit",
+                }}
+              >
+                {userInitials(user?.name)}
+              </Avatar>
             </IconButton>
           </Tooltip>
 
@@ -302,6 +316,37 @@ export function Layout({ children }: Props) {
                 <ListItemText>e-Boekhouden koppelen</ListItemText>
               </MenuItem>
             )}
+            {eboekhoudenConnected && (
+              <MenuItem
+                onClick={() => {
+                  setMenuAnchor(null);
+                  setDisconnectOpen(true);
+                }}
+              >
+                <ListItemIcon>
+                  {/* Unlink icon */}
+                  <Box
+                    component="svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                    sx={{ width: 18, height: 18 }}
+                  >
+                    <path d="m18.84 12.25 1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                    <path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                    <line x1="8" y1="2" x2="8" y2="5" />
+                    <line x1="2" y1="8" x2="5" y2="8" />
+                    <line x1="16" y1="19" x2="16" y2="22" />
+                    <line x1="19" y1="16" x2="22" y2="16" />
+                  </Box>
+                </ListItemIcon>
+                <ListItemText>Verbinding met e-Boekhouden verbreken</ListItemText>
+              </MenuItem>
+            )}
             <Divider sx={{ my: 0.5 }} />
             <MenuItem onClick={handleLogout}>
               <ListItemIcon>
@@ -340,6 +385,10 @@ export function Layout({ children }: Props) {
       <EBoekhoudenConnectDialog
         open={connectOpen}
         onClose={() => setConnectOpen(false)}
+      />
+      <EBoekhoudenDisconnectDialog
+        open={disconnectOpen}
+        onClose={() => setDisconnectOpen(false)}
       />
     </Box>
   );

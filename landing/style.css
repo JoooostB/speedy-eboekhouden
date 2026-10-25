@@ -292,7 +292,6 @@ a:hover {
 
 .pain-card ul {
     list-style: none;
-    margin-bottom: 24px;
 }
 
 .pain-card ul li {
@@ -316,34 +315,6 @@ a:hover {
     left: 0;
     color: var(--success);
     font-weight: 700;
-}
-
-.pain-time {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding-top: 20px;
-    border-top: 1px solid rgba(0,0,0,0.08);
-}
-
-.time-value {
-    font-size: 2rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-}
-
-.pain-old .time-value {
-    color: var(--danger);
-}
-
-.pain-new .time-value {
-    color: var(--success);
-}
-
-.time-label {
-    font-size: 0.85rem;
-    color: var(--text-light);
-    margin-top: 4px;
 }
 
 /* ===== Features ===== */

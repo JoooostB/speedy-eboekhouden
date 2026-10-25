@@ -14,21 +14,24 @@ import {
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorIcon from "@mui/icons-material/Error";
-import type { EntryResult } from "../api/types";
+import type { Employee, EntryResult } from "../api/types";
+import { employeeNames, entryResultLabel } from "./hours/entryResultLabel";
 
 interface Props {
   results: EntryResult[] | null;
   loading: boolean;
   total: number;
+  /** For showing names instead of employee ids. */
+  employees?: Employee[];
   onReset?: () => void;
 }
 
-export function SubmitResults({ results, loading, total, onReset }: Props) {
+export function SubmitResults({ results, loading, total, employees, onReset }: Props) {
   if (loading) {
     return (
       <Box sx={{ mt: 3 }}>
         <Typography variant="body2" gutterBottom>
-          Bezig met indienen... ({total} items)
+          Uren indienen… ({total} {total === 1 ? "regel" : "regels"})
         </Typography>
         <LinearProgress />
       </Box>
@@ -37,6 +40,7 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
 
   if (!results) return null;
 
+  const names = employeeNames(employees);
   const successes = results.filter((r) => r.status === "ok").length;
   const failures = results.filter((r) => r.status === "error").length;
   const allSuccess = failures === 0;
@@ -56,10 +60,10 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
         >
           <CheckCircleOutlineIcon sx={{ fontSize: 56, color: "#16a34a", mb: 2 }} />
           <Typography variant="h5" sx={{ fontWeight: 700, color: "#15803d", mb: 1 }}>
-            Uren ingediend!
+            Uren ingediend
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-            {successes} {successes === 1 ? "item" : "items"} succesvol ingevoerd in e-boekhouden.
+            {successes} {successes === 1 ? "regel staat" : "regels staan"} nu in e-Boekhouden.
           </Typography>
           {onReset && (
             <Button variant="outlined" color="success" onClick={onReset}>
@@ -71,8 +75,8 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
         <>
           <Alert severity="warning" sx={{ mb: 2 }}>
             <AlertTitle>Gedeeltelijk ingediend</AlertTitle>
-            {successes} gelukt, {failures} mislukt van {results.length} items.
-            Controleer de fouten hieronder.
+            {successes} van de {results.length} {results.length === 1 ? "regel" : "regels"} gelukt, {failures} mislukt.
+            De fouten staan hieronder.
           </Alert>
           <List dense>
             {results
@@ -82,17 +86,14 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
                   <ListItemIcon>
                     <ErrorIcon color="error" />
                   </ListItemIcon>
-                  <ListItemText
-                    primary={`Medewerker ${r.employeeId} — ${r.date}`}
-                    secondary={r.error}
-                  />
+                  <ListItemText primary={entryResultLabel(r, names)} secondary={r.error} />
                 </ListItem>
               ))}
           </List>
           {successes > 0 && (
             <>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 2, mb: 1 }}>
-                Succesvol ingevoerd:
+                Gelukt:
               </Typography>
               <List dense>
                 {results.filter((r) => r.status === "ok").slice(0, 5).map((r, i) => (
@@ -100,13 +101,13 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
                     <ListItemIcon>
                       <CheckCircleIcon color="success" />
                     </ListItemIcon>
-                    <ListItemText primary={`Medewerker ${r.employeeId} — ${r.date}`} />
+                    <ListItemText primary={entryResultLabel(r, names)} />
                   </ListItem>
                 ))}
                 {successes > 5 && (
                   <ListItem>
                     <ListItemText
-                      primary={`...en ${successes - 5} meer`}
+                      primary={`en nog ${successes - 5}`}
                       sx={{ color: "text.secondary" }}
                     />
                   </ListItem>

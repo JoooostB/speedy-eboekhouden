@@ -37,7 +37,7 @@ func RateLimit(redisClient *redis.Client, prefix string, maxRequests int, window
 		if count > int64(maxRequests) {
 			c.Header("Retry-After", fmt.Sprintf("%d", int(window.Seconds())))
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-				"error": "Te veel verzoeken. Probeer het later opnieuw.",
+				"error": fmt.Sprintf("Te veel pogingen. Probeer het over %d minuten opnieuw.", int(window.Minutes())),
 			})
 			return
 		}

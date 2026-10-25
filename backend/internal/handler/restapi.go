@@ -46,7 +46,7 @@ func (h *RestAPIHandler) getClient(c *gin.Context) (*eboekhouden.RestClient, err
 func (h *RestAPIHandler) GetInvoices(c *gin.Context) {
 	client, err := h.getClient(c)
 	if err != nil {
-		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "no_rest_credentials", "message": "Stel REST API-gegevens in via Instellingen."})
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "no_rest_credentials", "message": "Vul je access token in bij Instellingen."})
 		return
 	}
 	raw, err := client.GetInvoices(parseInt(c.DefaultQuery("limit", "100")), parseInt(c.DefaultQuery("offset", "0")))
@@ -61,7 +61,7 @@ func (h *RestAPIHandler) GetInvoices(c *gin.Context) {
 func (h *RestAPIHandler) CreateInvoice(c *gin.Context) {
 	client, err := h.getClient(c)
 	if err != nil {
-		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "no_rest_credentials", "message": "Stel REST API-gegevens in via Instellingen."})
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "no_rest_credentials", "message": "Vul je access token in bij Instellingen."})
 		return
 	}
 	body, err := c.GetRawData()
@@ -81,7 +81,7 @@ func (h *RestAPIHandler) CreateInvoice(c *gin.Context) {
 func (h *RestAPIHandler) GetCostCenters(c *gin.Context) {
 	client, err := h.getClient(c)
 	if err != nil {
-		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "no_rest_credentials", "message": "Stel REST API-gegevens in via Instellingen."})
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "no_rest_credentials", "message": "Vul je access token in bij Instellingen."})
 		return
 	}
 	raw, err := client.GetCostCenters()
@@ -96,7 +96,7 @@ func (h *RestAPIHandler) GetCostCenters(c *gin.Context) {
 func (h *RestAPIHandler) GetEmailTemplates(c *gin.Context) {
 	client, err := h.getClient(c)
 	if err != nil {
-		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "no_rest_credentials", "message": "Stel REST API-gegevens in via Instellingen."})
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "no_rest_credentials", "message": "Vul je access token in bij Instellingen."})
 		return
 	}
 	raw, err := client.GetEmailTemplates()

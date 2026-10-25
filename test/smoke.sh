@@ -198,7 +198,7 @@ bold "Section 15: Landing Page Content"
 # ============================================================
 
 LANDING=$(curl -s "${BASE}/")
-assert_contains "Landing has new hero: Supercharge" "$LANDING" "Supercharge"
+assert_contains "Landing has the hero" "$LANDING" "Supercharge je"
 assert_contains "Landing mentions afschriften" "$LANDING" "afschriften"
 assert_contains "Landing mentions factuur" "$LANDING" "factuur"
 assert_contains "Landing mentions passkey" "$LANDING" "passkey"
@@ -210,7 +210,7 @@ SECURITY=$(curl -s "${BASE}/beveiliging")
 assert_contains "Security page mentions passkey" "$SECURITY" "passkey"
 assert_contains "Security page mentions PostgreSQL" "$SECURITY" "PostgreSQL"
 assert_contains "Security page mentions AES-256" "$SECURITY" "AES-256"
-assert_contains "Security page mentions rate limiting" "$SECURITY" "rate limiting"
+assert_contains "Security page mentions the rate limit" "$SECURITY" "limiet per IP-adres"
 assert_not_contains "Security page no longer says 'geen database'" "$SECURITY" "geen database"
 
 # ============================================================

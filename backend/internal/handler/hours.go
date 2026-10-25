@@ -129,17 +129,17 @@ func GetHoursOverview(c *gin.Context) {
 	fromStr := c.Query("from")
 	toStr := c.Query("to")
 	if fromStr == "" || toStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "from en to query parameters zijn verplicht (YYYY-MM-DD)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "De parameters from en to zijn verplicht (JJJJ-MM-DD)."})
 		return
 	}
 	from, err := parseDate(fromStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("ongeldige from datum %q: %v", fromStr, err)})
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Ongeldige from-datum %q: %v", fromStr, err)})
 		return
 	}
 	to, err := parseDate(toStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("ongeldige to datum %q: %v", toStr, err)})
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Ongeldige to-datum %q: %v", toStr, err)})
 		return
 	}
 

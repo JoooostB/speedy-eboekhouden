@@ -181,10 +181,10 @@ func respondSoapError(c *gin.Context, err error) {
 	case errNoSoapCredentials:
 		c.JSON(http.StatusPreconditionFailed, gin.H{
 			"error":   "no_soap_credentials",
-			"message": "Stel SOAP API-gegevens in via Instellingen om deze functie te gebruiken.",
+			"message": "Vul eerst je SOAP-gegevens in bij Instellingen.",
 		})
 	case errDecryptFailed:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Credentials konden niet worden ontsleuteld"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Speedy kan je opgeslagen SOAP-gegevens niet meer ontsleutelen. Vul ze opnieuw in bij Instellingen."})
 	default:
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 	}

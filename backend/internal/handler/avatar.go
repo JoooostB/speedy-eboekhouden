@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -12,15 +14,36 @@ import (
 	"github.com/joooostb/speedy-eboekhouden/internal/storage"
 )
 
-// AvatarHandler handles avatar upload/retrieval via R2.
-type AvatarHandler struct {
-	r2 *storage.Client
-	db *database.DB
+// avatarStore is the part of the R2 client the avatar handler needs.
+// *storage.Client satisfies it; tests supply a fake.
+type avatarStore interface {
+	Upload(ctx context.Context, key string, data []byte, contentType string) error
+	Delete(ctx context.Context, key string) error
+	PublicObjectURL(key string) string
 }
 
-// NewAvatarHandler creates a new avatar handler.
+// avatarUsers is the part of the database the avatar handler needs.
+type avatarUsers interface {
+	GetUserByID(ctx context.Context, id string) (*database.User, error)
+	SetAvatarKey(ctx context.Context, userID, key string) error
+}
+
+// AvatarHandler handles avatar upload/retrieval via R2.
+type AvatarHandler struct {
+	// r2 is nil when R2 is not configured.
+	r2 avatarStore
+	db avatarUsers
+}
+
+// NewAvatarHandler creates a new avatar handler. r2 may be nil.
 func NewAvatarHandler(r2 *storage.Client, db *database.DB) *AvatarHandler {
-	return &AvatarHandler{r2: r2, db: db}
+	h := &AvatarHandler{db: db}
+	// Only a non-nil client goes into the interface: a typed nil would make
+	// h.r2 != nil and skip the "no storage" answer.
+	if r2 != nil {
+		h.r2 = r2
+	}
+	return h
 }
 
 const maxAvatarSize = 2 << 20 // 2 MB
@@ -34,7 +57,7 @@ var allowedImageTypes = map[string]bool{
 // Upload handles POST /api/v1/avatar — uploads avatar to R2.
 func (h *AvatarHandler) Upload(c *gin.Context) {
 	if h.r2 == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Bestandsopslag is niet geconfigureerd"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Deze server heeft geen bestandsopslag voor foto's."})
 		return
 	}
 
@@ -46,7 +69,7 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 
 	file, header, err := c.Request.FormFile("avatar")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Afbeelding is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een foto."})
 		return
 	}
 	defer file.Close()
@@ -54,18 +77,18 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 	// Validate content type
 	contentType := header.Header.Get("Content-Type")
 	if !allowedImageTypes[contentType] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Alleen JPEG, PNG en WebP zijn toegestaan"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een JPG-, PNG- of WebP-bestand."})
 		return
 	}
 
 	// Read with size limit
 	data, err := io.ReadAll(io.LimitReader(file, maxAvatarSize+1))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Bestand kon niet worden gelezen"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Het bestand kon niet worden gelezen. Probeer het opnieuw."})
 		return
 	}
 	if len(data) > maxAvatarSize {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Afbeelding is te groot (max 2 MB)"})
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "De foto is te groot. Kies een bestand tot 2 MB."})
 		return
 	}
 
@@ -73,22 +96,31 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 	ext := extensionForType(contentType)
 	key := fmt.Sprintf("avatars/%s%s", uuid.New().String(), ext)
 
+	ctx := c.Request.Context()
+
 	// Upload to R2
-	if err := h.r2.Upload(c.Request.Context(), key, data, contentType); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Upload mislukt"})
+	if err := h.r2.Upload(ctx, key, data, contentType); err != nil {
+		log.Printf("Avatar: upload of %s for user %s failed: %v", key, sess.UserID, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Uploaden is mislukt. Probeer het opnieuw."})
 		return
 	}
 
-	// Delete old avatar if exists
-	oldUser, _ := h.db.GetUserByID(c.Request.Context(), sess.UserID)
-	if oldUser != nil && oldUser.AvatarKey != "" {
-		h.r2.Delete(c.Request.Context(), oldUser.AvatarKey)
+	// Point the profile at the new object first and only then remove the
+	// old one: deleting first left the profile pointing at a deleted object
+	// whenever the database update failed. A failed update removes the new
+	// object again, so the profile keeps its old, still existing photo.
+	var oldKey string
+	if oldUser, err := h.db.GetUserByID(ctx, sess.UserID); err == nil && oldUser != nil {
+		oldKey = oldUser.AvatarKey
 	}
-
-	// Save key to database
-	if err := h.db.SetAvatarKey(c.Request.Context(), sess.UserID, key); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Avatar opslaan mislukt"})
+	if err := h.db.SetAvatarKey(ctx, sess.UserID, key); err != nil {
+		log.Printf("Avatar: saving %s for user %s failed: %v", key, sess.UserID, err)
+		h.deleteAvatarObject(ctx, key)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "De foto kon niet worden opgeslagen. Probeer het opnieuw."})
 		return
+	}
+	if oldKey != "" && oldKey != key {
+		h.deleteAvatarObject(ctx, oldKey)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -97,10 +129,19 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 	})
 }
 
+// deleteAvatarObject removes an avatar object from R2, best-effort: an
+// object left behind costs storage, not correctness. Keys are
+// avatars/{uuid}.{ext} and carry no personal data, so they are logged.
+func (h *AvatarHandler) deleteAvatarObject(ctx context.Context, key string) {
+	if err := h.r2.Delete(ctx, key); err != nil {
+		log.Printf("Avatar: deleting %s failed: %v", key, err)
+	}
+}
+
 // Delete handles DELETE /api/v1/avatar — removes avatar.
 func (h *AvatarHandler) Delete(c *gin.Context) {
 	if h.r2 == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Bestandsopslag is niet geconfigureerd"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Deze server heeft geen bestandsopslag voor foto's."})
 		return
 	}
 
@@ -110,14 +151,22 @@ func (h *AvatarHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	user, err := h.db.GetUserByID(c.Request.Context(), sess.UserID)
+	ctx := c.Request.Context()
+	user, err := h.db.GetUserByID(ctx, sess.UserID)
 	if err != nil || user.AvatarKey == "" {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
 
-	h.r2.Delete(c.Request.Context(), user.AvatarKey)
-	h.db.SetAvatarKey(c.Request.Context(), sess.UserID, "")
+	// Clear the profile first, as in Upload: if that fails the photo stays
+	// complete and the user can try again; the object goes only once nothing
+	// points at it.
+	if err := h.db.SetAvatarKey(ctx, sess.UserID, ""); err != nil {
+		log.Printf("Avatar: clearing the key of user %s failed: %v", sess.UserID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "De foto kon niet worden verwijderd. Probeer het opnieuw."})
+		return
+	}
+	h.deleteAvatarObject(ctx, user.AvatarKey)
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

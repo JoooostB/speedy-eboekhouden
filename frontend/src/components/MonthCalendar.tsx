@@ -150,7 +150,7 @@ export function MonthCalendar({
           Alle werkdagen
         </Button>
         <Button size="small" color="secondary" onClick={clearMonth}>
-          Wis maand
+          Maand wissen
         </Button>
       </Box>
 
@@ -255,7 +255,7 @@ export function MonthCalendar({
           if (details.length > 0) {
             const lines = details.map(
               (d) =>
-                `${formatHours(d.aantalUren)} — ${d.medewerker} · ${d.project} · ${d.activiteit}`,
+                `${formatHours(d.aantalUren)} · ${d.medewerker} · ${d.project} · ${d.activiteit}`,
             );
             tooltipParts.push(lines.join("\n"));
           }

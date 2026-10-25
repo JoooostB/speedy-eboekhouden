@@ -79,15 +79,16 @@ func main() {
 
 	// Handlers
 	passkeyHandler := handler.NewPasskeyHandler(webauthnSvc, store, cfg, db, encKey, mailer, r2Client)
-	ebAuthHandler := handler.NewEBoekhoudenAuthHandler(store, db, encKey)
-	settingsHandler := handler.NewSettingsHandler(db, encKey)
+	ebAuthHandler := handler.NewEBoekhoudenAuthHandler(store, db, encKey, redisClient)
+	settingsHandler := handler.NewSettingsHandler(db, encKey, redisClient)
 	passkeySettingsHandler := handler.NewPasskeySettingsHandler(db)
 	learnedSettingsHandler := handler.NewLearnedSettingsHandler(db)
-	invoiceHandler := handler.NewInvoiceHandler(claudeSvc, db, encKey, r2Client, redisClient)
+	invoiceHandler := handler.NewInvoiceHandler(claudeSvc, db, encKey, r2Client, redisClient, store)
 	avatarHandler := handler.NewAvatarHandler(r2Client, db)
 	classifyHandler := handler.NewClassifyHandler(claudeSvc, db, encKey)
 	inboxHandler := handler.NewInboxHandler(claudeSvc, db, encKey, redisClient, r2Client, store)
 	bankStatementsHandler := handler.NewBankStatementsHandler(store, db)
+	archiveHandler := handler.NewArchiveHandler(store, db)
 	soapHandler := handler.NewSoapAPIHandler(db, encKey)
 	restHandler := handler.NewRestAPIHandler(db, encKey)
 
@@ -126,7 +127,7 @@ func main() {
 
 		// Authenticated routes (Speedy account required)
 		authed := api.Group("")
-		authed.Use(session.Middleware(store))
+		authed.Use(session.Middleware(store, session.CookieOptions{Domain: cfg.CookieDomain, Secure: cfg.CookieSecure}))
 		{
 			// Session management
 			authed.GET("/auth/me", passkeyHandler.Me)
@@ -211,11 +212,11 @@ func main() {
 				eb.GET("/vat-codes", handler.GetVATCodes)
 
 				// Digital archive
-				eb.GET("/archive/folders", handler.GetArchiveFolders)
-				eb.POST("/archive/folders", handler.CreateArchiveFolder)
-				eb.GET("/archive/files/:folderId", handler.GetArchiveFiles)
-				eb.POST("/archive/upload", handler.UploadArchiveFile)
-				eb.POST("/archive/link", handler.LinkFileToMutation)
+				eb.GET("/archive/folders", archiveHandler.GetArchiveFolders)
+				eb.POST("/archive/folders", archiveHandler.CreateArchiveFolder)
+				eb.GET("/archive/files/:folderId", archiveHandler.GetArchiveFiles)
+				eb.POST("/archive/upload", archiveHandler.UploadArchiveFile)
+				eb.POST("/archive/link", archiveHandler.LinkFileToMutation)
 
 				// Relations + KvK
 				eb.GET("/kvk/search", handler.SearchKvK)
@@ -227,6 +228,17 @@ func main() {
 				eb.POST("/invoices/submit", invoiceHandler.Submit)
 				eb.POST("/invoices/submit-full", invoiceHandler.SubmitFull)
 				eb.POST("/invoices/submit-receipt", invoiceHandler.SubmitReceipt)
+
+				// Document inbox (Mail & herken folder)
+				eb.GET("/documents", invoiceHandler.ListDocuments)
+				eb.POST("/documents/setup", invoiceHandler.SetupMailFolder)
+				eb.POST("/documents/archive", invoiceHandler.ArchiveDocuments)
+				eb.POST("/documents/:id/analyze", invoiceHandler.AnalyzeDocument)
+				eb.GET("/documents/:id/content", invoiceHandler.DocumentContent)
+				eb.POST("/documents/:id/ignore", invoiceHandler.IgnoreDocument)
+				eb.DELETE("/documents/:id/ignore", invoiceHandler.UnignoreDocument)
+				eb.DELETE("/documents/:id", invoiceHandler.DeleteDocument)
+				eb.GET("/openposts", invoiceHandler.GetOpenPosts)
 			}
 		}
 	}

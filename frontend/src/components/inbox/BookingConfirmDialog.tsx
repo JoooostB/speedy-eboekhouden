@@ -13,10 +13,11 @@ import {
   TextField,
   FormHelperText,
 } from "@mui/material";
-import type { InboxClassification, LedgerAccount, OpenPost, VATCode } from "../../api/types";
+import type { InboxClassification, LedgerAccount, OpenPostGridItem, VATCode } from "../../api/types";
 import { api } from "../../api/client";
 import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
+import { bookingBlocker, findRefundCandidate, isFactuurbetalingSoort } from "./inboxBooking";
 
 interface Props {
   open: boolean;
@@ -67,6 +68,10 @@ function fmtDate(s: string) {
  * caller can submit the user's final values rather than the original AI
  * suggestion. For positive amounts (potential refunds), it cross-references
  * open crediteuren posts and flags any matches inline.
+ *
+ * A factuurbetaling (open-post match) is booked on an outstanding invoice:
+ * the dialog shows that invoice and relation read-only, hides the
+ * tegenrekening and BTW pickers and only lets the description be edited.
  */
 export function BookingConfirmDialog({
   open,
@@ -78,7 +83,7 @@ export function BookingConfirmDialog({
   processing,
   error,
 }: Props) {
-  const [refundMatches, setRefundMatches] = useState<Map<number, OpenPost>>(new Map());
+  const [refundMatches, setRefundMatches] = useState<Map<number, OpenPostGridItem>>(new Map());
   const [matchingRefunds, setMatchingRefunds] = useState(false);
   const errorRef = useRef<HTMLDivElement | null>(null);
 
@@ -133,16 +138,12 @@ export function BookingConfirmDialog({
     }
     setMatchingRefunds(true);
     api
-      .getOpenPosten("Crediteuren")
+      .getOpenPosts("Crediteur")
       .then((posts) => {
-        const matches = new Map<number, OpenPost>();
+        const matches = new Map<number, OpenPostGridItem>();
         items.forEach((item) => {
           if (!potentialRefundIds.includes(item.id)) return;
-          const m = posts.find(
-            (p) =>
-              Math.abs(p.openstaand - item.bedrag) < 0.01 ||
-              Math.abs(p.bedrag - item.bedrag) < 0.01,
-          );
+          const m = findRefundCandidate(item.bedrag, posts);
           if (m) matches.set(item.id, m);
         });
         setRefundMatches(matches);
@@ -154,10 +155,12 @@ export function BookingConfirmDialog({
   }, [open, items, potentialRefundIds]);
 
   const isSingle = items.length === 1;
-  const incomplete = items.some((i) => {
-    const e = edits.get(i.id);
-    return !e || !e.ledger;
-  });
+  // What still blocks each row: a tegenrekening for a normal booking, the
+  // open invoice reference for a factuurbetaling.
+  const blockers = new Map(items.map((i) => [i.id, bookingBlocker(i, edits.get(i.id))] as const));
+  const missingLedger = items.some((i) => blockers.get(i.id) === "Geen tegenrekening");
+  const missingOpenInvoice = items.some((i) => blockers.get(i.id) === "Geen openstaande factuur");
+  const incomplete = missingLedger || missingOpenInvoice;
 
   const updateEdit = (id: number, patch: Partial<{ ledger: LedgerAccount | null; btwCode: string; omschrijving: string }>) => {
     setEdits((prev) => {
@@ -197,8 +200,8 @@ export function BookingConfirmDialog({
       </DialogTitle>
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Controleer hoe {isSingle ? "deze regel wordt" : "deze regels worden"} geboekt. Pas indien nodig
-          de tegenrekening, BTW of omschrijving aan en klik op Bevestigen.
+          Controleer hoe Speedy {isSingle ? "deze regel" : "deze regels"} boekt. Pas zo nodig de
+          tegenrekening, BTW of omschrijving aan en klik op Bevestigen.
         </Typography>
 
         {error && (
@@ -212,14 +215,21 @@ export function BookingConfirmDialog({
         {refundMatches.size > 0 && (
           <Alert severity="info" sx={{ mb: 2 }}>
             {refundMatches.size === 1
-              ? "Een regel komt overeen met een openstaande crediteurenfactuur — dit kan een terugbetaling zijn. Controleer of de boeking klopt."
-              : `${refundMatches.size} regels komen overeen met openstaande crediteurenfacturen — mogelijke terugbetalingen.`}
+              ? "Het bedrag van een regel is gelijk aan een openstaande inkoopfactuur. Misschien is het een terugbetaling. Controleer of de boeking klopt."
+              : `${refundMatches.size} regels hebben hetzelfde bedrag als een openstaande inkoopfactuur. Misschien zijn het terugbetalingen. Controleer of de boekingen kloppen.`}
           </Alert>
         )}
 
-        {incomplete && (
+        {missingLedger && (
           <Alert severity="warning" sx={{ mb: 2 }}>
-            Een of meer regels missen een tegenrekening. Vul deze eerst in voordat je bevestigt.
+            Bij een of meer regels ontbreekt de tegenrekening. Vul die eerst in.
+          </Alert>
+        )}
+
+        {missingOpenInvoice && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Een factuurbetaling hoort bij een openstaande factuur, maar bij een of meer regels ontbreekt de
+            relatie of het factuurnummer. Kies voor die regels in de lijst een andere soort.
           </Alert>
         )}
 
@@ -229,12 +239,14 @@ export function BookingConfirmDialog({
             const edit = edits.get(item.id);
             const refund = refundMatches.get(item.id);
             const isNegative = item.bedrag < 0;
+            const blocker = blockers.get(item.id) ?? null;
+            const factuurbetaling = isFactuurbetalingSoort(item.soort);
             return (
               <Box
                 key={item.id}
                 sx={{
                   border: "1px solid",
-                  borderColor: edit?.ledger ? "divider" : "error.light",
+                  borderColor: blocker ? "error.light" : "divider",
                   borderRadius: 2,
                   p: 2,
                 }}
@@ -267,14 +279,15 @@ export function BookingConfirmDialog({
                   </Typography>
                   {refund && (
                     <Typography variant="caption" sx={{ color: "info.main", flexBasis: "100%" }}>
-                      ↳ Mogelijke terugbetaling: {refund.factuurnummer} — {refund.relatie}
+                      ↳ Mogelijke terugbetaling: factuur {refund.mutFactuur} · {refund.bedrijf}
                     </Typography>
                   )}
                 </Box>
 
                 <Divider sx={{ mb: 1.5 }} />
 
-                {/* Editable form */}
+                {/* Editable form. A factuurbetaling has no tegenrekening and no
+                    BTW: the open invoice decides both, so it is shown read-only. */}
                 <Box
                   sx={{
                     display: "grid",
@@ -282,25 +295,48 @@ export function BookingConfirmDialog({
                     gridTemplateColumns: { xs: "1fr", sm: "2fr 1fr" },
                   }}
                 >
-                  <Box>
-                    <LedgerAccountPicker
-                      accounts={ledgerAccounts}
-                      value={edit?.ledger ?? null}
-                      onChange={(ledger) => updateEdit(item.id, { ledger })}
-                      label="Tegenrekening"
-                    />
-                    {!edit?.ledger && (
-                      <FormHelperText error sx={{ ml: 1.5, mt: 0.5 }}>
-                        Tegenrekening verplicht
-                      </FormHelperText>
-                    )}
-                  </Box>
-                  <VATCodePicker
-                    codes={vatCodes}
-                    value={edit?.btwCode ?? "GEEN"}
-                    onChange={(btwCode) => updateEdit(item.id, { btwCode })}
-                    label="BTW"
-                  />
+                  {factuurbetaling ? (
+                    <Box sx={{ gridColumn: { sm: "1 / -1" } }}>
+                      <Typography variant="caption" color="text.secondary" component="div">
+                        Openstaande factuur
+                      </Typography>
+                      {blocker === "Geen openstaande factuur" ? (
+                        <FormHelperText error sx={{ m: 0 }}>
+                          Relatie en factuurnummer ontbreken
+                        </FormHelperText>
+                      ) : (
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                          {item.factuurnummer}
+                          {item.relatieNaam ? ` · ${item.relatieNaam}` : ` · relatie ${item.relatieId}`}
+                        </Typography>
+                      )}
+                      <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
+                        De betaling wordt afgeletterd op deze factuur, zonder tegenrekening of BTW.
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <>
+                      <Box>
+                        <LedgerAccountPicker
+                          accounts={ledgerAccounts}
+                          value={edit?.ledger ?? null}
+                          onChange={(ledger) => updateEdit(item.id, { ledger })}
+                          label="Tegenrekening"
+                        />
+                        {!edit?.ledger && (
+                          <FormHelperText error sx={{ ml: 1.5, mt: 0.5 }}>
+                            Kies een tegenrekening
+                          </FormHelperText>
+                        )}
+                      </Box>
+                      <VATCodePicker
+                        codes={vatCodes}
+                        value={edit?.btwCode ?? "GEEN"}
+                        onChange={(btwCode) => updateEdit(item.id, { btwCode })}
+                        label="BTW"
+                      />
+                    </>
+                  )}
                   <TextField
                     label="Omschrijving"
                     value={edit?.omschrijving ?? ""}
@@ -316,7 +352,7 @@ export function BookingConfirmDialog({
                 {/* Original bank line description for context */}
                 {item.omschrijving && item.omschrijving !== edit?.omschrijving && (
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-                    Bankregel: {item.omschrijving}
+                    Afschriftregel: {item.omschrijving}
                   </Typography>
                 )}
               </Box>
@@ -328,7 +364,7 @@ export function BookingConfirmDialog({
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 2 }}>
             <CircularProgress size={14} />
             <Typography variant="caption" color="text.secondary">
-              Openstaande facturen worden gecontroleerd...
+              Openstaande facturen controleren…
             </Typography>
           </Box>
         )}

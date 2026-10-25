@@ -25,7 +25,7 @@ export function ActivitySelector({
         <TextField
           {...params}
           label="Activiteit"
-          placeholder="Selecteer een activiteit"
+          placeholder="Kies een activiteit"
           InputProps={{
             ...params.InputProps,
             endAdornment: (

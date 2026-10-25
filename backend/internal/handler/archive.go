@@ -6,11 +6,29 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joooostb/speedy-eboekhouden/internal/database"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
 )
 
+// ArchiveHandler holds the dependencies needed to clear a stale e-boekhouden
+// session when a digital-archive endpoint is hit, so the frontend gets a
+// reconnect prompt instead of a bare 502. It follows BankStatementsHandler.
+type ArchiveHandler struct {
+	sessions *session.Store
+	db       *database.DB
+}
+
+// NewArchiveHandler creates a new digital archive handler.
+func NewArchiveHandler(sessions *session.Store, db *database.DB) *ArchiveHandler {
+	return &ArchiveHandler{sessions: sessions, db: db}
+}
+
+func (h *ArchiveHandler) handleEBError(c *gin.Context, err error) bool {
+	return HandleEBoekhoudenSessionExpired(c, session.FromContext(c), h.sessions, h.db, err)
+}
+
 // GetArchiveFolders handles GET /api/v1/archive/folders
-func GetArchiveFolders(c *gin.Context) {
+func (h *ArchiveHandler) GetArchiveFolders(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
@@ -19,6 +37,9 @@ func GetArchiveFolders(c *gin.Context) {
 
 	raw, err := client.GetArchiveFolders()
 	if err != nil {
+		if h.handleEBError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -27,7 +48,7 @@ func GetArchiveFolders(c *gin.Context) {
 }
 
 // CreateArchiveFolder handles POST /api/v1/archive/folders
-func CreateArchiveFolder(c *gin.Context) {
+func (h *ArchiveHandler) CreateArchiveFolder(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
@@ -42,6 +63,9 @@ func CreateArchiveFolder(c *gin.Context) {
 
 	raw, err := client.CreateArchiveFolder(json.RawMessage(body))
 	if err != nil {
+		if h.handleEBError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -50,7 +74,7 @@ func CreateArchiveFolder(c *gin.Context) {
 }
 
 // GetArchiveFiles handles GET /api/v1/archive/files/:folderId
-func GetArchiveFiles(c *gin.Context) {
+func (h *ArchiveHandler) GetArchiveFiles(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
@@ -65,6 +89,9 @@ func GetArchiveFiles(c *gin.Context) {
 
 	raw, err := client.GetArchiveFiles(folderID)
 	if err != nil {
+		if h.handleEBError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -73,7 +100,7 @@ func GetArchiveFiles(c *gin.Context) {
 }
 
 // UploadArchiveFile handles POST /api/v1/archive/upload
-func UploadArchiveFile(c *gin.Context) {
+func (h *ArchiveHandler) UploadArchiveFile(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
@@ -88,6 +115,9 @@ func UploadArchiveFile(c *gin.Context) {
 
 	raw, err := client.UploadArchiveFile(json.RawMessage(body))
 	if err != nil {
+		if h.handleEBError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -96,7 +126,7 @@ func UploadArchiveFile(c *gin.Context) {
 }
 
 // LinkFileToMutation handles POST /api/v1/archive/link
-func LinkFileToMutation(c *gin.Context) {
+func (h *ArchiveHandler) LinkFileToMutation(c *gin.Context) {
 	client := session.ClientFromContext(c)
 	if client == nil {
 		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "eboekhouden_not_connected"})
@@ -111,6 +141,9 @@ func LinkFileToMutation(c *gin.Context) {
 
 	raw, err := client.LinkFileToMutation(json.RawMessage(body))
 	if err != nil {
+		if h.handleEBError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}

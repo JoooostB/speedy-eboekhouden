@@ -19,14 +19,14 @@ import { useEmployees } from "../hooks/useEmployees";
 import { useProjects } from "../hooks/useProjects";
 import { useActivities } from "../hooks/useActivities";
 import { useHourOverview } from "../hooks/useHourOverview";
-import { strictMatchKey, formatHours } from "./hours/hourOverlay";
+import { strictMatchKey, formatHourCount, formatHours, formatHoursValue } from "./hours/hourOverlay";
 import { EmployeeSelector } from "./EmployeeSelector";
 import { ProjectSelector } from "./ProjectSelector";
 import { ActivitySelector } from "./ActivitySelector";
 import { HoursInput } from "./HoursInput";
 import { MonthCalendar } from "./MonthCalendar";
 import { SubmitResults } from "./SubmitResults";
-import { track } from "../analytics";
+import { errorClass, track } from "../analytics";
 
 export function BulkEntryForm() {
   const { employees, loading: empLoading } = useEmployees();
@@ -50,7 +50,7 @@ export function BulkEntryForm() {
   const [visibleRange, setVisibleRange] = useState<{ from: string; to: string } | null>(null);
 
   // State for the duplicate-confirmation dialog: a list of conflicts to
-  // surface ("Joost · 2026-04-01 · PUP · Consultancy") plus a resolved
+  // surface ("Voorbeeld · 2026-04-01 · PUP · Consultancy") plus a resolved
   // submit handler that runs after the user clicks Toch indienen.
   const [duplicateConflicts, setDuplicateConflicts] = useState<string[] | null>(null);
 
@@ -130,8 +130,8 @@ export function BulkEntryForm() {
         days: String(selectedDates.size),
       });
     } catch (err) {
-      track("Hours Submit Error", { reason: err instanceof Error ? err.message : "unknown" });
-      setError(err instanceof Error ? err.message : "Submission failed");
+      track("Hours Submit Error", { reason: errorClass(err) });
+      setError(err instanceof Error ? err.message : "Indienen mislukt");
     } finally {
       setSubmitting(false);
     }
@@ -162,7 +162,13 @@ export function BulkEntryForm() {
   if (results && results.every((r) => r.status === "ok")) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        <SubmitResults results={results} loading={false} total={totalEntries} onReset={handleReset} />
+        <SubmitResults
+          results={results}
+          loading={false}
+          total={totalEntries}
+          employees={employees}
+          onReset={handleReset}
+        />
       </Box>
     );
   }
@@ -211,9 +217,8 @@ export function BulkEntryForm() {
 
       {selectedEmployees.length > 0 && hourOverlay.byDate.size > 0 && !overlayLoading && (
         <Typography variant="caption" color="text.secondary">
-          {hourOverlay.byDate.size} {hourOverlay.byDate.size === 1 ? "dag" : "dagen"} in deze maand
-          {selectedEmployees.length === 1 ? " heeft" : " hebben"} al uren — zichtbaar als badge in de
-          rechterbovenhoek van de cel.
+          Op {hourOverlay.byDate.size} {hourOverlay.byDate.size === 1 ? "dag" : "dagen"} in deze maand
+          staan al uren. Je ziet ze in de kalender, rechtsboven bij {hourOverlay.byDate.size === 1 ? "die dag" : "die dagen"}.
         </Typography>
       )}
 
@@ -221,9 +226,9 @@ export function BulkEntryForm() {
 
       {selectedDates.size > 0 && selectedEmployees.length > 0 && (
         <Typography variant="body2" color="text.secondary">
-          {selectedDates.size} dagen &times; {selectedEmployees.length} medewerker
-          {selectedEmployees.length > 1 ? "s" : ""} &times; {hours}u ={" "}
-          <strong>{totalHours.toFixed(2)} uur totaal</strong>
+          {selectedDates.size} {selectedDates.size === 1 ? "dag" : "dagen"} &times; {selectedEmployees.length} medewerker
+          {selectedEmployees.length > 1 ? "s" : ""} &times; {formatHoursValue(hours)} ={" "}
+          <strong>{formatHourCount(totalHours)} uur totaal</strong>
         </Typography>
       )}
 
@@ -236,10 +241,16 @@ export function BulkEntryForm() {
         onClick={handleSubmit}
         disabled={!canSubmit}
       >
-        {submitting ? "Bezig..." : `Indienen (${totalEntries} items)`}
+        {submitting ? "Bezig…" : `Indienen (${totalEntries} ${totalEntries === 1 ? "regel" : "regels"})`}
       </Button>
 
-      <SubmitResults results={results} loading={submitting} total={totalEntries} onReset={handleReset} />
+      <SubmitResults
+        results={results}
+        loading={submitting}
+        total={totalEntries}
+        employees={employees}
+        onReset={handleReset}
+      />
 
       {/* Duplicate-confirmation dialog. Listed conflicts let the user
           see exactly which (date · employee · project · activity)
@@ -254,14 +265,14 @@ export function BulkEntryForm() {
       >
         <DialogTitle id="duplicate-hours-title" sx={{ fontWeight: 600 }}>
           {duplicateConflicts && duplicateConflicts.length === 1
-            ? "1 dubbele uren-boeking gevonden"
-            : `${duplicateConflicts?.length ?? 0} dubbele uren-boekingen gevonden`}
+            ? "1 dubbele urenboeking gevonden"
+            : `${duplicateConflicts?.length ?? 0} dubbele urenboekingen gevonden`}
         </DialogTitle>
         <DialogContent dividers>
           <DialogContentText sx={{ mb: 2 }}>
-            Deze combinaties van datum · medewerker · project · activiteit zijn al eerder in
-            e-Boekhouden geboekt. Doorgaan maakt nieuwe uren-regels aan bovenop wat er al staat —
-            dat betekent dubbele uren.
+            Voor deze combinaties van datum, medewerker, project en activiteit staan al uren in
+            e-Boekhouden. Ga je door, dan komen er nieuwe uurregels bij en staan die uren er
+            dubbel in.
           </DialogContentText>
           <Box
             sx={{
@@ -286,14 +297,14 @@ export function BulkEntryForm() {
             ))}
           </Box>
           <DialogContentText sx={{ mt: 2 }}>
-            Totaal te boeken in deze actie: <strong>{formatHours(totalHours)}</strong>{" "}
-            ({totalEntries} regels). Pas je selectie aan om de dubbele dagen te deselecteren,
-            of ga toch door als je weet wat je doet.
+            Je boekt nu in totaal <strong>{formatHours(totalHours)}</strong>{" "}
+            ({totalEntries} {totalEntries === 1 ? "regel" : "regels"}). Haal de dubbele dagen uit je
+            selectie, of ga toch door als dat de bedoeling is.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDuplicateConflicts(null)} disabled={submitting}>
-            Terug om aan te passen
+            Selectie aanpassen
           </Button>
           <Button
             color="warning"

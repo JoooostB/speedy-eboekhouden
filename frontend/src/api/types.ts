@@ -32,6 +32,17 @@ export interface EBStatusResponse {
   mfaPending: boolean;
 }
 
+/** Response of POST /eboekhouden/disconnect ("Verbinding verbreken"). */
+export interface EBDisconnectResponse {
+  status: "ok";
+  /** True only when e-boekhouden confirmed the session is gone after the
+   *  logout request. False means Speedy dropped its token and caches but
+   *  e-boekhouden lets the session expire on its own. */
+  ebLoggedOut: boolean;
+  /** Number of cached Redis keys of this user that were deleted. */
+  purgedKeys: number;
+}
+
 // Hours (existing)
 export interface Employee {
   id: number;
@@ -153,6 +164,8 @@ export interface ClassifyResult {
   confidence: number;
 }
 
+export type InvoiceDocumentType = "factuur" | "bonnetje" | "creditnota" | "overig";
+
 export interface InvoiceData {
   leverancier: string;
   factuurnummer: string;
@@ -165,6 +178,13 @@ export interface InvoiceData {
   grootboekcode: string;
   btwCode: string;
   isReverseCharge: boolean;
+  /** What Claude decided the document is: "factuur", "bonnetje",
+   *  "creditnota" or "overig" (not a purchase document at all). Empty on
+   *  analyses cached before this field existed. */
+  documentType?: InvoiceDocumentType | "";
+  /** Short Dutch reason for documentType, mainly filled for "overig"
+   *  ("Algemene voorwaarden", "Logo/handtekening"). */
+  documentTypeReason?: string;
   /** True for bonnetjes (restaurant, supermarkt, tankstation) — book as
    *  "Geld uitgegeven" without a leverancier relation. */
   isReceipt: boolean;
@@ -189,9 +209,12 @@ export interface ArchiveFolder {
 export interface InvoiceAnalyzeResponse {
   invoice: InvoiceData;
   filename: string;
+  /** Always empty since Step 10: the analyser keeps no copy of the file
+   *  (nothing goes to R2). Kept so the response shape stays stable; a
+   *  booking carries the file inline (pdfBase64) or names a mail-folder
+   *  file (archiveFileId). */
   uploadKey: string;
-  /** Public CDN URL for the uploaded PDF (from R2). Empty when R2 is not
-   *  configured — the frontend then falls back to localPdfUrl. */
+  /** Always empty, see uploadKey; the preview uses localPdfUrl. */
   pdfUrl: string;
   /** SHA-256 of the uploaded PDF — echoed back to SubmitFull so the
    *  backend can write a duplicate-detection marker post-booking. */
@@ -202,14 +225,7 @@ export interface InvoiceAnalyzeResponse {
   /** Set when this exact PDF was previously booked successfully. The UI
    *  shows a prominent warning so the user can avoid creating a duplicate
    *  mutation. */
-  alreadySubmitted?: {
-    mutNr: number;
-    paymentMutNr?: number;
-    leverancier?: string;
-    factuur?: string;
-    bedragIncl?: number;
-    submittedAt: string;
-  };
+  alreadySubmitted?: InvoiceSubmittedMarker;
   matchedRelation: {
     id: number;
     code: string;
@@ -226,15 +242,119 @@ export interface InvoiceAnalyzeResponse {
    *  match is fuzzy via approximate FX conversion — currencyConverted is
    *  true in that case, with invoiceCurrency / invoiceAmount carrying the
    *  original (non-EUR) values so the UI can show "32.80 CHF ≈ €34.50". */
-  matchedBankLine: {
-    id: number;
-    datum: string;
-    bedrag: number;
-    omschrijving: string;
-    currencyConverted?: boolean;
-    invoiceCurrency?: string;
-    invoiceAmount?: number;
-  } | null;
+  matchedBankLine: MatchedBankLine | null;
+  /** All unprocessed bank lines that could be the payment, best first.
+   *  matchedBankLine is the first of these (or null when there is none). */
+  bankLineCandidates?: BankLineCandidate[];
+}
+
+/** An unprocessed bank line proposed as the payment of an invoice. */
+export interface MatchedBankLine {
+  id: number;
+  datum: string;
+  bedrag: number;
+  omschrijving: string;
+  currencyConverted?: boolean;
+  invoiceCurrency?: string;
+  invoiceAmount?: number;
+}
+
+/** A ranked bank-line match; score orders the candidates (higher is better). */
+export interface BankLineCandidate extends MatchedBankLine {
+  score: number;
+}
+
+// Mail & herken documents (the administration's mail folder in the archive)
+
+/** Where a mail-folder document stands, in the backend's priority order.
+ *  - linked: already linked to a mutation in e-boekhouden
+ *  - ignored: hidden by the user in Speedy
+ *  - unsupported: an extension the analyser cannot read (XML/UBL, …)
+ *  - junk: a tiny unanalysed image (logo, signature, tracking pixel)
+ *  - duplicate: the same bytes were booked before
+ *  - not_invoice: analysed as "overig"
+ *  - matched: analysed and assigned to a bank line
+ *  - receipt_waiting: a bonnetje without a bank line yet
+ *  - unmatched: analysed, no bank line
+ *  - new: not analysed */
+export type MailDocumentStatus =
+  | "linked"
+  | "ignored"
+  | "unsupported"
+  | "junk"
+  | "duplicate"
+  | "not_invoice"
+  | "matched"
+  | "receipt_waiting"
+  | "unmatched"
+  | "new";
+
+/** Marker of an earlier booking of the same file bytes. Deliberately minimal:
+ *  the mutation numbers and the time of booking, nothing about the invoice
+ *  itself ("Dit bestand is al geboekt op 3 okt (mutatie 1234)"). */
+export interface InvoiceSubmittedMarker {
+  mutNr: number;
+  paymentMutNr?: number;
+  submittedAt: string;
+}
+
+/** One file in the mail folder, as GET /documents lists it. The analysis
+ *  fields are present once the document has been analysed. */
+export interface MailDocument {
+  id: number;
+  /** File name in e-boekhouden. */
+  naam: string;
+  /** Received timestamp as e-boekhouden sends it ("2026-10-24T15:43:35.67"). */
+  datum: string;
+  size: number;
+  /** Media type implied by the extension; "" when unsupported. */
+  mediaType: string;
+  koppelCount: number;
+  status: MailDocumentStatus;
+  /** Readable title: the file name before analysis, "Leverancier · datum ·
+   *  bedrag" after. */
+  title: string;
+  subtitle: string;
+  ignored: boolean;
+  documentType?: InvoiceDocumentType | "";
+  analyzedAt?: string;
+  /** The cached analyze response with the current bank-line assignment. */
+  analysis?: InvoiceAnalyzeResponse;
+  /** The bank line assigned to this document by the global assignment. */
+  match?: MatchedBankLine;
+  /** The document's own ranked candidate lines. */
+  candidates?: BankLineCandidate[];
+  alreadySubmitted?: InvoiceSubmittedMarker;
+}
+
+export interface MailFolderInfo {
+  id: number;
+  name: string;
+}
+
+export interface MailDocumentsResponse {
+  configured: boolean;
+  /** "missing" when a mail folder is configured but no longer exists. */
+  reason?: "missing";
+  folder?: MailFolderInfo;
+  documents?: MailDocument[];
+  ignoredCount?: number;
+}
+
+/** Response of POST /documents/:id/analyze: the analyze response plus the
+ *  list fields of the document. */
+export interface MailDocumentAnalyzeResponse extends InvoiceAnalyzeResponse {
+  archiveFileId: number;
+  title: string;
+  subtitle: string;
+  status: MailDocumentStatus;
+  analyzedAt: string;
+}
+
+/** Response of POST /documents/archive. */
+export interface ArchiveDocumentsResponse {
+  moved: Array<{ id: number; name: string; targetFolderId: number }>;
+  failed: Array<{ id: number; error: string }>;
 }
 
 /** InvoiceAnalyzeResponse plus client-side enrichments added by the inbox
@@ -251,6 +371,51 @@ export interface AnalyzedInvoice extends InvoiceAnalyzeResponse {
   localPdfUrl?: string;
   /** Original File for re-encoding as base64 on submit. */
   localFile?: File;
+  /** Set when the document already sits in the Mail & herken folder: the
+   *  archive file id to book from. The submit then sends archiveFileId (and
+   *  targetFolderId) instead of the file itself, and the backend renames and
+   *  moves the file after booking. */
+  archiveFileId?: number;
+  /** Name of the mail folder the document comes from, for the helper text. */
+  mailFolderName?: string;
+  /** Readable title of the mail-folder document, shown instead of the file
+   *  name ("Anthropic · 12 okt 2026 · € 21,78"). */
+  documentTitle?: string;
+}
+
+/** The archive side of a submit response, shared by SubmitFull and
+ *  SubmitReceipt. archived/linked/renamed/moved are always sent; the rest
+ *  only when it has a value. */
+export interface SubmitArchiveOutcome {
+  archived?: boolean;
+  linked?: boolean;
+  renamed?: boolean;
+  moved?: boolean;
+  /** The name the file carries after the booking. */
+  archiveName?: string;
+  targetFolderId?: number;
+  /** Breadcrumb of the folder the file ended up in: "Facturen / 2026 / 10 Oktober". */
+  targetFolderPath?: string;
+  /** Dutch warning when the booking succeeded but linking, renaming or
+   *  moving the document did not (a mail-folder document, or an upload that
+   *  reached the archive but could not be linked), including an expired
+   *  e-boekhouden session after the booking. Can come together with
+   *  paymentWarning; the review dialog shows both (submitOutcome.ts). */
+  archiveWarning?: string;
+}
+
+export interface InvoiceSubmitFullResponse extends SubmitArchiveOutcome {
+  mutNr: number;
+  mutId: number;
+  paymentMutNr?: number;
+  /** Set when FactuurOntvangen succeeded but the bank-line-clearing
+   *  payment mutation didn't — UI should treat as warning, not success. */
+  paymentWarning?: string;
+}
+
+export interface InvoiceSubmitReceiptResponse extends SubmitArchiveOutcome {
+  mutNr: number;
+  mutId: number;
 }
 
 /** Payload for POST /api/v1/invoices/submit-full */
@@ -267,15 +432,29 @@ export interface InvoiceSubmitFullRequest {
   relatieId: number;
   tegenRekeningId: number;
   rekeningId: number;
-  uploadKey: string;
-  filename: string;
-  /** Base64-encoded PDF; alternative to uploadKey for clients that don't use
-   *  R2. The backend prefers pdfBase64 when both are present. */
+  /** Legacy: the R2 key of an upload analysed before Step 10. The analyser
+   *  no longer stores files, so this is empty. Absent for a mail-folder
+   *  document. */
+  uploadKey?: string;
+  /** Accepted by the backend for compatibility; the archive name follows
+   *  the naming convention. Absent for a mail-folder document. */
+  filename?: string;
+  /** The uploaded document inlined as base64: the way an upload reaches the
+   *  archive. The backend prefers it over uploadKey when both are present. */
   pdfBase64?: string;
   /** Archive folder ID picked by the user. When omitted the backend either
-   *  auto-creates Inkoopfacturen/year/month (if R2 is configured) or skips
+   *  auto-creates Facturen/year/month (if R2 is configured) or skips
    *  archiving entirely. */
   folderId?: number;
+  /** A file in the Mail & herken folder to book from instead of an upload.
+   *  Mutually exclusive with pdfBase64/uploadKey. The backend links the
+   *  file, renames it and moves it to targetFolderId. */
+  archiveFileId?: number;
+  /** Where the mail-folder document goes after booking. Omitted means
+   *  Facturen/<jaar>/<maand>. Only with archiveFileId. */
+  targetFolderId?: number;
+  /** Only influences the archive name: "creditnota" or (default) "factuur". */
+  documentType?: "factuur" | "creditnota";
   importId?: number;
   /** Echo of the analyze response's pdfHash so the backend can write a
    *  duplicate-detection marker. Optional for legacy clients. */
@@ -308,12 +487,17 @@ export interface InvoiceSubmitReceiptRequest {
   btwBedrag: number;
   btwCode: string;
   tegenRekeningId: number;
-  uploadKey: string;
-  filename: string;
+  /** See InvoiceSubmitFullRequest.uploadKey; absent for a mail-folder document. */
+  uploadKey?: string;
+  filename?: string;
   /** Base64-encoded PDF; see InvoiceSubmitFullRequest.pdfBase64. */
   pdfBase64?: string;
   /** Archive folder ID; see InvoiceSubmitFullRequest.folderId. */
   folderId?: number;
+  /** See InvoiceSubmitFullRequest.archiveFileId. */
+  archiveFileId?: number;
+  /** See InvoiceSubmitFullRequest.targetFolderId. */
+  targetFolderId?: number;
   importId?: number;
   /** Bank account internal ID — required when importId is not provided. */
   bankAccountId?: number;
@@ -341,6 +525,26 @@ export interface OpenPost {
   openstaand: number;
   vervalDatum?: string;
 }
+
+/** One outstanding invoice from GET /openposts (the open-post grid of the
+ *  e-boekhouden web UI, no SOAP needed). Dutch field names as e-boekhouden
+ *  sends them; teOntvangen is the amount still open. */
+export interface OpenPostGridItem {
+  mutDatum: string;
+  sBedrag: number;
+  mutFactuur: string;
+  mutNr: number;
+  relatieCode: string;
+  relatieId: number;
+  bedrijf: string;
+  sBetaald: number;
+  teOntvangen: number;
+  vervaldatum: string;
+  mutOmschrijving: string;
+  mutSoort: number;
+}
+
+export type OpenPostSoort = "Crediteur" | "Debiteur";
 
 export interface Saldo {
   code: string;
@@ -434,6 +638,22 @@ export interface InboxClassification {
   /** True when this row was filled in from the user's learned classification
    *  memory rather than a fresh Claude call. The UI shows a small badge. */
   learned?: boolean;
+  /** Relation of the open invoice this line pays (open-post match only). */
+  relatieId?: number;
+  /** Company name of that relation, for labels and the confirm dialog. */
+  relatieNaam?: string;
+  /** Invoice number of the open invoice this line pays. */
+  factuurnummer?: string;
+  /** True when the suggestion comes from an outstanding invoice in
+   *  e-boekhouden: the line is booked as a factuurbetaling on it. */
+  openPostMatch?: boolean;
+  /** The analysed mail-folder document whose payment this line is. */
+  documentMatch?: InboxDocumentMatch;
+}
+
+export interface InboxDocumentMatch {
+  fileId: number;
+  title: string;
 }
 
 export interface LearnedClassification {

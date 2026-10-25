@@ -7,6 +7,9 @@ server {
     index index.html;
 
     location /api/ {
+        # Same limit as the landing proxy: a 10 MB upload booked inline as
+        # base64 is ~13.4 MB.
+        client_max_body_size 16m;
         set $backend_upstream http://${BACKEND_HOST}:8080;
         proxy_pass $backend_upstream;
         proxy_set_header Host $host;

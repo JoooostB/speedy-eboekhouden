@@ -13,6 +13,7 @@ import { startRegistration } from "@simplewebauthn/browser";
 import { api } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { track } from "../../analytics";
+import { isBackendMessage, passkeyErrorMessage } from "./passkeyErrors";
 
 export function PasskeyRecovery() {
   const { refreshMe } = useAuth();
@@ -43,8 +44,8 @@ export function PasskeyRecovery() {
       await api.recoverRequest(email);
       track("Recovery Requested");
       setSent(true);
-    } catch (err: any) {
-      setError(err.message || "Verzoek mislukt");
+    } catch (err: unknown) {
+      setError(isBackendMessage(err) ? err.message : "Versturen mislukt. Probeer het opnieuw.");
     } finally {
       setLoading(false);
     }
@@ -60,18 +61,10 @@ export function PasskeyRecovery() {
       await api.recoverFinish(challengeId, userId, credential);
       track("Recovery Complete");
       await refreshMe();
-    } catch (err: any) {
-      const name = err?.name || "";
-      const msg = (err?.message || "").toLowerCase();
-      if (name === "NotAllowedError" || msg.includes("not allowed") || msg.includes("timed out")) {
-        setError("Passkey-registratie geannuleerd of verlopen. Probeer het opnieuw.");
-      } else if (name === "SecurityError") {
-        setError("Beveiligingsfout: controleer of je de app opent via het juiste adres.");
-      } else if (msg.includes("already registered") || name === "InvalidStateError") {
-        setError("Deze passkey is al geregistreerd op dit apparaat.");
-      } else {
-        setError("Herstel mislukt. Vraag een nieuwe link aan.");
-      }
+    } catch (err: unknown) {
+      // The backend's own (Dutch) answer when it gave one, such as an
+      // expired or already used link; the request form shows below it.
+      setError(passkeyErrorMessage(err, "recovery"));
       setRegistering(false);
     }
   };
@@ -105,13 +98,13 @@ export function PasskeyRecovery() {
         {registering ? (
           <Box sx={{ textAlign: "center", py: 4 }}>
             <CircularProgress sx={{ mb: 2 }} />
-            <Typography>Je nieuwe passkey wordt aangemaakt...</Typography>
+            <Typography>Je nieuwe passkey wordt aangemaakt…</Typography>
             {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
           </Box>
         ) : sent ? (
           <Box sx={{ textAlign: "center", py: 2 }}>
             <Alert severity="success" sx={{ mb: 2 }}>
-              Als er een account bestaat voor {email}, ontvang je een e-mail met een herstellink. Check ook je spammap.
+              Als er een account bestaat voor {email}, ontvang je een e-mail met een herstellink. Kijk ook in je spammap.
             </Alert>
             <Typography variant="body2" color="text.secondary">
               De link is 15 minuten geldig.
