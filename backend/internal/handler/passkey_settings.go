@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
@@ -19,6 +20,25 @@ type PasskeySettingsHandler struct {
 // NewPasskeySettingsHandler creates the handler.
 func NewPasskeySettingsHandler(db *database.DB) *PasskeySettingsHandler {
 	return &PasskeySettingsHandler{db: db}
+}
+
+// maxPasskeyNameLength is the longest friendly name in characters (runes),
+// the unit the message and the frontend's maxLength speak of.
+const maxPasskeyNameLength = 64
+
+// passkeyName trims a requested friendly name and checks it. It returns the
+// name to store, or a Dutch message saying why it cannot be used. The limit
+// counts characters, not bytes: "Sleutel van Zoë" must not lose room for the
+// ë, which takes two bytes in UTF-8.
+func passkeyName(raw string) (string, string) {
+	name := strings.TrimSpace(raw)
+	switch {
+	case name == "":
+		return "", "Geef de passkey een naam."
+	case utf8.RuneCountInString(name) > maxPasskeyNameLength:
+		return "", "De naam mag maximaal 64 tekens lang zijn."
+	}
+	return name, ""
 }
 
 type passkeyListItem struct {
@@ -77,13 +97,9 @@ func (h *PasskeySettingsHandler) Rename(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Geef de passkey een naam."})
 		return
 	}
-	name := strings.TrimSpace(req.FriendlyName)
-	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Geef de passkey een naam."})
-		return
-	}
-	if len(name) > 64 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "De naam mag maximaal 64 tekens lang zijn."})
+	name, problem := passkeyName(req.FriendlyName)
+	if problem != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": problem})
 		return
 	}
 
