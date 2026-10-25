@@ -22,9 +22,9 @@ func NewPasskeySettingsHandler(db *database.DB) *PasskeySettingsHandler {
 }
 
 type passkeyListItem struct {
-	ID           string `json:"id"`
-	FriendlyName string `json:"friendlyName"`
-	CreatedAt    string `json:"createdAt"`
+	ID           string   `json:"id"`
+	FriendlyName string   `json:"friendlyName"`
+	CreatedAt    string   `json:"createdAt"`
 	Transport    []string `json:"transport"`
 }
 
