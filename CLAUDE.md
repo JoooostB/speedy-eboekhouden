@@ -98,7 +98,7 @@ Unit tests (vitest) sit next to the modules: `*.test.ts` in `src/` (`analytics.t
 |--------|------|--------------|----------|
 | `GET` | `/documents` | — | `{configured:false}`, `{configured:false, reason:"missing"}` (folder deleted), or `{configured:true, folder:{id,name}, documents:[MailDocument], ignoredCount}`. No Claude or download calls. |
 | `POST` | `/documents/setup` | `{folderId?}` | `{folder:{id,name}}`. Without `folderId` a root folder "Inbox" is reused or created and set as mail folder. 409 when a mail folder is already configured and exists; 404 when `folderId` does not exist. |
-| `POST` | `/documents/:id/analyze` | `?force=true` bypasses both caches | The `/invoices/analyze` response plus `archiveFileId`, `title`, `subtitle`, `status`, `analyzedAt`. Cached 30 days. 409 `Wordt al geanalyseerd` while a lock exists. |
+| `POST` | `/documents/:id/analyze` | `?force=true` bypasses both caches | The `/invoices/analyze` response plus `archiveFileId`, `title`, `subtitle`, `status`, `analyzedAt`. Cached 30 days. 409 `Dit document wordt al geanalyseerd.` while a lock exists. |
 | `GET` | `/documents/:id/content` | — | File bytes inline (PDF/JPEG/PNG sniffed, 415 otherwise), `Cache-Control: no-store`. |
 | `POST` | `/documents/:id/ignore` | — | `{id, ignored:true}`. Speedy-only; nothing changes in e-boekhouden. |
 | `DELETE` | `/documents/:id/ignore` | — | `{id, ignored:false}`. Skips the mail-folder check so a vanished file can be cleaned out. |
@@ -129,7 +129,7 @@ All on `https://secure20.e-boekhouden.nl` with the `auth-token` cookie. Files an
 | Call | Notes | Client method |
 |------|-------|---------------|
 | `GET /v1/api/folder/{id}/header` | Works for any folder id, including `0`. Returns `menhFolderId` (the Mail & herken folder; `0` or missing = not configured), `credits`, `dataLimit`, `dataUsed`, `directoryInfo`. | `GetFolderHeader` |
-| `POST /v1/api/administratie/menhfolder`, body is the bare number `90460978` | Sets the mail folder. Returns `true`. | `SetMailFolder` |
+| `POST /v1/api/administratie/menhfolder`, body is the bare number `12340001` | Sets the mail folder. Returns `true`. | `SetMailFolder` |
 | `GET /v1/api/folder/directory` | All folders incl. `isDeleted`. `parentId: 0` is the implicit root ("Basismap" is not a real folder). | `GetArchiveFolders` |
 | `POST /v1/api/folder/directory` `{parentFolderId, name}` | `{id, naam, parentId, isDeleted}` | `CreateArchiveFolder` |
 | `GET /v1/api/folder/{id}/filelist?includeDelete=false` | `[{koppelCount, id, parentId, soort "F"/"D", naam, datum "2026-10-24T15:43:35.67", size, isDeleted}]` | `ListArchiveFiles` (files only, not deleted) |

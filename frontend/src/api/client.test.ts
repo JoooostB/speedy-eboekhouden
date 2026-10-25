@@ -73,12 +73,12 @@ describe("request() error handling (unchanged from main)", () => {
     fetchMock.mockResolvedValue(
       jsonResponse(412, {
         error: "eboekhouden_session_expired",
-        message: "Je e-Boekhouden sessie is verlopen. Verbind opnieuw om door te gaan.",
+        message: "Je sessie bij e-Boekhouden is verlopen. Koppel e-Boekhouden opnieuw om verder te gaan.",
       }),
     );
     const err = await caught(api.classifyInbox());
     expect(err.status).toBe(412);
-    expect(err.message).toBe("Je e-Boekhouden sessie is verlopen. Verbind opnieuw om door te gaan.");
+    expect(err.message).toBe("Je sessie bij e-Boekhouden is verlopen. Koppel e-Boekhouden opnieuw om verder te gaan.");
     expect(fired).toEqual({ auth: 0, eb: 1 });
   });
 
@@ -135,11 +135,11 @@ describe("analyzeInvoice (upload) error handling", () => {
     fetchMock.mockResolvedValue(
       jsonResponse(412, {
         error: "eboekhouden_session_expired",
-        message: "Je e-Boekhouden sessie is verlopen. Verbind opnieuw om door te gaan.",
+        message: "Je sessie bij e-Boekhouden is verlopen. Koppel e-Boekhouden opnieuw om verder te gaan.",
       }),
     );
     const err = await caught(api.analyzeInvoice(file));
-    expect(err.message).toBe("Je e-Boekhouden sessie is verlopen. Verbind opnieuw om door te gaan.");
+    expect(err.message).toBe("Je sessie bij e-Boekhouden is verlopen. Koppel e-Boekhouden opnieuw om verder te gaan.");
     expect(fired.eb).toBe(1);
   });
 });

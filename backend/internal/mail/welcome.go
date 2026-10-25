@@ -72,7 +72,7 @@ func welcomeHTML(name, appURL string) string {
   <!-- Next steps -->
   <p style="margin:32px 0 0;font-size:14px;line-height:1.6;color:#546e7a;">
     <strong style="color:#1a1a2e;">Zo begin je</strong><br>
-    1. Klik in Speedy op Verbinden en log in met je e-Boekhouden-gegevens.<br>
+    1. Klik in Speedy op "e-Boekhouden koppelen" en log in met je e-Boekhouden-gegevens.<br>
     2. Wil je AI gebruiken? Vul dan bij Instellingen je eigen Anthropic API-sleutel in. De kosten lopen via je eigen Anthropic-account.
   </p>
 </td>

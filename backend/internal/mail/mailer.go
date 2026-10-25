@@ -65,7 +65,7 @@ func (m *Mailer) SendWelcomeEmail(to, name, appURL string) error {
 		"- je bankafschriften verwerken, met per regel een boekingsvoorstel van AI;\r\n"+
 		"- facturen en bonnetjes laten uitlezen en boeken, ook als je ze naar het mailadres van je administratie stuurt.\r\n\r\n"+
 		"Zo begin je:\r\n"+
-		"1. Klik in Speedy op Verbinden en log in met je e-Boekhouden-gegevens.\r\n"+
+		"1. Klik in Speedy op \"e-Boekhouden koppelen\" en log in met je e-Boekhouden-gegevens.\r\n"+
 		"2. Wil je AI gebruiken? Vul dan bij Instellingen je eigen Anthropic API-sleutel in. De kosten lopen via je eigen Anthropic-account.\r\n\r\n"+
 		"Naar Speedy: %s\r\n\r\n"+
 		"Met vriendelijke groet,\r\nSpeedy e-Boekhouden",
