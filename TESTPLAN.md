@@ -107,6 +107,8 @@ The automated tests cover the handler against a fake e-boekhouden; what e-boekho
   - [ ] A key that doesn't start with sk-ant- is refused: "Dit is geen Anthropic API-sleutel. Die begint met sk-ant-."
   - [ ] A well-formed key that Anthropic rejects is not saved: "Anthropic accepteert deze API-sleutel niet. Controleer of je de hele sleutel hebt gekopieerd."
   - [ ] "Verwijderen" removes the key ("API-sleutel verwijderd")
+  - [ ] Opening the inbox twice within 15 minutes checks the key with Anthropic only once: Redis has `apikey:status:<userId>` with a TTL of about 900 s (`TTL <key>`) holding a 64-character hash, never the key. Saving or deleting the key removes the entry
+  - [ ] With an exhausted Anthropic credit balance the inbox shows the credit alert on every visit (a refusal is not cached), and it disappears on the first visit after topping up
 - [ ] Account shows name, e-mail and "Authenticatie: Passkey"; Team shows "Teamnaam"
 
 ## 9. Returning login

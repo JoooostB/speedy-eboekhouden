@@ -180,6 +180,7 @@ Rules: only `[A-Za-z0-9._-]`; `_` is **exclusively** the field separator, so `sp
 | `doc:analysis:v{v}:{userID}:{fileID}` | 30 days | `{pdfHash, analyzedAt, response}` — the full analyze response of a mail-folder document |
 | `doc:analyzing:{userID}:{fileID}` | 120 s | lock while an analysis runs (released on return with a fresh context) |
 | `doc:ignored:{userID}` | none | set of ignored file ids |
+| `apikey:status:{userID}` | 15 min | SHA-256 of the stored, encrypted Anthropic key whose last `GET /settings/api-key/status` was "active". A hit answers without the billed check and without decrypting the key; refusals (`no_credits`, `invalid`, `error`) are never cached. Dropped when the key is saved or deleted (`apiKeyStatus` in `settings.go`) |
 
 `forgetDocument` drops `doc:analysis` (current version only) and the ignore flag when a file leaves the mail folder (moved or deleted). WebAuthn challenges and pending MFA state live in process memory, not Redis.
 

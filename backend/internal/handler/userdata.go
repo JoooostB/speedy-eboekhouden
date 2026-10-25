@@ -12,9 +12,11 @@ import (
 //
 // Every cached piece of administration data lives under a key that carries
 // the user id; the key builders are inboxClassifyKey (inbox.go),
-// invoiceAnalysisCacheKey and invoiceSubmittedMarkerKey (invoice.go), and
+// invoiceAnalysisCacheKey and invoiceSubmittedMarkerKey (invoice.go),
 // documentAnalysisKey, documentAnalyzingKey and documentIgnoredKey
-// (documents.go). userCachePatterns lists the MATCH pattern of each family.
+// (documents.go), and apiKeyStatusKey (settings.go, a fingerprint of the
+// Anthropic key, no administration data, purged all the same).
+// userCachePatterns lists the MATCH pattern of each family.
 // TestUserCachePatternsCoverKeyBuilders checks that every builder's output
 // matches one of them, so a new key family cannot be added without either
 // extending this list or failing the build.
@@ -57,6 +59,7 @@ func userCachePatterns(userID string) []string {
 		"doc:analysis:v*:" + u + ":*",
 		"doc:analyzing:" + u + ":*",
 		"doc:ignored:" + u,
+		"apikey:status:" + u,
 	}
 }
 

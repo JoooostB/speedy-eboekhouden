@@ -27,6 +27,7 @@ func userKeys(userID string) []string {
 		documentAnalysisKey(userID, 12340002),
 		documentAnalyzingKey(userID, 12340002),
 		documentIgnoredKey(userID),
+		apiKeyStatusKey(userID),
 	}
 }
 
