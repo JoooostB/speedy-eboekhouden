@@ -11,12 +11,20 @@ import (
 	"net/http/cookiejar"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
 	baseURLSecure   = "https://secure.e-boekhouden.nl"
 	baseURLSecure20 = "https://secure20.e-boekhouden.nl"
 )
+
+// requestTimeout bounds every request to e-boekhouden, from connecting to
+// the last byte of the body. Without it a stalled e-boekhouden kept a
+// handler, and the user's spinner, waiting until the connection dropped.
+// 60 s leaves room for the largest transfers Speedy makes (a 10 MB archive
+// download or upload, a 2000-line import grid); SOAP and REST use 30 s.
+const requestTimeout = 60 * time.Second
 
 // ErrSessionExpired is returned by api calls when e-boekhouden has invalidated
 // the session cookie (typically because too much time has passed since login).
@@ -92,7 +100,8 @@ func newClient(token string) (*Client, error) {
 
 	return &Client{
 		httpClient: &http.Client{
-			Jar: jar,
+			Jar:     jar,
+			Timeout: requestTimeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
 			},

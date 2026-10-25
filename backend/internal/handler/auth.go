@@ -27,6 +27,9 @@ type EBoekhoudenAuthHandler struct {
 	// whether e-boekhouden confirmed that the token is dead. Defaults to
 	// logoutEBoekhouden; tests replace it.
 	logoutEB func(token string) bool
+	// logoutTimeout bounds how long Disconnect waits for logoutEB; zero
+	// means disconnectLogoutTimeout. Tests shorten it.
+	logoutTimeout time.Duration
 
 	// pendingMFA keeps the e-boekhouden Client in memory during the MFA window.
 	// The cookie jar from the login request is needed to complete MFA — it can't
@@ -242,7 +245,11 @@ func (h *EBoekhoudenAuthHandler) Disconnect(c *gin.Context) {
 
 	loggedOut := false
 	if sess.EBoekhoudenToken != "" && !sess.MFAPending && h.logoutEB != nil {
-		loggedOut = h.logoutEB(sess.EBoekhoudenToken)
+		timeout := h.logoutTimeout
+		if timeout <= 0 {
+			timeout = disconnectLogoutTimeout
+		}
+		loggedOut = logoutWithin(h.logoutEB, sess.EBoekhoudenToken, timeout)
 	}
 	h.pendingMFA.Delete(sess.ID)
 
@@ -269,6 +276,29 @@ func (h *EBoekhoudenAuthHandler) Disconnect(c *gin.Context) {
 		"ebLoggedOut": loggedOut,
 		"purgedKeys":  purged,
 	})
+}
+
+// disconnectLogoutTimeout bounds the logout at e-boekhouden in Disconnect.
+// The token is cleared locally either way, so a stalled e-boekhouden must not
+// keep the "Verbinding verbreken" dialog spinning: after this long the answer
+// is ebLoggedOut:false (honest, not confirmed) and the logout finishes in the
+// background, itself bounded by the client's request timeout.
+const disconnectLogoutTimeout = 15 * time.Second
+
+// logoutWithin runs logout for token and returns its result, or false when
+// it takes longer than d. The channel is buffered so a late logout can still
+// deliver its result and end.
+func logoutWithin(logout func(string) bool, token string, d time.Duration) bool {
+	done := make(chan bool, 1)
+	go func() { done <- logout(token) }()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case ok := <-done:
+		return ok
+	case <-timer.C:
+		return false
+	}
 }
 
 // logoutEBoekhouden is the production logoutEB: it sends the logout request

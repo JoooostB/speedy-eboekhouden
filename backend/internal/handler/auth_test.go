@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
@@ -77,6 +78,34 @@ func TestDisconnectHonestWhenLogoutNotConfirmed(t *testing.T) {
 		t.Errorf("ebLoggedOut = %v, want false", resp["ebLoggedOut"])
 	}
 	// The token is cleared and the caches are purged regardless.
+	if sess.EBoekhoudenToken != "" {
+		t.Error("token not cleared")
+	}
+	if n, _ := resp["purgedKeys"].(float64); int(n) != len(userKeys(testUserA)) {
+		t.Errorf("purgedKeys = %v, want %d", resp["purgedKeys"], len(userKeys(testUserA)))
+	}
+}
+
+// A stalled e-boekhouden must not hold up "Verbinding verbreken": after the
+// logout timeout the token is cleared anyway and the answer is honest.
+func TestDisconnectDoesNotWaitForAStalledLogout(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	h := &EBoekhoudenAuthHandler{
+		redis:         newFakeScanner(0, userKeys(testUserA)...),
+		logoutEB:      func(string) bool { <-release; return true },
+		logoutTimeout: 20 * time.Millisecond,
+	}
+	sess := &session.SessionData{ID: "sess-5", UserID: testUserA, EBoekhoudenToken: "tok"}
+
+	start := time.Now()
+	code, resp := callDisconnect(t, h, sess)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Disconnect waited %v for a stalled logout", elapsed)
+	}
+	if code != http.StatusOK || resp["ebLoggedOut"] != false {
+		t.Errorf("status = %d, response = %v, want 200 with ebLoggedOut false", code, resp)
+	}
 	if sess.EBoekhoudenToken != "" {
 		t.Error("token not cleared")
 	}

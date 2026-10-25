@@ -103,6 +103,26 @@ func TestConstructorsUseProductionBaseURL(t *testing.T) {
 	}
 }
 
+// Every client is bounded, so a stalled e-boekhouden ends in an error
+// instead of a request that hangs until the connection drops.
+func TestConstructorsSetRequestTimeout(t *testing.T) {
+	for name, build := range map[string]func() (*Client, error){
+		"NewClient":          NewClient,
+		"NewClientWithToken": func() (*Client, error) { return NewClientWithToken("tok") },
+		"NewClientForTesting": func() (*Client, error) {
+			return NewClientForTesting("http://127.0.0.1:1", "tok")
+		},
+	} {
+		c, err := build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.httpClient.Timeout != requestTimeout || requestTimeout <= 0 {
+			t.Errorf("%s: Timeout = %v, want %v", name, c.httpClient.Timeout, requestTimeout)
+		}
+	}
+}
+
 func TestAPIPutAndDelete(t *testing.T) {
 	const envelope = `{"errorType":"validation","message":"Naam is verplicht","code":"VAL_001"}`
 	const securityEnvelope = `{"errorType":"security","message":"Niet ingelogd","code":"SECURITY_010"}`
