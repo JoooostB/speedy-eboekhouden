@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   AppBar,
+  Avatar,
   Toolbar,
   Typography,
   Container,
@@ -18,6 +19,7 @@ import {
   Divider,
 } from "@mui/material";
 import { useAuth } from "../context/AuthContext";
+import { userInitials } from "./shared/userInitials";
 import { EBoekhoudenConnectDialog } from "./EBoekhoudenConnectDialog";
 import { EBoekhoudenDisconnectDialog } from "./EBoekhoudenDisconnectDialog";
 
@@ -52,7 +54,7 @@ interface Props {
 }
 
 export function Layout({ children }: Props) {
-  const { user, eboekhoudenConnected, logout } = useAuth();
+  const { user, avatarUrl, eboekhoudenConnected, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [connectOpen, setConnectOpen] = useState(false);
@@ -217,19 +219,27 @@ export function Layout({ children }: Props) {
               sx={{
                 width: 36,
                 height: 36,
-                fontSize: "0.875rem",
-                fontWeight: 600,
+                p: 0,
                 bgcolor: "rgba(255,255,255,0.1)",
                 "&:hover": { bgcolor: "rgba(255,255,255,0.18)" },
               }}
             >
-              {/* Initials avatar */}
-              {(user?.name || "?")
-                .split(" ")
-                .map((w) => w[0])
-                .join("")
-                .slice(0, 2)
-                .toUpperCase()}
+              {/* The profile photo from Instellingen; initials without one
+                  or when it fails to load. The button carries the name. */}
+              <Avatar
+                src={avatarUrl || undefined}
+                alt=""
+                sx={{
+                  width: 36,
+                  height: 36,
+                  fontSize: "0.875rem",
+                  fontWeight: 600,
+                  bgcolor: "transparent",
+                  color: "inherit",
+                }}
+              >
+                {userInitials(user?.name)}
+              </Avatar>
             </IconButton>
           </Tooltip>
 

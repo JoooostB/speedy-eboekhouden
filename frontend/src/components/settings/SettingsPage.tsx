@@ -20,6 +20,7 @@ import { track } from "../../analytics";
 import { PasskeysSection } from "./PasskeysSection";
 import { LearnedSection } from "./LearnedSection";
 import { EBoekhoudenDisconnectDialog } from "../EBoekhoudenDisconnectDialog";
+import { userInitials } from "../shared/userInitials";
 
 /** Display names of the onderneming types; the stored values are codes. */
 const ENTITY_TYPE_LABELS: Record<"BV" | "ZZP" | "EM" | "ANDERS", string> = {
@@ -513,7 +514,7 @@ export function SettingsPage() {
             src={avatarUrl || undefined}
             sx={{ width: 72, height: 72, fontSize: "1.5rem", bgcolor: "primary.main" }}
           >
-            {(user?.name || "?").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
+            {userInitials(user?.name)}
           </Avatar>
           <Box>
             <Button variant="outlined" size="small" component="label" sx={{ mr: 1 }}>
