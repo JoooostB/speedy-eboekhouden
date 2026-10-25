@@ -198,7 +198,7 @@ bold "Section 15: Landing Page Content"
 # ============================================================
 
 LANDING=$(curl -s "${BASE}/")
-assert_contains "Landing has the hero" "$LANDING" "Minder klikken in"
+assert_contains "Landing has the hero" "$LANDING" "Supercharge je"
 assert_contains "Landing mentions afschriften" "$LANDING" "afschriften"
 assert_contains "Landing mentions factuur" "$LANDING" "factuur"
 assert_contains "Landing mentions passkey" "$LANDING" "passkey"
