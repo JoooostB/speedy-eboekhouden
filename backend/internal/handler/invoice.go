@@ -658,6 +658,9 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	mutResp, err := client.CreateMutatie(invoiceMutPayload)
 	if err != nil {
 		log.Printf("SubmitFull CreateMutatie error: %s", errClass(err))
+		if bookingRefused(err) {
+			discardStagedUpload(client, src, arch)
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "De factuur is niet geboekt: " + err.Error()})
 		return
 	}
@@ -667,12 +670,14 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		MutId int `json:"mutId"`
 	}
 	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
+		// Whether the invoice was booked is unknown, so the staged file stays.
 		log.Printf("SubmitFull invoice unmarshal error: %v (%d bytes)", jsonErr, len(mutResp))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden gaf een onverwacht antwoord. Kijk in e-Boekhouden of de factuur is geboekt voordat je het opnieuw probeert."})
 		return
 	}
 	if mutResult.MutNr == 0 {
 		log.Printf("SubmitFull invoice mutNr=0 (%d bytes)", len(mutResp))
+		discardStagedUpload(client, src, arch)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden heeft de factuur niet geboekt en gaf geen reden. Controleer de gegevens en probeer het opnieuw."})
 		return
 	}
@@ -1061,6 +1066,9 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	mutResp, err := client.CreateMutatie(mutPayload)
 	if err != nil {
 		log.Printf("SubmitReceipt CreateMutatie error: %s", errClass(err))
+		if bookingRefused(err) {
+			discardStagedUpload(client, src, arch)
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Het bonnetje is niet geboekt: " + err.Error()})
 		return
 	}
@@ -1070,12 +1078,14 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		MutId int `json:"mutId"`
 	}
 	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
+		// Whether the receipt was booked is unknown, so the staged file stays.
 		log.Printf("SubmitReceipt unmarshal error: %v (%d bytes)", jsonErr, len(mutResp))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden gaf een onverwacht antwoord. Kijk in e-Boekhouden of het bonnetje is geboekt voordat je het opnieuw probeert."})
 		return
 	}
 	if mutResult.MutNr == 0 {
 		log.Printf("SubmitReceipt mutNr=0 (%d bytes)", len(mutResp))
+		discardStagedUpload(client, src, arch)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden heeft het bonnetje niet geboekt en gaf geen reden. Controleer de gegevens en probeer het opnieuw."})
 		return
 	}

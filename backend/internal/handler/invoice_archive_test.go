@@ -376,6 +376,9 @@ type fakeEBoekhouden struct {
 	renameBody string // "" answers true
 	moveBody   string // "" moves the files
 	createBody string // "" creates the folder and answers it
+
+	mutatieBody   string // "" books with mutNr
+	mutatieHangup bool   // drops the connection instead of answering
 }
 
 type fakeCall struct {
@@ -385,6 +388,7 @@ type fakeCall struct {
 var (
 	filelistPathRe   = regexp.MustCompile(`^/v1/api/folder/(\d+)/filelist`)
 	bulkUpdatePathRe = regexp.MustCompile(`^/v1/api/folder/bulk/update/(\d+)$`)
+	deleteFilePathRe = regexp.MustCompile(`^/v1/api/folder/(\d+)$`)
 )
 
 // newFakeEBoekhouden sets up the testFolders tree with folder 100 ("Inbox")
@@ -514,7 +518,30 @@ func (f *fakeEBoekhouden) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		write(map[string]any{"updatedIds": updated, "notFoundIds": notFound, "errorMessages": []string{}, "successMessages": []string{}})
 	case r.Method == http.MethodPost && path == "/v1/api/mutatie":
+		if f.mutatieHangup {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				conn.Close()
+			}
+			return
+		}
+		if f.mutatieBody != "" {
+			w.Write([]byte(f.mutatieBody))
+			return
+		}
 		write(map[string]any{"mutNr": f.mutNr, "mutId": 9})
+	case r.Method == http.MethodDelete && deleteFilePathRe.MatchString(path):
+		id, _ := strconv.Atoi(deleteFilePathRe.FindStringSubmatch(path)[1])
+		for folderID, files := range f.files {
+			for i, file := range files {
+				if file.ID == id {
+					f.files[folderID] = append(files[:i:i], files[i+1:]...)
+					write(true)
+					return
+				}
+			}
+		}
+		write(false)
 	case r.Method == http.MethodPost && path == "/v1/api/folderkoppel/koppel/item":
 		if f.linkStatus != 0 {
 			w.WriteHeader(f.linkStatus)

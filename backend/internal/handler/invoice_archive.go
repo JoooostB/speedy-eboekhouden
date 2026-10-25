@@ -25,7 +25,9 @@ import (
 //     upload must be a PDF, JPG or PNG.
 //  2. stageArchiveFile makes sure there is a file id to link: a mail-folder
 //     document already has one, an upload is uploaded now under its archive
-//     name (archiveFileName), made unique in the target folder.
+//     name (archiveFileName), made unique in the target folder. When
+//     e-boekhouden then refuses the booking, discardStagedUpload removes
+//     that upload again.
 //  3. completeArchive runs after the mutation is linked: a mail-folder
 //     document is renamed and moved out of the mail folder, and any failure
 //     is reported as archiveWarning on an otherwise successful booking.
@@ -363,6 +365,33 @@ func (h *InvoiceHandler) stageArchiveFile(client *eboekhouden.Client, src archiv
 		return archiveOutcome{}
 	}
 	return archiveOutcome{fileID: id, name: finalName, targetFolderID: folderID}
+}
+
+// bookingRefused reports whether a failed CreateMutatie call means that
+// e-boekhouden answered and did not book: an error envelope, an error status
+// or an expired session. A transport failure (timeout, dropped connection)
+// leaves open whether the mutation exists.
+func bookingRefused(err error) bool {
+	var api *eboekhouden.APIError
+	return errors.As(err, &api) || errors.Is(err, eboekhouden.ErrSessionExpired)
+}
+
+// discardStagedUpload removes the file stageArchiveFile uploaded for a
+// booking that e-boekhouden refused, so a failed booking leaves no unlinked
+// file in the archive (and a retry gets the plain archive name, not "_2").
+// Only an upload is removed: a mail-folder document was there before the
+// booking and stays. Callers skip this when it is unknown whether the
+// mutation exists (no answer, or an answer Speedy cannot read), because the
+// file may then belong to a real booking. Best-effort: a failure is logged.
+func discardStagedUpload(client *eboekhouden.Client, src archiveSource, arch archiveOutcome) {
+	if src.fromMailFolder() || arch.fileID <= 0 {
+		return
+	}
+	if err := client.DeleteArchiveFile(arch.fileID); err != nil {
+		log.Printf("Submit: removing staged file %d after a refused booking failed: %s", arch.fileID, errClass(err))
+		return
+	}
+	log.Printf("Submit: removed staged file %d after a refused booking", arch.fileID)
 }
 
 // uploadAndResolveArchiveFile uploads data into folderID under name, made
