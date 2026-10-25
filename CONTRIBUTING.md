@@ -1,28 +1,28 @@
 # Contributing to Speedy e-Boekhouden
 
-Thanks for considering contributing! This project started as a simple hour-logging tool and has grown into a full bookkeeping platform with AI features. Every contribution helps.
+Thanks for wanting to help. Speedy started as a tool for logging hours in e-boekhouden.nl and now also handles bank lines, invoices and the Mail & herken folder, with Claude doing the reading and classifying.
 
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
-- **Go 1.26+** (backend)
-- **Docker + Docker Compose** (full stack — recommended)
-- An **e-boekhouden.nl** account (for integration testing)
-- (Optional) **Anthropic API key** (for testing AI features)
+- Docker with Compose v2, to run the full stack
+- Go 1.26 or newer, for backend work outside Docker
+- An e-boekhouden.nl account, to try changes against a real administration
+- Optionally, an Anthropic API key to try the AI features
 
-> **Note:** You do not need Node.js installed locally. All frontend builds happen inside Docker containers.
+You don't need Node.js on your machine. The frontend is built, type-checked and tested inside Docker.
 
-### Running Locally
+### Running locally
 
 ```bash
-# Full stack (recommended)
-docker-compose up --build
+cp .env.example .env
+docker compose up --build
 ```
 
-This starts: backend (:8080), frontend (inside Docker), landing page (:3000), PostgreSQL (:5432), Redis (:6379).
+This starts the backend (:8080), the frontend (only reachable through the landing proxy), the landing page with the app at <http://localhost:3000/app/>, PostgreSQL (:5432) and Redis (:6379).
 
-For backend-only development (requires running PostgreSQL and Redis):
+For backend-only work, with PostgreSQL and Redis already running:
 
 ```bash
 cd backend
@@ -33,91 +33,111 @@ COOKIE_SECURE=false \
 go run ./cmd/server
 ```
 
-## How to Contribute
+### Running the tests
 
-### Reporting Bugs
+```bash
+# Backend
+cd backend && go build ./... && go vet ./... && go test ./... -race
+
+# Frontend: tsc runs as part of the image build, then vitest
+docker build --target builder -t speedy-frontend-test ./frontend
+docker run --rm speedy-frontend-test npx vitest run
+
+# Smoke tests against a running stack
+./test/smoke.sh http://localhost:3000
+```
+
+Handler tests run against a fake e-boekhouden (`httptest`), so they need no account. `TESTPLAN.md` is the manual checklist for what only a real administration can show.
+
+## How to contribute
+
+### Reporting bugs
 
 Open an issue on GitHub with:
-- What you expected to happen
-- What actually happened
-- Steps to reproduce
-- Browser and OS (for frontend bugs)
 
-### Suggesting Features
+- what you expected to happen
+- what happened instead
+- steps to reproduce
+- browser and OS, for frontend bugs
 
-Open an issue with the `enhancement` label. Describe the use case, not just the solution.
+### Suggesting features
 
-### Submitting Code
+Open an issue with the `enhancement` label. Describe the problem you want solved as well as the solution you have in mind.
 
-1. **Fork** the repo and create a branch from `main`
-2. **Make your changes** — keep them focused on a single concern
-3. **Test locally** — run `docker-compose up --build` and verify the full flow
-4. **Backend changes** — ensure `go vet ./...` and `go build ./...` pass
-5. **Open a pull request** — describe what and why, not how (the code shows how)
+### Submitting code
 
-### Pull Request Guidelines
+1. Fork the repo and create a branch from `main`.
+2. Keep the change to one concern.
+3. Run the tests above, and for UI changes try the flow in the browser with `docker compose up --build`.
+4. Open a pull request that explains what changes and why.
 
-- Keep PRs small and focused. One feature or fix per PR.
-- Write clear commit messages. Prefer imperative mood ("Add X" not "Added X").
-- Don't introduce new dependencies without good reason.
-- All CI checks must pass before merge.
+### Pull request guidelines
 
-## Project Structure
+- One feature or fix per PR.
+- Write commit messages in the imperative mood ("Add X", not "Added X").
+- Don't add dependencies without a good reason.
+- CI must pass before merge. It builds, vets and tests the backend with `-race`, type-checks the frontend and builds the three Docker images. CI does not run vitest, so run it yourself.
 
-```
-backend/         Go API server (Gin + PostgreSQL + Redis)
-frontend/        React app (Vite + TypeScript + MUI + react-router-dom)
-landing/         Static landing page + security page
+## Project structure
+
+```text
+backend/         Go API server (Gin, PostgreSQL, Redis)
+frontend/        React app (Vite, TypeScript, MUI, react-router-dom)
+landing/         Static landing, security and disclaimer pages
 deploy/          Kubernetes manifests (Kustomize)
+test/smoke.sh    Smoke tests
 ```
 
 ### Backend
 
-The backend handles authentication (passkeys), session management (Redis), proxies calls to e-boekhouden.nl, and integrates the Claude API for AI features.
+The backend handles passkey authentication and sessions, talks to e-boekhouden.nl on the user's behalf and calls the Claude API.
 
 | Package | Purpose |
 |---------|---------|
 | `internal/auth` | WebAuthn passkey service |
-| `internal/claude` | Claude API (invoice OCR, transaction classification) |
-| `internal/crypto` | AES-256-GCM encryption |
-| `internal/database` | PostgreSQL: users, teams, passkeys, settings |
-| `internal/eboekhouden` | HTTP client for e-boekhouden.nl API |
-| `internal/handler` | Gin HTTP handlers |
-| `internal/middleware` | CORS, security headers, rate limiting |
-| `internal/session` | Redis-backed session store + middleware |
+| `internal/claude` | Claude API: document reading, bank-line classification |
 | `internal/config` | Environment-based configuration |
+| `internal/crypto` | AES-256-GCM encryption |
+| `internal/database` | PostgreSQL: users, teams, passkeys, settings, learned bookings |
+| `internal/eboekhouden` | HTTP client for e-boekhouden.nl |
+| `internal/handler` | Gin HTTP handlers |
+| `internal/mail` | SMTP mailer for welcome and recovery e-mails |
+| `internal/middleware` | CORS, security headers, rate limiting |
+| `internal/session` | Redis-backed session store and middleware |
+| `internal/storage` | Cloudflare R2 client for avatars |
 
 ### Frontend
 
-React SPA with two-level auth (Speedy passkey + e-boekhouden connection). Components in `src/components/`, API calls in `src/api/`, state management in `src/context/`.
+A React SPA with two levels of authentication: the Speedy passkey session, then the e-boekhouden connection. Components live in `src/components/`, API calls in `src/api/`, auth state in `src/context/`. Unit tests (`*.test.ts`) sit next to the code they test.
 
 ### Landing
 
-Static HTML + CSS. No build step. Served by nginx.
+Static HTML and CSS with one small shared script, served by nginx. There is no build step.
 
-## Code Style
+## Code style
 
-- **Go:** Standard `gofmt` formatting. Run `go vet`.
-- **TypeScript:** Follow existing patterns. TypeScript compiler catches most issues.
-- **CSS:** BEM-ish class names. Use existing CSS variables in `landing/style.css`.
+- Go: `gofmt`, and `go vet` must pass.
+- TypeScript: follow the existing patterns; the compiler catches most mistakes.
+- CSS: kebab-case class names, and the CSS variables already defined in `landing/style.css`.
+- Text: the landing pages and the app UI are in Dutch; code comments and docs are in English.
 
 ## Security
 
-This project handles user credentials and API keys. If you're contributing code that touches authentication, sessions, encryption, or data handling:
+This project handles e-boekhouden credentials, tokens and API keys. If your change touches authentication, sessions, encryption or data handling:
 
-- Never log credentials, tokens, API keys, or bookkeeping data
-- Never persist e-boekhouden credentials to disk or database
-- Keep HttpOnly, Secure, and SameSite cookie flags
-- Ensure all external calls use HTTPS
-- Use parameterized queries for all database operations
-- Encrypt sensitive data at rest with the existing AES-256-GCM utilities
+- Never log credentials, tokens, API keys or bookkeeping data.
+- Never store e-boekhouden passwords or MFA codes, on disk or in the database.
+- Keep the HttpOnly, Secure and SameSite cookie flags.
+- Use HTTPS for every external call.
+- Use parameterized queries for every database operation.
+- Encrypt sensitive data at rest with the existing AES-256-GCM helpers.
 
-If you find a security vulnerability, please **do not open a public issue**. Instead, email info@speedy-eboekhouden.nl directly.
+Report security vulnerabilities to info@speedy-eboekhouden.nl, not in a public issue.
 
-## AI-Assisted Development
+## AI-assisted development
 
-This project was substantially developed with the help of [Claude](https://claude.ai) by Anthropic. If you use AI tools for your contributions, please review and test all generated code before submitting.
+Much of this project was written with [Claude](https://claude.ai) by Anthropic. If you use AI tools for a contribution, review and test the generated code before you submit it.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By contributing, you agree that your contributions are licensed under the MIT License.
