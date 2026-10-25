@@ -1112,6 +1112,12 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 // For backwards-compat with users who have the doubled structure from the
 // previous broken behavior, we look for an existing "Facturen" folder at
 // any depth so we don't strand old files.
+//
+// Deleted folders (isDeleted, still listed by e-boekhouden) are never
+// reused: a document filed there would vanish with the folder. A level that
+// only exists as a deleted folder is created afresh. A create call whose
+// answer carries no folder id is an error, not id 0: id 0 is the root, so
+// carrying on would create the next level at the top of the archive.
 func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, datum time.Time) (int, error) {
 	maandNamen := []string{
 		"01 Januari", "02 Februari", "03 Maart", "04 April", "05 Mei", "06 Juni",
@@ -1121,19 +1127,24 @@ func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, d
 	jaar := fmt.Sprintf("%d", datum.Year())
 	maand := maandNamen[datum.Month()-1]
 
-	// Get all folders
-	raw, err := client.GetArchiveFolders()
+	all, err := listArchiveFolders(client)
 	if err != nil {
 		return 0, fmt.Errorf("getting folders: %w", err)
 	}
-
-	var folders []struct {
-		ID       int    `json:"id"`
-		Naam     string `json:"naam"`
-		ParentId int    `json:"parentId"`
+	folders := make([]archiveFolder, 0, len(all))
+	for _, f := range all {
+		if !f.IsDeleted {
+			folders = append(folders, f)
+		}
 	}
-	if err := json.Unmarshal(raw, &folders); err != nil {
-		return 0, fmt.Errorf("parsing folders: %w", err)
+	// childNamed returns the live folder called name directly under parent.
+	childNamed := func(parent int, name string) int {
+		for _, f := range folders {
+			if f.Naam == name && f.ParentID == parent {
+				return f.ID
+			}
+		}
+		return 0
 	}
 
 	// Find "Facturen" — preferring one at the top level (parentId == 0,
@@ -1141,85 +1152,58 @@ func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, d
 	// there IS one under a folder literally named "Basismap" (legacy doubled
 	// structure from the old broken code), reuse that one so old files stay
 	// findable. If neither exists, create a fresh Facturen at the root.
-	var rootId int
-	for _, f := range folders {
-		if f.Naam == "Facturen" && f.ParentId == 0 {
-			rootId = f.ID
-			break
-		}
-	}
+	rootId := childNamed(0, "Facturen")
 	if rootId == 0 {
 		// Legacy fallback: look for Facturen under any "Basismap" parent.
-		basismapIDs := map[int]bool{}
 		for _, f := range folders {
 			if f.Naam == "Basismap" {
-				basismapIDs[f.ID] = true
-			}
-		}
-		for _, f := range folders {
-			if f.Naam == "Facturen" && basismapIDs[f.ParentId] {
-				rootId = f.ID
-				break
+				if id := childNamed(f.ID, "Facturen"); id != 0 {
+					rootId = id
+					break
+				}
 			}
 		}
 	}
 	if rootId == 0 {
 		// Create Facturen directly at the implicit root.
-		payload, _ := json.Marshal(map[string]any{"parentFolderId": 0, "name": "Facturen"})
-		resp, err := client.CreateArchiveFolder(payload)
-		if err != nil {
+		if rootId, err = createArchiveFolder(client, 0, "Facturen"); err != nil {
 			return 0, fmt.Errorf("creating Facturen folder: %w", err)
 		}
-		var created struct {
-			ID int `json:"id"`
-		}
-		json.Unmarshal(resp, &created)
-		rootId = created.ID
 	}
 
-	// Find or create year folder
-	var yearId int
-	for _, f := range folders {
-		if f.Naam == jaar && f.ParentId == rootId {
-			yearId = f.ID
-			break
-		}
-	}
+	yearId := childNamed(rootId, jaar)
 	if yearId == 0 {
-		payload, _ := json.Marshal(map[string]any{"parentFolderId": rootId, "name": jaar})
-		resp, err := client.CreateArchiveFolder(payload)
-		if err != nil {
+		if yearId, err = createArchiveFolder(client, rootId, jaar); err != nil {
 			return 0, fmt.Errorf("creating year folder: %w", err)
 		}
-		var created struct {
-			ID int `json:"id"`
-		}
-		json.Unmarshal(resp, &created)
-		yearId = created.ID
 	}
 
-	// Find or create month folder
-	var monthId int
-	for _, f := range folders {
-		if f.Naam == maand && f.ParentId == yearId {
-			monthId = f.ID
-			break
-		}
-	}
+	monthId := childNamed(yearId, maand)
 	if monthId == 0 {
-		payload, _ := json.Marshal(map[string]any{"parentFolderId": yearId, "name": maand})
-		resp, err := client.CreateArchiveFolder(payload)
-		if err != nil {
+		if monthId, err = createArchiveFolder(client, yearId, maand); err != nil {
 			return 0, fmt.Errorf("creating month folder: %w", err)
 		}
-		var created struct {
-			ID int `json:"id"`
-		}
-		json.Unmarshal(resp, &created)
-		monthId = created.ID
 	}
 
 	return monthId, nil
+}
+
+// errFolderCreateNoID is a create-folder answer without a usable folder id.
+var errFolderCreateNoID = errors.New("e-boekhouden answered the folder creation without a folder id")
+
+// createArchiveFolder creates a folder called name under parentID (0 is the
+// root) and returns the new folder's id.
+func createArchiveFolder(client *eboekhouden.Client, parentID int, name string) (int, error) {
+	payload, _ := json.Marshal(map[string]any{"parentFolderId": parentID, "name": name})
+	raw, err := client.CreateArchiveFolder(payload)
+	if err != nil {
+		return 0, err
+	}
+	var created archiveFolder
+	if err := json.Unmarshal(raw, &created); err != nil || created.ID <= 0 {
+		return 0, errFolderCreateNoID
+	}
+	return created.ID, nil
 }
 
 // Submit handles POST /api/v1/invoices/submit — simple mutation passthrough (legacy).

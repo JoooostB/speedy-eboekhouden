@@ -375,6 +375,7 @@ type fakeEBoekhouden struct {
 	linkStatus int    // 0 answers 200
 	renameBody string // "" answers true
 	moveBody   string // "" moves the files
+	createBody string // "" creates the folder and answers it
 }
 
 type fakeCall struct {
@@ -428,6 +429,10 @@ func (f *fakeEBoekhouden) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "/v1/api/folder/directory":
 		write(f.folders)
 	case r.Method == http.MethodPost && path == "/v1/api/folder/directory":
+		if f.createBody != "" {
+			w.Write([]byte(f.createBody))
+			return
+		}
 		var req struct {
 			ParentFolderID int    `json:"parentFolderId"`
 			Name           string `json:"name"`

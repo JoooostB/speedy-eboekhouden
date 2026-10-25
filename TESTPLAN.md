@@ -199,6 +199,7 @@ End-to-end with a real administration. The Go and vitest suites cover the status
 - [ ] Live-only, name conflict: first put a file with exactly the expected archive name in the target folder, then book. The booked file becomes `…_2.pdf` (counter before the extension) and nothing is overwritten
 - [ ] Live-only, explicit target: pick a folder in "Verplaatsen naar"; the file lands there with the same id as before (links intact). The picker never offers the mail folder or its subfolders; through the API such a target is refused with 400 ("De mailmap kan geen doelmap zijn" / "Een submap van de mailmap kan geen doelmap zijn")
 - [ ] Live-only, supplier folder: when the supplier already has a folder in the archive, the picker preselects it
+- [ ] Live-only, deleted month folder: delete `Facturen / 2026 / 10 Oktober` in e-Boekhouden, then book a document without picking a folder. Speedy creates a new "10 Oktober" under "2026" and files the document there, never in the deleted folder. Check in devtools that `GET /v1/api/folder/directory` still lists the deleted folder with `isDeleted: true`: ______
 - [ ] Book a receipt (JPG) against its bank line: one "Geld uitgegeven" mutation; the file is renamed `JJJJ-MM-DD_Leverancier_bonnetje.jpg` and moved
 
 ### 14d. Booking without a match, then linking the payment
