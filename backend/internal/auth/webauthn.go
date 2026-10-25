@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -28,10 +29,50 @@ type WebAuthnService struct {
 
 type challengeEntry struct {
 	SessionData *gowebauthn.SessionData
-	UserID      string // empty during registration
-	Email       string
-	Name        string
-	ExpiresAt   time.Time
+	// Purpose is the ceremony the challenge was issued for. A challenge is
+	// only accepted by the finish step of that same ceremony.
+	Purpose challengePurpose
+	// UserID is the account a recovery challenge is bound to; empty for
+	// registration and login.
+	UserID    string
+	Email     string
+	Name      string
+	ExpiresAt time.Time
+}
+
+type challengePurpose string
+
+const (
+	purposeRegister challengePurpose = "register"
+	purposeLogin    challengePurpose = "login"
+	purposeRecovery challengePurpose = "recovery"
+)
+
+// ErrChallengeExpired is returned when a ceremony's challenge is unknown
+// (already used, cleaned up, or issued by a restarted server) or expired.
+// The text is what the frontend recognises; keep it.
+var ErrChallengeExpired = errors.New("challenge not found or expired")
+
+// ErrWrongCeremony is returned when a challenge is finished by another
+// ceremony than the one that issued it, for example a registration
+// challenge handed to the recovery finish step.
+var ErrWrongCeremony = errors.New("challenge belongs to another ceremony")
+
+// takeChallenge removes and returns the challenge, refusing an expired one
+// and one issued for another ceremony. A challenge is single use either way.
+func (s *WebAuthnService) takeChallenge(challengeID string, purpose challengePurpose) (*challengeEntry, error) {
+	val, ok := s.challenges.LoadAndDelete(challengeID)
+	if !ok {
+		return nil, ErrChallengeExpired
+	}
+	entry := val.(*challengeEntry)
+	if time.Now().After(entry.ExpiresAt) {
+		return nil, ErrChallengeExpired
+	}
+	if entry.Purpose != purpose {
+		return nil, ErrWrongCeremony
+	}
+	return entry, nil
 }
 
 // NewWebAuthnService creates a new WebAuthn relying party.
@@ -98,6 +139,7 @@ func (s *WebAuthnService) BeginRegistration(ctx context.Context, email, name str
 	challengeID := uuid.New().String()
 	s.challenges.Store(challengeID, &challengeEntry{
 		SessionData: sessionData,
+		Purpose:     purposeRegister,
 		Email:       email,
 		Name:        name,
 		ExpiresAt:   time.Now().Add(5 * time.Minute),
@@ -114,13 +156,9 @@ func (s *WebAuthnService) BeginRegistration(ctx context.Context, email, name str
 // FinishRegistration completes the passkey registration ceremony.
 // Creates the user and team in the database. Returns the new user.
 func (s *WebAuthnService) FinishRegistration(ctx context.Context, challengeID string, r *http.Request) (*database.User, error) {
-	val, ok := s.challenges.LoadAndDelete(challengeID)
-	if !ok {
-		return nil, fmt.Errorf("challenge not found or expired")
-	}
-	entry := val.(*challengeEntry)
-	if time.Now().After(entry.ExpiresAt) {
-		return nil, fmt.Errorf("challenge expired")
+	entry, err := s.takeChallenge(challengeID, purposeRegister)
+	if err != nil {
+		return nil, err
 	}
 
 	user := &webAuthnUser{
@@ -180,16 +218,57 @@ func (s *WebAuthnService) FinishRegistration(ctx context.Context, challengeID st
 	return dbUser, nil
 }
 
-// FinishRecoveryRegistration completes a passkey registration ceremony without creating a new user.
-// Used during account recovery — the user already exists.
-func (s *WebAuthnService) FinishRecoveryRegistration(ctx context.Context, challengeID string, r *http.Request) (*gowebauthn.Credential, error) {
-	val, ok := s.challenges.LoadAndDelete(challengeID)
-	if !ok {
-		return nil, fmt.Errorf("challenge not found or expired")
+// BeginRecoveryRegistration starts a registration ceremony that adds a
+// passkey to an existing account (passkey recovery). Unlike
+// BeginRegistration it does not mint a new WebAuthn user handle: the new
+// passkey carries the account's own handle, because discoverable login
+// compares the authenticator's userHandle with that handle and refuses a
+// passkey registered under any other ("User handle and User ID do not
+// match"). The challenge is bound to the account, so the finish step knows
+// which account it belongs to without trusting the client.
+func (s *WebAuthnService) BeginRecoveryRegistration(ctx context.Context, user *database.User) (json.RawMessage, string, error) {
+	waUser := &webAuthnUser{
+		id:          webAuthnHandle(user),
+		name:        user.Email,
+		displayName: user.Name,
+		credentials: nil,
 	}
-	entry := val.(*challengeEntry)
-	if time.Now().After(entry.ExpiresAt) {
-		return nil, fmt.Errorf("challenge expired")
+
+	options, sessionData, err := s.webauthn.BeginRegistration(waUser)
+	if err != nil {
+		return nil, "", fmt.Errorf("beginning recovery registration: %w", err)
+	}
+
+	challengeID := uuid.New().String()
+	s.challenges.Store(challengeID, &challengeEntry{
+		SessionData: sessionData,
+		Purpose:     purposeRecovery,
+		UserID:      user.ID,
+		Email:       user.Email,
+		Name:        user.Name,
+		ExpiresAt:   time.Now().Add(5 * time.Minute),
+	})
+
+	optionsJSON, err := json.Marshal(options)
+	if err != nil {
+		return nil, "", fmt.Errorf("marshaling options: %w", err)
+	}
+
+	return optionsJSON, challengeID, nil
+}
+
+// FinishRecoveryRegistration completes a recovery registration ceremony
+// without creating a new user. It returns the new credential and the id of
+// the account the challenge was bound to by BeginRecoveryRegistration; a
+// challenge from any other ceremony is refused (ErrWrongCeremony), so a
+// passkey can only be added to the account whose recovery link was used.
+func (s *WebAuthnService) FinishRecoveryRegistration(ctx context.Context, challengeID string, r *http.Request) (*gowebauthn.Credential, string, error) {
+	entry, err := s.takeChallenge(challengeID, purposeRecovery)
+	if err != nil {
+		return nil, "", err
+	}
+	if entry.UserID == "" {
+		return nil, "", ErrWrongCeremony
 	}
 
 	user := &webAuthnUser{
@@ -201,10 +280,10 @@ func (s *WebAuthnService) FinishRecoveryRegistration(ctx context.Context, challe
 
 	credential, err := s.webauthn.FinishRegistration(user, *entry.SessionData, r)
 	if err != nil {
-		return nil, fmt.Errorf("finishing registration: %w", err)
+		return nil, "", fmt.Errorf("finishing registration: %w", err)
 	}
 
-	return credential, nil
+	return credential, entry.UserID, nil
 }
 
 // BeginLogin starts a discoverable passkey login ceremony (no email needed).
@@ -217,6 +296,7 @@ func (s *WebAuthnService) BeginLogin(ctx context.Context) (json.RawMessage, stri
 	challengeID := uuid.New().String()
 	s.challenges.Store(challengeID, &challengeEntry{
 		SessionData: sessionData,
+		Purpose:     purposeLogin,
 		ExpiresAt:   time.Now().Add(5 * time.Minute),
 	})
 
@@ -230,13 +310,9 @@ func (s *WebAuthnService) BeginLogin(ctx context.Context) (json.RawMessage, stri
 
 // FinishLogin completes the passkey login ceremony. Returns the authenticated user.
 func (s *WebAuthnService) FinishLogin(ctx context.Context, challengeID string, r *http.Request) (*database.User, error) {
-	val, ok := s.challenges.LoadAndDelete(challengeID)
-	if !ok {
-		return nil, fmt.Errorf("challenge not found or expired")
-	}
-	entry := val.(*challengeEntry)
-	if time.Now().After(entry.ExpiresAt) {
-		return nil, fmt.Errorf("challenge expired")
+	entry, err := s.takeChallenge(challengeID, purposeLogin)
+	if err != nil {
+		return nil, err
 	}
 
 	handler := func(rawID, userHandle []byte) (gowebauthn.User, error) {
@@ -311,19 +387,22 @@ func (s *WebAuthnService) toWebAuthnUser(dbUser *database.User, creds []*databas
 		})
 	}
 
-	// Use the stored WebAuthn handle — must match what was used during registration
-	userID := dbUser.WebAuthnHandle
-	if len(userID) == 0 {
-		// Fallback for users created before the handle was stored
-		userID = []byte(dbUser.ID)
-	}
-
 	return &webAuthnUser{
-		id:          userID,
+		id:          webAuthnHandle(dbUser),
 		name:        dbUser.Email,
 		displayName: dbUser.Name,
 		credentials: waCreds,
 	}
+}
+
+// webAuthnHandle is the WebAuthn user handle of an account: the stored
+// handle, which must match what its passkeys were registered with, or the
+// account id for users created before the handle was stored.
+func webAuthnHandle(dbUser *database.User) []byte {
+	if len(dbUser.WebAuthnHandle) > 0 {
+		return dbUser.WebAuthnHandle
+	}
+	return []byte(dbUser.ID)
 }
 
 func (s *WebAuthnService) cleanupChallenges() {

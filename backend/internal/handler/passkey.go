@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -289,9 +290,12 @@ func (h *PasskeyHandler) RecoverFinishBegin(c *gin.Context) {
 		return
 	}
 
-	options, challengeID, err := h.webauthn.BeginRegistration(c.Request.Context(), user.Email, user.Name)
+	// The challenge is bound to this account and the new passkey gets the
+	// account's own WebAuthn handle (see BeginRecoveryRegistration).
+	options, challengeID, err := h.webauthn.BeginRecoveryRegistration(c.Request.Context(), user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("Recovery: starting the ceremony for user %s failed: %v", user.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": msgRecoveryStartFailed})
 		return
 	}
 
@@ -302,33 +306,55 @@ func (h *PasskeyHandler) RecoverFinishBegin(c *gin.Context) {
 	})
 }
 
+// Dutch answers of the recovery ceremony. The recovery token is consumed by
+// RecoverFinishBegin, so every failure after it asks for a new link; the
+// request form sits below the message on the recovery page.
+const (
+	msgRecoveryStartFailed = "Speedy kon het herstel niet starten. Vraag hieronder een nieuwe herstellink aan."
+	msgRecoveryIncomplete  = "De herstelaanvraag is onvolledig. Vraag hieronder een nieuwe herstellink aan."
+	msgRecoveryExpired     = "Het herstel duurde te lang. Vraag hieronder een nieuwe herstellink aan."
+	msgRecoveryInvalid     = "Deze herstelaanvraag is ongeldig. Vraag hieronder een nieuwe herstellink aan."
+	msgRecoveryNotCreated  = "Je nieuwe passkey kon niet worden aangemaakt. Vraag hieronder een nieuwe herstellink aan."
+)
+
 // RecoverFinishComplete handles POST /api/v1/auth/recover/finish — completes passkey registration with a recovery token.
+//
+// The account comes from the challenge, which RecoverFinishBegin bound to
+// the account of the recovery token. X-User-ID is still sent by the
+// frontend but only checked against it: trusting the header let anyone
+// with any registration challenge add a passkey to another account.
 func (h *PasskeyHandler) RecoverFinishComplete(c *gin.Context) {
 	challengeID := c.GetHeader("X-Challenge-ID")
-	userID := c.GetHeader("X-User-ID")
-	if challengeID == "" || userID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "X-Challenge-ID and X-User-ID headers required"})
+	if challengeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": msgRecoveryIncomplete})
 		return
 	}
 
-	// FinishRegistration expects a new user flow, but we need to register a credential for an existing user.
-	// We use the WebAuthn service's BeginRegistration/FinishRegistration which creates a new user —
-	// but since the email already exists, CreateUser will fail. We need a different approach.
-	// Let's directly finish the WebAuthn ceremony and add the credential to the existing user.
+	credential, userID, err := h.webauthn.FinishRecoveryRegistration(c.Request.Context(), challengeID, c.Request)
+	switch {
+	case errors.Is(err, auth.ErrChallengeExpired):
+		c.JSON(http.StatusBadRequest, gin.H{"error": msgRecoveryExpired})
+		return
+	case errors.Is(err, auth.ErrWrongCeremony):
+		log.Printf("Recovery: finish refused a challenge from another ceremony")
+		c.JSON(http.StatusBadRequest, gin.H{"error": msgRecoveryInvalid})
+		return
+	case err != nil:
+		// A WebAuthn protocol error (origin, challenge, attestation); it
+		// carries no personal data.
+		log.Printf("Recovery: ceremony failed: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": msgRecoveryNotCreated})
+		return
+	}
+	if claimed := c.GetHeader("X-User-ID"); claimed != "" && claimed != userID {
+		log.Printf("Recovery: finish for user %s carried another X-User-ID; refused", userID)
+		c.JSON(http.StatusBadRequest, gin.H{"error": msgRecoveryInvalid})
+		return
+	}
+
 	user, err := h.db.GetUserByID(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Het account bij deze herstellink bestaat niet meer."})
-		return
-	}
-
-	// The WebAuthn FinishRegistration will try to create a new user and fail on duplicate email.
-	// Instead, we need to handle this at the auth service level.
-	// For now, use a workaround: the recovery begin already validated the token and returned the userID.
-	// The finish just needs to store the new credential.
-	// Since FinishRegistration in auth/webauthn.go creates a user, we need a separate method.
-	credential, err := h.webauthn.FinishRecoveryRegistration(c.Request.Context(), challengeID, c.Request)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
