@@ -4,6 +4,7 @@ import type {
   InvoiceSubmitReceiptRequest,
   ReceiptExtraLine,
 } from "../../api/types";
+import { parseAmount } from "./reviewAmounts";
 
 /**
  * Builds the bodies of POST /invoices/submit-full and /invoices/submit-receipt
@@ -22,7 +23,8 @@ import type {
 
 /** One additional booking line within a receipt as the dialog edits it:
  *  typically a restaurant tip that was added on the card but did not make it
- *  onto the receipt. Amounts are strings while editing. */
+ *  onto the receipt. Amounts are strings while editing ("12,50"), read with
+ *  parseAmount. */
 export interface ExtraLineEdit {
   bedragIncl: string;
   btwCode: string;
@@ -67,9 +69,9 @@ export function isArchiveSource(source: Pick<AnalyzedInvoice, "archiveFileId">):
  *  left out so the backend defaults it to the main line's. */
 export function receiptExtraLines(lines: readonly ExtraLineEdit[], vatRate: (code: string) => number): ReceiptExtraLine[] {
   return lines
-    .filter((el) => (parseFloat(el.bedragIncl) || 0) > 0)
+    .filter((el) => (parseAmount(el.bedragIncl) ?? 0) > 0)
     .map((el) => {
-      const incl = parseFloat(el.bedragIncl) || 0;
+      const incl = parseAmount(el.bedragIncl) ?? 0;
       const rate = vatRate(el.btwCode);
       const btw = rate === 0 ? 0 : +((incl * rate) / (100 + rate)).toFixed(2);
       const excl = +(incl - btw).toFixed(2);

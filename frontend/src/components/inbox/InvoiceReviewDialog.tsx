@@ -51,7 +51,7 @@ import {
   submitButtonLabel,
 } from "./mailDocumentReview";
 import { isBooked, submitOutcome } from "./submitOutcome";
-import { formatFormAmount, fxInvoiceNote } from "./reviewAmounts";
+import { AMOUNT_HINT, formatAmountInput, formatFormAmount, fxInvoiceNote, invalidAmountField, parseAmount } from "./reviewAmounts";
 import { formatMoney } from "../../hooks/mailDocumentsModel";
 import type {
   AnalyzedInvoice,
@@ -116,7 +116,22 @@ function invoiceBlocker(inv: InvoiceEdit): string | null {
     hasImportId: inv.importId !== 0,
     isReceipt: inv.isReceipt,
     isCreditnota: inv.source.invoice.documentType === "creditnota",
+    amountsValid: amountsValid(inv),
   });
+}
+
+/** Whether every amount of a row reads as an amount and the total is above
+ *  zero. An extra line left empty is skipped at booking, so only text that
+ *  is not an amount blocks. */
+function amountsValid(inv: InvoiceEdit): boolean {
+  const incl = parseAmount(inv.bedragIncl);
+  return (
+    incl !== null &&
+    incl > 0 &&
+    parseAmount(inv.bedragExcl) !== null &&
+    parseAmount(inv.btwBedrag) !== null &&
+    inv.extraLines.every((el) => !invalidAmountField(el.bedragIncl))
+  );
 }
 
 interface Props {
@@ -259,28 +274,33 @@ export function InvoiceReviewDialog({
           if (rate === 0) {
             // Zero-rate code (GEEN or reverse charge): force excl to equal
             // incl and zero out the btw amount.
-            updated.btwBedrag = "0.00";
+            updated.btwBedrag = formatAmountInput(0);
             updated.bedragExcl = updated.bedragIncl;
           } else {
             // Non-zero rate: recompute btw from incl using the real rate.
-            const incl = parseFloat(updated.bedragIncl) || 0;
-            const btw = +(incl * rate / (100 + rate)).toFixed(2);
-            updated.btwBedrag = btw.toFixed(2);
-            updated.bedragExcl = (incl - btw).toFixed(2);
+            // Text that is not an amount (yet) leaves the other fields alone.
+            const incl = parseAmount(updated.bedragIncl);
+            if (incl !== null) {
+              const btw = +(incl * rate / (100 + rate)).toFixed(2);
+              updated.btwBedrag = formatAmountInput(btw);
+              updated.bedragExcl = formatAmountInput(incl - btw);
+            }
           }
         } else if (field === "btwBedrag") {
-          const incl = parseFloat(updated.bedragIncl) || 0;
-          const btw = parseFloat(updated.btwBedrag) || 0;
-          updated.bedragExcl = (incl - btw).toFixed(2);
+          const incl = parseAmount(updated.bedragIncl);
+          const btw = parseAmount(updated.btwBedrag);
+          if (incl !== null && btw !== null) {
+            updated.bedragExcl = formatAmountInput(incl - btw);
+          }
         } else if (field === "bedragIncl") {
-          const incl = parseFloat(updated.bedragIncl) || 0;
+          const incl = parseAmount(updated.bedragIncl);
           if (rate === 0) {
             updated.bedragExcl = updated.bedragIncl;
-            updated.btwBedrag = "0.00";
-          } else {
+            updated.btwBedrag = formatAmountInput(0);
+          } else if (incl !== null) {
             const btw = +(incl * rate / (100 + rate)).toFixed(2);
-            updated.btwBedrag = btw.toFixed(2);
-            updated.bedragExcl = (incl - btw).toFixed(2);
+            updated.btwBedrag = formatAmountInput(btw);
+            updated.bedragExcl = formatAmountInput(incl - btw);
           }
         }
 
@@ -416,9 +436,10 @@ export function InvoiceReviewDialog({
         leverancier: inv.leverancier,
         factuurnummer: inv.factuurnummer,
         omschrijving: inv.omschrijving,
-        bedragExcl: parseFloat(inv.bedragExcl) || 0,
-        bedragIncl: parseFloat(inv.bedragIncl) || 0,
-        btwBedrag: parseFloat(inv.btwBedrag) || 0,
+        // invoiceBlocker refused the row above unless all three parse.
+        bedragExcl: parseAmount(inv.bedragExcl) ?? 0,
+        bedragIncl: parseAmount(inv.bedragIncl) ?? 0,
+        btwBedrag: parseAmount(inv.btwBedrag) ?? 0,
         btwCode: inv.btwCode,
         relatieId: inv.relation?.id ?? 0,
         tegenRekeningId: inv.ledgerAccount!.id,
@@ -821,11 +842,14 @@ export function InvoiceReviewDialog({
                       <TextField
                         label="Bedrag excl. BTW"
                         value={inv.bedragExcl}
+                        error={invalidAmountField(inv.bedragExcl)}
+                        helperText={invalidAmountField(inv.bedragExcl) ? AMOUNT_HINT : undefined}
                         onChange={(e) => updateField(index, "bedragExcl", e.target.value)}
                         size="small"
                         fullWidth
                         disabled={submitting}
                         slotProps={{
+                          htmlInput: { inputMode: "decimal" },
                           input: {
                             startAdornment: (
                               <Typography variant="body2" color="text.secondary" sx={{ mr: 0.5 }}>
@@ -838,11 +862,14 @@ export function InvoiceReviewDialog({
                       <TextField
                         label="BTW-bedrag"
                         value={inv.btwBedrag}
+                        error={invalidAmountField(inv.btwBedrag)}
+                        helperText={invalidAmountField(inv.btwBedrag) ? AMOUNT_HINT : undefined}
                         onChange={(e) => updateField(index, "btwBedrag", e.target.value)}
                         size="small"
                         fullWidth
                         disabled={submitting}
                         slotProps={{
+                          htmlInput: { inputMode: "decimal" },
                           input: {
                             startAdornment: (
                               <Typography variant="body2" color="text.secondary" sx={{ mr: 0.5 }}>
@@ -855,11 +882,14 @@ export function InvoiceReviewDialog({
                       <TextField
                         label="Bedrag incl. BTW"
                         value={inv.bedragIncl}
+                        error={invalidAmountField(inv.bedragIncl, { required: true })}
+                        helperText={invalidAmountField(inv.bedragIncl, { required: true }) ? AMOUNT_HINT : undefined}
                         onChange={(e) => updateField(index, "bedragIncl", e.target.value)}
                         size="small"
                         fullWidth
                         disabled={submitting}
                         slotProps={{
+                          htmlInput: { inputMode: "decimal" },
                           input: {
                             startAdornment: (
                               <Typography variant="body2" color="text.secondary" sx={{ mr: 0.5 }}>
@@ -1130,9 +1160,9 @@ export function InvoiceReviewDialog({
                         After the click (or when there's any extra line),
                         the editor below lets the user fine-tune. */}
                     {inv.isReceipt && (() => {
-                      const incl = parseFloat(inv.bedragIncl) || 0;
+                      const incl = parseAmount(inv.bedragIncl) ?? 0;
                       const extraSum = inv.extraLines.reduce(
-                        (sum, el) => sum + (parseFloat(el.bedragIncl) || 0),
+                        (sum, el) => sum + (parseAmount(el.bedragIncl) ?? 0),
                         0,
                       );
                       const bankAmount = inv.bankLine ? Math.abs(inv.bankLine.bedrag) : 0;
@@ -1157,7 +1187,7 @@ export function InvoiceReviewDialog({
                                 size="small"
                                 onClick={() =>
                                   addExtraLine(index, {
-                                    bedragIncl: delta.toFixed(2),
+                                    bedragIncl: formatAmountInput(delta),
                                     btwCode: "GEEN",
                                     omschrijving: "Fooi",
                                   })
@@ -1218,10 +1248,13 @@ export function InvoiceReviewDialog({
                               <TextField
                                 label="Bedrag incl. BTW"
                                 value={el.bedragIncl}
+                                error={invalidAmountField(el.bedragIncl)}
+                                helperText={invalidAmountField(el.bedragIncl) ? AMOUNT_HINT : undefined}
                                 onChange={(e) => updateExtraLine(index, lineIdx, "bedragIncl", e.target.value)}
                                 size="small"
                                 disabled={submitting}
                                 slotProps={{
+                                  htmlInput: { inputMode: "decimal" },
                                   input: {
                                     startAdornment: (
                                       <Typography variant="body2" color="text.secondary" sx={{ mr: 0.5 }}>
@@ -1476,9 +1509,9 @@ function buildEdit(
     leverancier: inv.leverancier ?? "",
     factuurnummer: inv.factuurnummer ?? "",
     datum: inv.datum ?? new Date().toISOString().slice(0, 10),
-    bedragExcl: bedragExcl.toFixed(2),
-    bedragIncl: bedragIncl.toFixed(2),
-    btwBedrag: btwBedrag.toFixed(2),
+    bedragExcl: formatAmountInput(bedragExcl),
+    bedragIncl: formatAmountInput(bedragIncl),
+    btwBedrag: formatAmountInput(btwBedrag),
     btwCode,
     omschrijving: inv.omschrijving ?? "",
     relation: matchedRelation,

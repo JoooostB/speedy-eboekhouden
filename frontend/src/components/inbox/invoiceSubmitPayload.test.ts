@@ -179,4 +179,18 @@ describe("receiptExtraLines", () => {
       { bedragIncl: 10.9, bedragExcl: 10, btwBedrag: 0.9, btwCode: "LAAG_INK_9", omschrijving: undefined },
     ]);
   });
+
+  // The bug: parseFloat("2,50") is 2, so a tip typed as "2,50" was booked
+  // as € 2,00.
+  it("reads amounts typed with a decimal comma", () => {
+    const out = receiptExtraLines(
+      [
+        { bedragIncl: "2,50", btwCode: "GEEN", omschrijving: "Fooi" },
+        { bedragIncl: "1.090,00", btwCode: "LAAG_INK_9", omschrijving: "" },
+      ],
+      vatRate,
+    );
+    expect(out.map((l) => l.bedragIncl)).toEqual([2.5, 1090]);
+    expect(out[1]).toMatchObject({ bedragExcl: 1000, btwBedrag: 90 });
+  });
 });

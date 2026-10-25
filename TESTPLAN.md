@@ -93,6 +93,8 @@ The automated tests cover the handler against a fake e-boekhouden; what e-boekho
 - [ ] Without an API key the upload fails with "Fout bij {bestand}: Vul eerst je Anthropic API-sleutel in bij Instellingen."
 - [ ] The dialog "Facturen controleren" shows the toggle "Factuur"/"Bonnetje", the fields "Leverancier", "Relatie (crediteur)", "Factuurnummer", "Datum", the amounts, "BTW-code", "Tegenrekening", "Archiefmap" and "Omschrijving", and a confidence badge; all fields are editable
 - [ ] A bank line that matches shows as "Gevonden afschriftregel:" with "Koppelen"
+- [ ] Amounts show with a decimal comma ("12,50"). Type "12,50", "1.234,56" and "12.50" in "Bedrag incl. BTW" in turn: "BTW-bedrag" and "Bedrag excl. BTW" follow each time. Type "12,505" or "twaalf": the field turns red with "Vul een bedrag in, bijvoorbeeld 12,50" and "Boeken" skips the row with "Bedrag ontbreekt of klopt niet"
+- [ ] Book an invoice of € 12,50 typed as "12,50", and a receipt with a tip line typed as "2,50": e-Boekhouden shows exactly 12,50 and 2,50 (the old parser booked 12,00 and 2,00)
 - [ ] "Boeken" books the invoice; the dialog shows "1 van 1 facturen geboekt" and "Sluiten"; after closing, both lists reload
 - [ ] With an "Archiefmap" picked, the file is in that folder in e-boekhouden, named `JJJJ-MM-DD_Leverancier_Factuurnummer.pdf` and linked to the mutation. Without a folder and without R2 (the local stack) nothing is archived
 - [ ] Upload the same PDF again: the dialog warns "Mogelijk dubbele factuur"
