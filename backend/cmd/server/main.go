@@ -209,6 +209,7 @@ func main() {
 				// Reference data
 				eb.GET("/ledger-accounts", handler.GetLedgerAccounts)
 				eb.GET("/relations", handler.SearchRelations)
+				eb.GET("/relations/:id", invoiceHandler.GetRelation)
 				eb.GET("/vat-codes", handler.GetVATCodes)
 
 				// Digital archive

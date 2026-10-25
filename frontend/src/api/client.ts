@@ -299,6 +299,12 @@ export const api = {
     return request<Relation[]>(`/relations?q=${encodeURIComponent(query)}`);
   },
 
+  /** The relation's summary incl. its default ledger account
+   *  (grootboekrekeningId, 0 = none). */
+  getRelation(id: number) {
+    return request<Relation>(`/relations/${id}`);
+  },
+
   getVATCodes() {
     return request<VATCode[]>("/vat-codes");
   },
