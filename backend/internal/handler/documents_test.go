@@ -2,10 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joooostb/speedy-eboekhouden/internal/claude"
 	"github.com/joooostb/speedy-eboekhouden/internal/eboekhouden"
 )
@@ -577,5 +581,23 @@ func TestDocumentRedisKeys(t *testing.T) {
 	}
 	if got := documentIgnoredKey("u1"); got != "doc:ignored:u1" {
 		t.Errorf("ignored key = %q", got)
+	}
+}
+
+func TestWriteAnalysisInProgress(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	writeAnalysisInProgress(c)
+
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	// The Dutch text stays in error for older clients; the code is what the
+	// frontend retries on.
+	want := map[string]string{"error": "Dit document wordt al geanalyseerd.", "code": "analysis_in_progress"}
+	if w.Code != http.StatusConflict || !reflect.DeepEqual(body, want) {
+		t.Errorf("got %d %v, want 409 %v", w.Code, body, want)
 	}
 }

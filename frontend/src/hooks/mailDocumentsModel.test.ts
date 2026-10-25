@@ -197,13 +197,20 @@ describe("summarizeRun", () => {
 });
 
 describe("analyze error classification", () => {
-  it("treats 409 as busy", () => {
-    expect(isAnalyzeBusyError({ status: 409, message: "Wordt al geanalyseerd" })).toBe(true);
+  it("treats 409 analysis_in_progress as busy", () => {
+    expect(isAnalyzeBusyError({ status: 409, code: "analysis_in_progress", message: "Dit document wordt al geanalyseerd." })).toBe(true);
     expect(isAnalyzeBusyError({ status: 502 })).toBe(false);
   });
 
-  it("stops the run on no_api_key, credits, 412 and 401", () => {
+  it("does not wait out a 409 that waiting cannot fix", () => {
+    expect(isAnalyzeBusyError({ status: 409, code: "mail_folder_not_configured", message: "Er is nog geen mailmap ingesteld." })).toBe(false);
+    // A 409 without the code is not assumed to be the lock.
+    expect(isAnalyzeBusyError({ status: 409, message: "Dit document wordt al geanalyseerd." })).toBe(false);
+  });
+
+  it("stops the run on no_api_key, no mail folder, credits, 412 and 401", () => {
     expect(isFatalAnalyzeError({ status: 400, code: "no_api_key", message: "Stel eerst een Anthropic API-sleutel in" })).toBe(true);
+    expect(isFatalAnalyzeError({ status: 409, code: "mail_folder_not_configured", message: "Er is nog geen mailmap ingesteld." })).toBe(true);
     expect(isFatalAnalyzeError({ status: 502, code: "claude_error", message: "Je Anthropic API-tegoed is op. Vul je tegoed aan." })).toBe(true);
     expect(isFatalAnalyzeError({ status: 502, code: "claude_error", message: "Your credit balance is too low" })).toBe(true);
     expect(isFatalAnalyzeError({ status: 412, code: "eboekhouden_session_expired" })).toBe(true);

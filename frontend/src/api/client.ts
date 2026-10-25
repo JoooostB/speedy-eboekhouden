@@ -45,9 +45,11 @@ import type {
 const BASE = "/api/v1";
 
 class ApiError extends Error {
-  /** The backend's machine-readable `error` field when it sent one next to
-   *  a human message (e.g. "no_api_key", "claude_error"). Callers that need
-   *  to branch on the kind of failure use this, not the Dutch message. */
+  /** The backend's machine-readable code: its `code` field when it sent one
+   *  (e.g. "analysis_in_progress", "new_ip"), otherwise its `error` field,
+   *  which is a code when a human `message` comes with it (e.g.
+   *  "no_api_key", "claude_error"). Callers that need to branch on the kind
+   *  of failure use this, not the Dutch message. */
   code?: string;
 
   constructor(
@@ -81,7 +83,14 @@ async function throwApiError(res: Response, path: string): Promise<never> {
     window.dispatchEvent(new CustomEvent("eb:session-expired"));
   }
 
-  throw new ApiError(res.status, message, typeof body.error === "string" ? body.error : undefined);
+  throw new ApiError(res.status, message, errorCode(body));
+}
+
+/** The machine-readable code of an error body: `code` when present, else
+ *  `error` (see ApiError.code). */
+function errorCode(body: { code?: unknown; error?: unknown }): string | undefined {
+  if (typeof body.code === "string" && body.code !== "") return body.code;
+  return typeof body.error === "string" ? body.error : undefined;
 }
 
 async function request<T>(
@@ -550,9 +559,10 @@ export const api = {
     return request<MailDocumentsResponse>("/documents");
   },
 
-  /** Analyses one mail-folder document with Claude. 409 means another
-   *  analysis of the same file is still running; force=true discards the
-   *  cached analysis first. */
+  /** Analyses one mail-folder document with Claude. 409 with code
+   *  "analysis_in_progress" means another analysis of the same file is still
+   *  running (a 409 "mail_folder_not_configured" means what it says);
+   *  force=true discards the cached analysis first. */
   analyzeDocument(id: number, force = false) {
     const qs = force ? "?force=true" : "";
     return request<MailDocumentAnalyzeResponse>(`/documents/${id}/analyze${qs}`, { method: "POST" });

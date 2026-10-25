@@ -212,20 +212,24 @@ function asErrorLike(err: unknown): ErrorLike {
   return {};
 }
 
-/** 409: the backend is already analysing this file; wait and retry. */
+/** 409 analysis_in_progress: the backend is already analysing this file;
+ *  wait and retry. The endpoint's other 409 (mail_folder_not_configured)
+ *  does not go away by waiting. */
 export function isAnalyzeBusyError(err: unknown): boolean {
-  return asErrorLike(err).status === 409;
+  const { status, code } = asErrorLike(err);
+  return status === 409 && code === "analysis_in_progress";
 }
 
 /**
  * Errors after which continuing a run is pointless: no API key, no Claude
- * credits (a claude_error whose Dutch message mentions the tegoed), an
- * expired e-boekhouden session (412) or an expired Speedy session (401).
+ * credits (a claude_error whose Dutch message mentions the tegoed), no mail
+ * folder any more, an expired e-boekhouden session (412) or an expired
+ * Speedy session (401).
  */
 export function isFatalAnalyzeError(err: unknown): boolean {
   const { status, code, message } = asErrorLike(err);
   if (status === 401 || status === 412) return true;
-  if (code === "no_api_key") return true;
+  if (code === "no_api_key" || code === "mail_folder_not_configured") return true;
   if (code === "claude_error" && /tegoed|credit|billing/i.test(message ?? "")) return true;
   return false;
 }

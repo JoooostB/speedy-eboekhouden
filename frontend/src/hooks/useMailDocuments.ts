@@ -115,8 +115,9 @@ function statusOf(err: unknown): number | undefined {
 
 /**
  * Calls the analyze endpoint and, when the backend says the file is already
- * being analysed (409), waits and tries again, up to ANALYZE_BUSY_RETRIES
- * attempts. The wait is cut short by the signal (AbortedError).
+ * being analysed (409 analysis_in_progress), waits and tries again, up to
+ * ANALYZE_BUSY_RETRIES attempts. The wait is cut short by the signal
+ * (AbortedError).
  */
 async function analyzeWithRetry(
   id: number,

@@ -98,7 +98,7 @@ Unit tests (vitest) sit next to the modules: `*.test.ts` in `src/` (`analytics.t
 |--------|------|--------------|----------|
 | `GET` | `/documents` | — | `{configured:false}`, `{configured:false, reason:"missing"}` (folder deleted), or `{configured:true, folder:{id,name}, documents:[MailDocument], ignoredCount}`. No Claude or download calls. |
 | `POST` | `/documents/setup` | `{folderId?}` | `{folder:{id,name}}`. Without `folderId` a root folder "Inbox" is reused or created and set as mail folder. 409 when a mail folder is already configured and exists; 404 when `folderId` does not exist. |
-| `POST` | `/documents/:id/analyze` | `?force=true` bypasses both caches | The `/invoices/analyze` response plus `archiveFileId`, `title`, `subtitle`, `status`, `analyzedAt`. Cached 30 days. 409 `Dit document wordt al geanalyseerd.` while a lock exists. |
+| `POST` | `/documents/:id/analyze` | `?force=true` bypasses both caches | The `/invoices/analyze` response plus `archiveFileId`, `title`, `subtitle`, `status`, `analyzedAt`. Cached 30 days. 409 `{error:"Dit document wordt al geanalyseerd.", code:"analysis_in_progress"}` while a lock exists; the frontend retries only on that code (`isAnalyzeBusyError`). |
 | `GET` | `/documents/:id/content` | — | File bytes inline (PDF/JPEG/PNG sniffed, 415 otherwise), `Cache-Control: no-store`. |
 | `POST` | `/documents/:id/ignore` | — | `{id, ignored:true}`. Speedy-only; nothing changes in e-boekhouden. |
 | `DELETE` | `/documents/:id/ignore` | — | `{id, ignored:false}`. Skips the mail-folder check so a vanished file can be cleaned out. |

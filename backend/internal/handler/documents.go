@@ -272,6 +272,14 @@ func (h *InvoiceHandler) writeDocumentsError(c *gin.Context, sess *session.Sessi
 	}
 }
 
+// writeAnalysisInProgress answers an analysis of a file that is already being
+// analysed: 409 with the Dutch text in error and the machine-readable code
+// "analysis_in_progress", which the frontend waits and retries on. Other 409s
+// of the same endpoint (mail_folder_not_configured) are not worth a retry.
+func writeAnalysisInProgress(c *gin.Context) {
+	c.JSON(http.StatusConflict, gin.H{"error": "Dit document wordt al geanalyseerd.", "code": "analysis_in_progress"})
+}
+
 // requireRedis answers 503 when the handler has no Redis; the ignore list,
 // analysis cache and lock all live there.
 func (h *InvoiceHandler) requireRedis(c *gin.Context) bool {
@@ -591,7 +599,7 @@ func (h *InvoiceHandler) AnalyzeDocument(c *gin.Context) {
 		return
 	}
 	if !locked {
-		c.JSON(http.StatusConflict, gin.H{"error": "Dit document wordt al geanalyseerd."})
+		writeAnalysisInProgress(c)
 		return
 	}
 	// Release with a fresh context: the request context is cancelled when the

@@ -106,6 +106,27 @@ describe("request() error handling (unchanged from main)", () => {
   });
 });
 
+describe("machine-readable error codes", () => {
+  it("prefers the code field and keeps the Dutch error as the message", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(409, { error: "Dit document wordt al geanalyseerd.", code: "analysis_in_progress" }),
+    );
+    const err = await caught(api.analyzeDocument(12340002));
+    expect(err.status).toBe(409);
+    expect(err.code).toBe("analysis_in_progress");
+    expect(err.message).toBe("Dit document wordt al geanalyseerd.");
+  });
+
+  it("falls back to the error field without a code", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(409, { error: "mail_folder_not_configured", message: "Er is nog geen mailmap ingesteld." }),
+    );
+    const err = await caught(api.analyzeDocument(12340002));
+    expect(err.code).toBe("mail_folder_not_configured");
+    expect(err.message).toBe("Er is nog geen mailmap ingesteld.");
+  });
+});
+
 describe("requestBlob shares the rules", () => {
   it("fires auth:expired for a 401 and eb:session-expired for a 412", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: "not authenticated" }));
