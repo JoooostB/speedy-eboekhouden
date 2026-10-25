@@ -51,6 +51,7 @@ import {
   submitButtonLabel,
 } from "./mailDocumentReview";
 import { isBooked, submitOutcome } from "./submitOutcome";
+import { initialLedger, ledgerAfterRelationChange, type LedgerSource } from "./invoiceLedger";
 import { AMOUNT_HINT, formatAmountInput, formatFormAmount, fxInvoiceNote, invalidAmountField, parseAmount } from "./reviewAmounts";
 import { formatMoney } from "../../hooks/mailDocumentsModel";
 import type {
@@ -80,8 +81,12 @@ interface InvoiceEdit {
   omschrijving: string;
   /** Selected relation (pre-filled from matchedRelation if available) */
   relation: Relation | null;
-  /** Selected ledger account (pre-filled from grootboekcode) */
+  /** Selected ledger account (pre-filled from the relation's default,
+   *  else from Claude's grootboekcode) */
   ledgerAccount: LedgerAccount | null;
+  /** Where ledgerAccount came from; drives the caption under the picker
+   *  and whether a relation change may replace it. */
+  ledgerSource: LedgerSource;
   /** Linked bank statement line ID (marks it as processed on submit) */
   importId: number;
   /** The bank line shown as the payment: the analysis' match, or the
@@ -237,6 +242,52 @@ export function InvoiceReviewDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveFolders, excludeFolderIds]);
 
+  /** Fetch the default ledger account of the relation on invoice `index`
+   *  when the search hit or a cached analysis did not carry it, and apply
+   *  it unless the user picked the ledger account by hand or another
+   *  relation meanwhile. Best effort: on failure the current account stays. */
+  const resolveRelationLedger = useCallback(
+    (index: number, relationId: number) => {
+      api.getRelation(relationId).then(
+        (rel) => {
+          setInvoices((prev) => {
+            const inv = prev[index];
+            if (!inv || inv.relation?.id !== relationId) return prev;
+            const ledger = ledgerAfterRelationChange(
+              { account: inv.ledgerAccount, source: inv.ledgerSource },
+              rel,
+              ledgerAccounts,
+            );
+            const next = [...prev];
+            next[index] = {
+              ...inv,
+              relation: { ...inv.relation, grootboekrekeningId: rel.grootboekrekeningId ?? 0 },
+              ledgerAccount: ledger.account,
+              ledgerSource: ledger.source,
+            };
+            return next;
+          });
+        },
+        () => {
+          // Without the lookup the current ledger account stays.
+        },
+      );
+    },
+    [ledgerAccounts],
+  );
+
+  // A matched relation whose default is unknown (analyses cached before
+  // the field existed, or a failed lookup at analysis time) is looked up
+  // once when the dialog opens, without a new Claude analysis.
+  useEffect(() => {
+    invoices.forEach((inv, index) => {
+      if (inv.relation && inv.source.matchedRelation?.grootboekrekeningId == null) {
+        resolveRelationLedger(index, inv.relation.id);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /** Flip every invoice to bonnetje- or factuur-mode in one call. Saves the
    *  user from clicking the per-card toggle N times when uploading a stack
    *  of receipts that should all be booked as bonnetjes. */
@@ -268,6 +319,18 @@ export function InvoiceReviewDialog({
         const updated: InvoiceEdit = { ...next[index], [field]: value };
 
         const rate = vatRate(updated.btwCode);
+
+        if (field === "ledgerAccount") {
+          updated.ledgerSource = "manual";
+        } else if (field === "relation") {
+          const ledger = ledgerAfterRelationChange(
+            { account: updated.ledgerAccount, source: updated.ledgerSource },
+            updated.relation,
+            ledgerAccounts,
+          );
+          updated.ledgerAccount = ledger.account;
+          updated.ledgerSource = ledger.source;
+        }
 
         // Reconcile bedragen depending on which field changed.
         if (field === "btwCode") {
@@ -308,7 +371,7 @@ export function InvoiceReviewDialog({
         return next;
       });
     },
-    [vatRate],
+    [vatRate, ledgerAccounts],
   );
 
   /** Append an extra booking line to the receipt at `index`. Called by the
@@ -791,7 +854,10 @@ export function InvoiceReviewDialog({
                       {!inv.isReceipt && (
                         <RelationPicker
                           value={inv.relation}
-                          onChange={(r) => updateField(index, "relation", r)}
+                          onChange={(r) => {
+                            updateField(index, "relation", r);
+                            if (r && r.grootboekrekeningId == null) resolveRelationLedger(index, r.id);
+                          }}
                           label="Relatie (crediteur)"
                           disabled={submitting}
                           grootboekrekeningId={inv.source.crediteurenId || 0}
@@ -956,8 +1022,13 @@ export function InvoiceReviewDialog({
                       )}
                     </Box>
 
-                    {/* AI reasoning for grootboekrekening */}
-                    {inv.source.invoice.redenering && (
+                    {/* Why this grootboekrekening: the relation's default or Claude's reasoning */}
+                    {inv.ledgerSource === "relation" && inv.relation && (
+                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+                        Standaardrekening van {inv.relation.bedrijf}
+                      </Typography>
+                    )}
+                    {inv.ledgerSource === "ai" && inv.source.invoice.redenering && (
                       <Box sx={{ mt: 1, display: "flex", alignItems: "center", gap: 1 }}>
                         <Box
                           component="svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1454,12 +1525,7 @@ function buildEdit(
 ): InvoiceEdit {
   const inv = a.invoice;
 
-  // Try to find ledger account by grootboekcode
-  const matchedLedger = inv.grootboekcode
-    ? ledgerAccounts.find(
-        (la) => la.code === inv.grootboekcode || la.omschrijving.toLowerCase() === inv.grootboekcode.toLowerCase(),
-      ) ?? null
-    : null;
+  const ledger = initialLedger(a.matchedRelation, inv.grootboekcode, ledgerAccounts);
 
   // Build relation from matchedRelation if present
   const matchedRelation: Relation | null = a.matchedRelation
@@ -1467,7 +1533,7 @@ function buildEdit(
         id: a.matchedRelation.id,
         code: a.matchedRelation.code,
         bedrijf: a.matchedRelation.bedrijf,
-        grootboekrekeningId: 0,
+        grootboekrekeningId: a.matchedRelation.grootboekrekeningId ?? null,
         iban: "",
       }
     : null;
@@ -1515,7 +1581,8 @@ function buildEdit(
     btwCode,
     omschrijving: inv.omschrijving ?? "",
     relation: matchedRelation,
-    ledgerAccount: matchedLedger,
+    ledgerAccount: ledger.account,
+    ledgerSource: ledger.source,
     importId: a.matchedBankLine?.id ?? 0,
     bankLine: a.matchedBankLine ?? null,
     isReceipt: inv.isReceipt ?? false,

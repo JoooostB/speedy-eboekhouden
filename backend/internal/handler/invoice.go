@@ -391,21 +391,18 @@ func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData,
 	}
 
 	// Search for matching relation
-	var matchedRelation *gin.H
+	var matchedRelation *relationSummary
 	if invoice.Leverancier != "" && ebClient != nil {
 		raw, err := ebClient.SearchRelations(invoice.Leverancier)
 		if errors.Is(err, eboekhouden.ErrSessionExpired) {
 			return nil, err
 		}
 		if err == nil {
-			var relations []map[string]any
-			if json.Unmarshal(raw, &relations) == nil && len(relations) > 0 {
-				r := relations[0]
-				matchedRelation = &gin.H{
-					"id":      r["id"],
-					"code":    r["code"],
-					"bedrijf": r["bedrijf"],
-				}
+			matchedRelation = matchedRelationFromSearch(raw)
+		}
+		if matchedRelation != nil && matchedRelation.GrootboekrekeningID == nil {
+			if err := fillRelationDefaultLedger(ebClient, matchedRelation); errors.Is(err, eboekhouden.ErrSessionExpired) {
+				return nil, err
 			}
 		}
 	}

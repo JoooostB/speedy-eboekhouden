@@ -135,8 +135,10 @@ export interface Relation {
   id: number;
   code: string;
   bedrijf: string;
-  grootboekrekeningId: number;
-  iban: string;
+  /** Default ledger account (internal id); 0 = none. A search hit may
+   *  lack it (undefined/null = unknown, ask GET /relations/:id). */
+  grootboekrekeningId?: number | null;
+  iban?: string;
 }
 
 export interface VATCode {
@@ -230,6 +232,10 @@ export interface InvoiceAnalyzeResponse {
     id: number;
     code: string;
     bedrijf: string;
+    /** The relation's default ledger account (internal id); 0 = none.
+     *  null when e-Boekhouden could not tell, missing in analyses cached
+     *  before the field existed: both mean "unknown". */
+    grootboekrekeningId?: number | null;
   } | null;
   /** Internal ID of the crediteuren (1600) account */
   crediteurenId: number;

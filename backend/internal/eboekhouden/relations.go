@@ -3,11 +3,19 @@ package eboekhouden
 import (
 	"encoding/json"
 	"net/url"
+	"strconv"
 )
 
 // GetLastRelation returns the last created relation (for code suggestion).
 func (c *Client) GetLastRelation() (json.RawMessage, error) {
 	return c.apiGet("/v1/api/relatie/last?la=false")
+}
+
+// GetRelation returns one relation's full model (GET /v1/api/relatie/{id}),
+// the call e-boekhouden's own relation screen makes. Unlike the search hit it
+// always carries grootboekrekeningId, the relation's default ledger account.
+func (c *Client) GetRelation(id int) (json.RawMessage, error) {
+	return c.apiGet("/v1/api/relatie/" + strconv.Itoa(id))
 }
 
 // SearchKvK searches the KvK register by number or company name.
