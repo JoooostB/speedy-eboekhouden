@@ -460,9 +460,13 @@ func documentMatchesByBankLine(docs []mailDocument) map[int]inboxDocumentMatch {
 }
 
 // fetchOpenPosts loads both sides of the open-post grid for the overlay.
-// Best-effort: only an expired session is an error; any other failure leaves
-// that side empty (logged by error class) and the overlay finds no matches.
-func fetchOpenPosts(client *eboekhouden.Client) (openPosts, error) {
+// Entirely best-effort, an expired session included: the bank-line inbox
+// worked without these calls before, and e-boekhouden may answer a missing
+// right or plan module the same way it answers an expired session, which
+// must not turn into a reconnect loop on an inbox that works. A failure
+// leaves that side empty (logged by error class); a real expiry surfaces on
+// the import-grid fetch or the next booking.
+func fetchOpenPosts(client *eboekhouden.Client) openPosts {
 	var out openPosts
 	sides := []struct {
 		soort string
@@ -474,10 +478,10 @@ func fetchOpenPosts(client *eboekhouden.Client) (openPosts, error) {
 	for _, side := range sides {
 		raw, err := client.GetOpenPostGrid(side.soort)
 		if err != nil {
+			log.Printf("Inbox: open post grid %s fetch failed, no open-post overlay: %s", side.soort, errClass(err))
 			if errors.Is(err, eboekhouden.ErrSessionExpired) {
-				return openPosts{}, err
+				return openPosts{}
 			}
-			log.Printf("Inbox: open post grid %s fetch failed: %s", side.soort, errClass(err))
 			continue
 		}
 		posts, err := eboekhouden.ParseOpenPostGrid(raw)
@@ -487,31 +491,29 @@ func fetchOpenPosts(client *eboekhouden.Client) (openPosts, error) {
 		}
 		*side.dst = posts
 	}
-	return out, nil
+	return out
 }
 
 // mailDocumentMatches annotates bank lines with the mail-folder documents
 // they pay, using the same list builder and global assignment as GET
-// /documents so both views agree. Best-effort: no mail folder, an
-// e-boekhouden error or a Redis error all yield no annotations; only an
-// expired session is returned as an error.
-func mailDocumentMatches(ctx context.Context, rdb *redis.Client, client *eboekhouden.Client, userID string, lines []bankLine) (map[int]inboxDocumentMatch, error) {
+// /documents so both views agree. Entirely best-effort, for the same reason
+// as fetchOpenPosts: no mail folder, an expired session, any e-boekhouden or
+// Redis error all yield no annotations and never fail the inbox.
+func mailDocumentMatches(ctx context.Context, rdb *redis.Client, client *eboekhouden.Client, userID string, lines []bankLine) map[int]inboxDocumentMatch {
 	_, files, err := mailFolderFiles(client)
 	if err != nil {
-		if errors.Is(err, eboekhouden.ErrSessionExpired) {
-			return nil, err
-		}
 		if !errors.Is(err, errMailFolderNotConfigured) {
 			log.Printf("Inbox: mail folder listing failed, no document annotations: %s", errClass(err))
 		}
-		return nil, nil
+		return nil
 	}
 	if len(files) == 0 || len(lines) == 0 {
-		return nil, nil
+		return nil
 	}
 	docs, _, err := buildDocumentList(ctx, rdb, client, userID, files, staticGridRows(gridRowsFromBankLines(lines)))
 	if err != nil {
-		return nil, err
+		log.Printf("Inbox: document list failed, no document annotations: %s", errClass(err))
+		return nil
 	}
-	return documentMatchesByBankLine(docs), nil
+	return documentMatchesByBankLine(docs)
 }

@@ -138,20 +138,13 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 		}
 	} else {
 		// The cached rows carry everything the matcher needs; only the open
-		// posts are fetched again so the overlay is current.
-		posts, err := fetchOpenPosts(client)
-		if err != nil {
-			h.writeEBError(c, sess, err)
-			return
-		}
-		openMatches = matchOpenPosts(bankLinesFromClassified(base.Classifications), posts)
+		// posts are fetched again so the overlay is current. Best-effort: a
+		// cache hit made no upstream call before the overlays existed and
+		// must not fail because of them.
+		openMatches = matchOpenPosts(bankLinesFromClassified(base.Classifications), fetchOpenPosts(client))
 	}
 
-	docMatches, err := mailDocumentMatches(ctx, h.redis, client, sess.UserID, bankLinesFromClassified(base.Classifications))
-	if err != nil {
-		h.writeEBError(c, sess, err)
-		return
-	}
+	docMatches := mailDocumentMatches(ctx, h.redis, client, sess.UserID, bankLinesFromClassified(base.Classifications))
 
 	rows := applyInboxOverlays(base.Classifications, openMatches, docMatches)
 	summary := summarizeInbox(rows)
@@ -210,13 +203,8 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 
 	// Lines that settle an open invoice need no classification at all: the
 	// booking is a factuurbetaling on that invoice, so match them before
-	// anything is sent to Claude.
-	posts, err := fetchOpenPosts(client)
-	if err != nil {
-		h.writeEBError(c, sess, err)
-		return nil, nil, false
-	}
-	openMatches = matchOpenPosts(bankLinesFromRows(rows), posts)
+	// anything is sent to Claude. Best-effort (see fetchOpenPosts).
+	openMatches = matchOpenPosts(bankLinesFromRows(rows), fetchOpenPosts(client))
 
 	// Pre-fetch learned mappings for this user. Lines whose normalized
 	// signal matches a confirmed mapping are auto-classified locally and
