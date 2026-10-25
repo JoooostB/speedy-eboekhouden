@@ -162,7 +162,13 @@ export function BulkEntryForm() {
   if (results && results.every((r) => r.status === "ok")) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        <SubmitResults results={results} loading={false} total={totalEntries} onReset={handleReset} />
+        <SubmitResults
+          results={results}
+          loading={false}
+          total={totalEntries}
+          employees={employees}
+          onReset={handleReset}
+        />
       </Box>
     );
   }
@@ -238,7 +244,13 @@ export function BulkEntryForm() {
         {submitting ? "Bezig…" : `Indienen (${totalEntries} ${totalEntries === 1 ? "regel" : "regels"})`}
       </Button>
 
-      <SubmitResults results={results} loading={submitting} total={totalEntries} onReset={handleReset} />
+      <SubmitResults
+        results={results}
+        loading={submitting}
+        total={totalEntries}
+        employees={employees}
+        onReset={handleReset}
+      />
 
       {/* Duplicate-confirmation dialog. Listed conflicts let the user
           see exactly which (date · employee · project · activity)

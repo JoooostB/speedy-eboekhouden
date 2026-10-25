@@ -14,16 +14,19 @@ import {
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorIcon from "@mui/icons-material/Error";
-import type { EntryResult } from "../api/types";
+import type { Employee, EntryResult } from "../api/types";
+import { employeeNames, entryResultLabel } from "./hours/entryResultLabel";
 
 interface Props {
   results: EntryResult[] | null;
   loading: boolean;
   total: number;
+  /** For showing names instead of employee ids. */
+  employees?: Employee[];
   onReset?: () => void;
 }
 
-export function SubmitResults({ results, loading, total, onReset }: Props) {
+export function SubmitResults({ results, loading, total, employees, onReset }: Props) {
   if (loading) {
     return (
       <Box sx={{ mt: 3 }}>
@@ -37,6 +40,7 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
 
   if (!results) return null;
 
+  const names = employeeNames(employees);
   const successes = results.filter((r) => r.status === "ok").length;
   const failures = results.filter((r) => r.status === "error").length;
   const allSuccess = failures === 0;
@@ -82,10 +86,7 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
                   <ListItemIcon>
                     <ErrorIcon color="error" />
                   </ListItemIcon>
-                  <ListItemText
-                    primary={`Medewerker ${r.employeeId} · ${r.date}`}
-                    secondary={r.error}
-                  />
+                  <ListItemText primary={entryResultLabel(r, names)} secondary={r.error} />
                 </ListItem>
               ))}
           </List>
@@ -100,7 +101,7 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
                     <ListItemIcon>
                       <CheckCircleIcon color="success" />
                     </ListItemIcon>
-                    <ListItemText primary={`Medewerker ${r.employeeId} · ${r.date}`} />
+                    <ListItemText primary={entryResultLabel(r, names)} />
                   </ListItem>
                 ))}
                 {successes > 5 && (
