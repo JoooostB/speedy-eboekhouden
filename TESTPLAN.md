@@ -46,6 +46,8 @@ Manual acceptance checklist. Run it against a local stack (`cp .env.example .env
 - [ ] With MFA: "Verificatiecode invoeren" appears with the field "Verificatiecode" and the button "Verifieer"
 - [ ] After a successful connection the dialog closes and the chip reads "Gekoppeld"
 - [ ] "Annuleren" closes the dialog without connecting
+- [ ] Live-only: a wrong password shows "Inloggen bij e-Boekhouden is mislukt. Controleer je e-mailadres en wachtwoord en probeer het opnieuw.", not the new-IP message
+- [ ] Live-only: the first login from an IP address e-boekhouden does not know yet (a fresh deployment) shows "e-Boekhouden blokkeert deze aanmelding, omdat die van een onbekend IP-adres komt…". Speedy recognises the block page only by the word "IP" in its visible text (`loginBlockedForNewIP`); if the wrong-password message shows instead, note the block page's visible wording here, without personal data: ______
 
 ### 4a. Verbinding verbreken
 
