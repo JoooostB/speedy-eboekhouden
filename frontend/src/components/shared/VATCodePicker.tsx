@@ -33,7 +33,7 @@ export function VATCodePicker({ codes, value, onChange, label = "BTW-code", disa
     >
       {showFallback && (
         <MenuItem value={value} sx={{ fontStyle: "italic" }}>
-          {value} (niet in lijst)
+          {value} (niet in de lijst)
         </MenuItem>
       )}
       {codes.map((c) => (

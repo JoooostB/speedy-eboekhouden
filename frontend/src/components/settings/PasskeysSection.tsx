@@ -111,7 +111,7 @@ export function PasskeysSection() {
   const saveEdit = async (id: string) => {
     const trimmed = draft.trim();
     if (!trimmed) {
-      setError("Naam mag niet leeg zijn");
+      setError("Vul een naam in");
       return;
     }
     setBusy(true);
@@ -127,7 +127,7 @@ export function PasskeysSection() {
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm("Weet je zeker dat je deze passkey wilt verwijderen?")) return;
+    if (!window.confirm("Deze passkey verwijderen? Daarna kun je er niet meer mee inloggen bij Speedy.")) return;
     setBusy(true);
     setError(null);
     try {
@@ -150,7 +150,7 @@ export function PasskeysSection() {
       </Box>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Geef je passkeys herkenbare namen — bijvoorbeeld waar ze opgeslagen zijn (iCloud, Bitwarden, YubiKey).
+        Geef je passkeys een herkenbare naam, bijvoorbeeld waar ze staan (iCloud, Bitwarden, YubiKey).
       </Typography>
 
       {error && (
@@ -193,9 +193,9 @@ export function PasskeysSection() {
                       onChange={(e) => setDraft(e.target.value)}
                       size="small"
                       autoFocus
-                      placeholder="bv. MacBook iCloud"
+                      placeholder="Bijvoorbeeld MacBook iCloud"
                       sx={{ flex: "1 1 200px" }}
-                      inputProps={{ maxLength: 64, "aria-label": "Passkey naam" }}
+                      inputProps={{ maxLength: 64, "aria-label": "Naam van de passkey" }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") saveEdit(pk.id);
                         if (e.key === "Escape") cancelEdit();
@@ -219,17 +219,17 @@ export function PasskeysSection() {
                       </Typography>
                     </Box>
                     <Tooltip title="Hernoemen">
-                      <IconButton size="small" onClick={() => startEdit(pk)} aria-label={`Hernoem ${pk.friendlyName}`}>
+                      <IconButton size="small" onClick={() => startEdit(pk)} aria-label={`${pk.friendlyName || "Passkey zonder naam"} hernoemen`}>
                         <EditIcon />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title={passkeys.length <= 1 ? "Je laatste passkey kan niet verwijderd worden" : "Verwijderen"}>
+                    <Tooltip title={passkeys.length <= 1 ? "Je laatste passkey kun je niet verwijderen" : "Verwijderen"}>
                       <span>
                         <IconButton
                           size="small"
                           onClick={() => remove(pk.id)}
                           disabled={busy || passkeys.length <= 1}
-                          aria-label={`Verwijder ${pk.friendlyName}`}
+                          aria-label={`${pk.friendlyName || "Passkey zonder naam"} verwijderen`}
                         >
                           <TrashIcon />
                         </IconButton>

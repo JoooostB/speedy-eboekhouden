@@ -155,8 +155,8 @@ export type AnalyzeOutcome =
   | { kind: "aborted" };
 
 /** The closing snackbar text: "12 geanalyseerd · 7 met betaling · 3 zonder
- *  · 2 geen factuur", with failures and skipped documents appended and
- *  zero parts left out. */
+ *  betaling · 2 geen factuur", with failures and skipped documents appended
+ *  and zero parts left out. */
 export function summarizeRun(outcomes: readonly AnalyzeOutcome[]): string {
   let analyzed = 0;
   let matched = 0;
@@ -193,7 +193,7 @@ export function summarizeRun(outcomes: readonly AnalyzeOutcome[]): string {
   }
   const parts = [`${analyzed} geanalyseerd`];
   if (matched > 0) parts.push(`${matched} met betaling`);
-  if (without > 0) parts.push(`${without} zonder`);
+  if (without > 0) parts.push(`${without} zonder betaling`);
   if (notInvoice > 0) parts.push(`${notInvoice} geen factuur`);
   if (duplicate > 0) parts.push(`${duplicate} mogelijk dubbel`);
   if (failed > 0) parts.push(`${failed} mislukt`);
@@ -249,7 +249,7 @@ export function formatMoney(value: number, currency = "EUR"): string {
 
 export function analyzeAllConfirmText(count: number): string {
   const cost = formatMoney(count * ANALYZE_COST_PER_DOCUMENT);
-  return `Analyseer ${count} documenten? Dit kost ongeveer ${cost} aan AI-tegoed.`;
+  return `${count} documenten analyseren? Dat kost ongeveer ${cost} van je tegoed bij Anthropic.`;
 }
 
 /** "12 afschriftregels en 5 documenten om te verwerken", singular aware,
@@ -258,7 +258,7 @@ export function inboxSubtitle(bankLines: number, documents: number): string {
   const parts: string[] = [];
   if (bankLines > 0) parts.push(`${bankLines} ${bankLines === 1 ? "afschriftregel" : "afschriftregels"}`);
   if (documents > 0) parts.push(`${documents} ${documents === 1 ? "document" : "documenten"}`);
-  if (parts.length === 0) return "Je inbox is leeg. Alles is verwerkt!";
+  if (parts.length === 0) return "Je inbox is leeg. Alles is verwerkt.";
   return `${parts.join(" en ")} om te verwerken`;
 }
 
@@ -327,7 +327,7 @@ export function documentAriaLabel(action: string, doc: MailDocument): string {
  *  an invoice received (a cost); for a credit note that would be wrong, so
  *  the backend refuses it and the user books it in e-Boekhouden. Once linked
  *  there, the file shows up as "Al gekoppeld" and can be cleaned up here. */
-export const CREDITNOTA_NOT_BOOKABLE = "Creditnota's boek je voorlopig in e-Boekhouden zelf";
+export const CREDITNOTA_NOT_BOOKABLE = "Een creditnota boek je voorlopig zelf in e-Boekhouden";
 
 /** The second line of a row, per status (and per row state). */
 export function documentSubtitle(doc: MailDocument, rowState?: DocumentRowState): string {
@@ -349,9 +349,9 @@ export function documentSubtitle(doc: MailDocument, rowState?: DocumentRowState)
       return "Verwerkt in e-Boekhouden";
     case "duplicate": {
       const s = doc.alreadySubmitted;
-      if (!s) return "Zelfde bestand is al geboekt";
+      if (!s) return "Dit bestand is al eens geboekt";
       const when = formatShortDate(s.submittedAt);
-      return `Zelfde bestand geboekt${when ? ` op ${when}` : ""} (mutatie ${s.mutNr})`;
+      return `Dit bestand is al geboekt${when ? ` op ${when}` : ""} (mutatie ${s.mutNr})`;
     }
     case "junk":
       return "Kleine afbeelding";

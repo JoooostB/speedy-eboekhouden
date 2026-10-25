@@ -72,8 +72,8 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
         const firstError = Array.from(allResults.values()).find((r) => r.status === "error");
         setDialogError(
           ok === 0
-            ? `Boeking mislukt: ${firstError?.error || "onbekende fout"}`
-            : `${error} van ${editedItems.length} boekingen mislukt. Eerste fout: ${firstError?.error || "onbekend"}`,
+            ? `Boeken mislukt: ${firstError?.error || "onbekende fout"}`
+            : `${error} van de ${editedItems.length} boekingen mislukt. Eerste fout: ${firstError?.error || "onbekend"}`,
         );
         // Keep the dialog open so the user can adjust and retry.
       } else {
@@ -193,7 +193,7 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
             disabled={processing || selected.length === 0}
             sx={{ minWidth: 140, fontWeight: 600 }}
           >
-            {processing ? "Verwerken..." : "Goedkeuren"}
+            {processing ? "Verwerken…" : "Goedkeuren"}
           </Button>
         </Box>
       </Box>

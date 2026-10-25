@@ -68,11 +68,11 @@ function primaryAriaLabel(action: PrimaryAction, doc: MailDocument): string {
     case "analyze":
       return documentAriaLabel("Analyseer", doc);
     case "retry":
-      return documentAriaLabel("Analyseer opnieuw", doc);
+      return `${documentAriaLabel("Analyseer", doc)} opnieuw`;
     case "book":
       return documentAriaLabel("Boek", doc);
     case "archive":
-      return documentAriaLabel("Ruim op", doc);
+      return `${documentAriaLabel("Ruim", doc)} op`;
     case "ignore":
       return documentAriaLabel("Negeer", doc);
     case "unignore":
@@ -476,7 +476,7 @@ export function DocumentRow({
           {date}
         </Typography>
 
-        {/* Amount — "—" keeps the column while a document is unanalysed */}
+        {/* Amount: "–" keeps the column while a document is unanalysed */}
         <Typography
           variant="body2"
           aria-hidden={amount ? undefined : true}
@@ -491,7 +491,7 @@ export function DocumentRow({
             color: amount ? (creditnota ? "success.dark" : "text.primary") : "text.disabled",
           }}
         >
-          {amount ?? "—"}
+          {amount ?? "–"}
         </Typography>
 
         {/* Title + subtitle */}

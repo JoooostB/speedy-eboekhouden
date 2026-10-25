@@ -151,7 +151,7 @@ export function useArchiveFolders(): State {
       setFolders(data);
       setError(null);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Kon archiefmappen niet ophalen");
+      setError(err instanceof Error ? err.message : "Archiefmappen laden mislukt");
     } finally {
       setLoading(false);
     }
@@ -169,7 +169,7 @@ export function useArchiveFolders(): State {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Kon archiefmappen niet ophalen");
+        setError(err instanceof Error ? err.message : "Archiefmappen laden mislukt");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

@@ -35,7 +35,7 @@ import { INVOICE_FILE_ACCEPT, isAcceptedInvoiceFile } from "./mailDocumentReview
  */
 const CATEGORY_CONFIG: Record<InboxCategory, { label: string; color: string; bgcolor: string }> = {
   auto: { label: "Auto", color: "#166534", bgcolor: "rgba(22, 163, 74, 0.1)" },
-  review: { label: "Controleer", color: "#92400e", bgcolor: "rgba(245, 158, 11, 0.1)" },
+  review: { label: "Controleren", color: "#92400e", bgcolor: "rgba(245, 158, 11, 0.1)" },
   invoice: { label: "Factuur", color: "#1e40af", bgcolor: "rgba(59, 130, 246, 0.1)" },
   manual: { label: "Handmatig", color: "#991b1b", bgcolor: "rgba(220, 38, 38, 0.1)" },
 };
@@ -378,7 +378,7 @@ export function InboxRow({
             e-boekhouden. Text label, never colour alone. */}
         {isOpenPost && !processed && (
           <Tooltip
-            title="Deze betaling hoort bij een openstaande factuur in e-Boekhouden en wordt daarop afgeletterd"
+            title="Het bedrag past bij een openstaande factuur in e-Boekhouden. Met Koppelen boek je de betaling op die factuur."
             arrow
           >
             <Chip
@@ -424,7 +424,7 @@ export function InboxRow({
             previously only fired on mouse hover). */}
         {item.learned && !processed && (
           <Tooltip
-            title="Deze suggestie komt uit je eerdere boekingen, niet van de AI"
+            title="Dit voorstel komt uit je eerdere boekingen, niet van de AI"
             arrow
           >
             <Chip
@@ -444,7 +444,7 @@ export function InboxRow({
                 color: "#4338ca",
                 cursor: "help",
               }}
-              aria-label="Eerder geboekt — suggestie uit je geschiedenis"
+              aria-label="Eerder geboekt: voorstel uit je eigen boekingen"
             />
           </Tooltip>
         )}
@@ -548,7 +548,7 @@ export function InboxRow({
                   size="small"
                   onClick={() => onOpenDocument(documentMatch.fileId)}
                   disabled={processing || processed}
-                  aria-label={`Koppel factuur ${documentMatch.title} aan deze betaling en boek`}
+                  aria-label={`Factuur ${documentMatch.title} koppelen aan deze betaling en boeken`}
                   sx={{ fontWeight: 600 }}
                 >
                   Factuur koppelen en boeken

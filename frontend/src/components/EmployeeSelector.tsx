@@ -39,7 +39,7 @@ export function EmployeeSelector({
         <TextField
           {...params}
           label="Medewerkers"
-          placeholder="Selecteer medewerkers"
+          placeholder="Kies medewerkers"
           InputProps={{
             ...params.InputProps,
             endAdornment: (

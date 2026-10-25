@@ -131,7 +131,7 @@ export function BulkEntryForm() {
       });
     } catch (err) {
       track("Hours Submit Error", { reason: errorClass(err) });
-      setError(err instanceof Error ? err.message : "Submission failed");
+      setError(err instanceof Error ? err.message : "Indienen mislukt");
     } finally {
       setSubmitting(false);
     }
@@ -211,9 +211,8 @@ export function BulkEntryForm() {
 
       {selectedEmployees.length > 0 && hourOverlay.byDate.size > 0 && !overlayLoading && (
         <Typography variant="caption" color="text.secondary">
-          {hourOverlay.byDate.size} {hourOverlay.byDate.size === 1 ? "dag" : "dagen"} in deze maand
-          {selectedEmployees.length === 1 ? " heeft" : " hebben"} al uren — zichtbaar als badge in de
-          rechterbovenhoek van de cel.
+          Op {hourOverlay.byDate.size} {hourOverlay.byDate.size === 1 ? "dag" : "dagen"} in deze maand
+          staan al uren. Je ziet ze in de kalender, rechtsboven bij {hourOverlay.byDate.size === 1 ? "die dag" : "die dagen"}.
         </Typography>
       )}
 
@@ -221,7 +220,7 @@ export function BulkEntryForm() {
 
       {selectedDates.size > 0 && selectedEmployees.length > 0 && (
         <Typography variant="body2" color="text.secondary">
-          {selectedDates.size} dagen &times; {selectedEmployees.length} medewerker
+          {selectedDates.size} {selectedDates.size === 1 ? "dag" : "dagen"} &times; {selectedEmployees.length} medewerker
           {selectedEmployees.length > 1 ? "s" : ""} &times; {hours}u ={" "}
           <strong>{totalHours.toFixed(2)} uur totaal</strong>
         </Typography>
@@ -236,7 +235,7 @@ export function BulkEntryForm() {
         onClick={handleSubmit}
         disabled={!canSubmit}
       >
-        {submitting ? "Bezig..." : `Indienen (${totalEntries} items)`}
+        {submitting ? "Bezig…" : `Indienen (${totalEntries} ${totalEntries === 1 ? "regel" : "regels"})`}
       </Button>
 
       <SubmitResults results={results} loading={submitting} total={totalEntries} onReset={handleReset} />
@@ -254,14 +253,14 @@ export function BulkEntryForm() {
       >
         <DialogTitle id="duplicate-hours-title" sx={{ fontWeight: 600 }}>
           {duplicateConflicts && duplicateConflicts.length === 1
-            ? "1 dubbele uren-boeking gevonden"
-            : `${duplicateConflicts?.length ?? 0} dubbele uren-boekingen gevonden`}
+            ? "1 dubbele urenboeking gevonden"
+            : `${duplicateConflicts?.length ?? 0} dubbele urenboekingen gevonden`}
         </DialogTitle>
         <DialogContent dividers>
           <DialogContentText sx={{ mb: 2 }}>
-            Deze combinaties van datum · medewerker · project · activiteit zijn al eerder in
-            e-Boekhouden geboekt. Doorgaan maakt nieuwe uren-regels aan bovenop wat er al staat —
-            dat betekent dubbele uren.
+            Voor deze combinaties van datum, medewerker, project en activiteit staan al uren in
+            e-Boekhouden. Ga je door, dan komen er nieuwe uurregels bij en staan die uren er
+            dubbel in.
           </DialogContentText>
           <Box
             sx={{
@@ -286,14 +285,14 @@ export function BulkEntryForm() {
             ))}
           </Box>
           <DialogContentText sx={{ mt: 2 }}>
-            Totaal te boeken in deze actie: <strong>{formatHours(totalHours)}</strong>{" "}
-            ({totalEntries} regels). Pas je selectie aan om de dubbele dagen te deselecteren,
-            of ga toch door als je weet wat je doet.
+            Je boekt nu in totaal <strong>{formatHours(totalHours)}</strong>{" "}
+            ({totalEntries} {totalEntries === 1 ? "regel" : "regels"}). Haal de dubbele dagen uit je
+            selectie, of ga toch door als dat de bedoeling is.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDuplicateConflicts(null)} disabled={submitting}>
-            Terug om aan te passen
+            Selectie aanpassen
           </Button>
           <Button
             color="warning"

@@ -250,7 +250,7 @@ describe("isOpenBooking and the dialog texts", () => {
 
   it("uses the flow-4 alert text verbatim", () => {
     expect(NO_MATCH_ALERT_TEXT).toBe(
-      "Nog geen betaling gevonden. We boeken dit als openstaande factuur. Zodra de betaling op je afschrift staat, stelt Speedy voor om hem te koppelen.",
+      "Nog geen betaling gevonden, dus Speedy boekt dit als openstaande factuur. Staat het bedrag later op je afschrift, dan stelt Speedy voor om de betaling te koppelen.",
     );
   });
 
@@ -260,7 +260,7 @@ describe("isOpenBooking and the dialog texts", () => {
     expect(submitButtonLabel({ ...base, openBooking: true })).toBe("Boeken als openstaand");
     expect(submitButtonLabel({ ...base, total: 3 })).toBe("Alles boeken (3)");
     expect(submitButtonLabel({ ...base, total: 3, blockedCount: 1 })).toBe("Boek 2 van 3");
-    expect(submitButtonLabel({ ...base, total: 3, submitting: true, progress: 1 })).toBe("Verwerken (1/3)...");
+    expect(submitButtonLabel({ ...base, total: 3, submitting: true, progress: 1 })).toBe("Boeken (1/3)…");
     // Several cards keep the batch wording even when they are open bookings.
     expect(submitButtonLabel({ ...base, total: 2, openBooking: true })).toBe("Alles boeken (2)");
   });
@@ -269,26 +269,26 @@ describe("isOpenBooking and the dialog texts", () => {
 describe("automatic folder", () => {
   const now = new Date(2026, 9, 24);
 
-  it("names Facturen/<jaar>/<NN Maand> for the booking date", () => {
-    expect(autoArchiveFolderPath("2026-10-12", now)).toBe("Facturen/2026/10 Oktober");
-    expect(autoArchiveFolderPath("2025-01-03", now)).toBe("Facturen/2025/01 Januari");
-    expect(autoArchiveFolderPath("2026-12-31", now)).toBe("Facturen/2026/12 December");
+  it("names Facturen / <jaar> / <NN Maand> for the booking date", () => {
+    expect(autoArchiveFolderPath("2026-10-12", now)).toBe("Facturen / 2026 / 10 Oktober");
+    expect(autoArchiveFolderPath("2025-01-03", now)).toBe("Facturen / 2025 / 01 Januari");
+    expect(autoArchiveFolderPath("2026-12-31", now)).toBe("Facturen / 2026 / 12 December");
   });
 
   it("falls back to today for an unreadable date", () => {
-    expect(autoArchiveFolderPath("", now)).toBe("Facturen/2026/10 Oktober");
-    expect(autoArchiveFolderPath("geen datum", now)).toBe("Facturen/2026/10 Oktober");
+    expect(autoArchiveFolderPath("", now)).toBe("Facturen / 2026 / 10 Oktober");
+    expect(autoArchiveFolderPath("geen datum", now)).toBe("Facturen / 2026 / 10 Oktober");
   });
 
   it("explains the automatic folder only while none is picked", () => {
     expect(archiveFolderHelperText({ folderPicked: false, datum: "2026-10-12", mailFolderName: "Inbox" }, now)).toBe(
-      "Geen map gekozen: Facturen/2026/10 Oktober. Het bestand gaat uit je mailmap Inbox.",
+      "Het bestand krijgt een archiefnaam en verlaat je mailmap Inbox. Kies je geen map, dan komt het in Facturen / 2026 / 10 Oktober.",
     );
     expect(archiveFolderHelperText({ folderPicked: true, datum: "2026-10-12", mailFolderName: "Inbox" }, now)).toBe(
-      "Het bestand gaat uit je mailmap Inbox.",
+      "Het bestand krijgt een archiefnaam en verlaat je mailmap Inbox.",
     );
     expect(archiveFolderHelperText({ folderPicked: true, datum: "2026-10-12", mailFolderName: "" }, now)).toBe(
-      "Het bestand gaat uit je mailmap.",
+      "Het bestand krijgt een archiefnaam en verlaat je mailmap.",
     );
   });
 });

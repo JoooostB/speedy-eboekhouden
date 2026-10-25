@@ -291,7 +291,7 @@ export type MailDocumentStatus =
 
 /** Marker of an earlier booking of the same file bytes. Deliberately minimal:
  *  the mutation numbers and the time of booking, nothing about the invoice
- *  itself ("Zelfde bestand geboekt op 3 okt (mutatie 1234)"). */
+ *  itself ("Dit bestand is al geboekt op 3 okt (mutatie 1234)"). */
 export interface InvoiceSubmittedMarker {
   mutNr: number;
   paymentMutNr?: number;

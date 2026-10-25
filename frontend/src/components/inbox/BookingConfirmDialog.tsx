@@ -200,8 +200,8 @@ export function BookingConfirmDialog({
       </DialogTitle>
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Controleer hoe {isSingle ? "deze regel wordt" : "deze regels worden"} geboekt. Pas indien nodig
-          de tegenrekening, BTW of omschrijving aan en klik op Bevestigen.
+          Controleer hoe Speedy {isSingle ? "deze regel" : "deze regels"} boekt. Pas zo nodig de
+          tegenrekening, BTW of omschrijving aan en klik op Bevestigen.
         </Typography>
 
         {error && (
@@ -215,21 +215,21 @@ export function BookingConfirmDialog({
         {refundMatches.size > 0 && (
           <Alert severity="info" sx={{ mb: 2 }}>
             {refundMatches.size === 1
-              ? "Een regel komt overeen met een openstaande crediteurenfactuur — dit kan een terugbetaling zijn. Controleer of de boeking klopt."
-              : `${refundMatches.size} regels komen overeen met openstaande crediteurenfacturen — mogelijke terugbetalingen.`}
+              ? "Het bedrag van een regel is gelijk aan een openstaande inkoopfactuur. Misschien is het een terugbetaling. Controleer of de boeking klopt."
+              : `${refundMatches.size} regels hebben hetzelfde bedrag als een openstaande inkoopfactuur. Misschien zijn het terugbetalingen. Controleer of de boekingen kloppen.`}
           </Alert>
         )}
 
         {missingLedger && (
           <Alert severity="warning" sx={{ mb: 2 }}>
-            Een of meer regels missen een tegenrekening. Vul deze eerst in voordat je bevestigt.
+            Bij een of meer regels ontbreekt de tegenrekening. Vul die eerst in.
           </Alert>
         )}
 
         {missingOpenInvoice && (
           <Alert severity="warning" sx={{ mb: 2 }}>
             Een factuurbetaling hoort bij een openstaande factuur, maar bij een of meer regels ontbreekt de
-            relatie of het factuurnummer. Kies voor die regels een andere soort.
+            relatie of het factuurnummer. Kies voor die regels in de lijst een andere soort.
           </Alert>
         )}
 
@@ -279,7 +279,7 @@ export function BookingConfirmDialog({
                   </Typography>
                   {refund && (
                     <Typography variant="caption" sx={{ color: "info.main", flexBasis: "100%" }}>
-                      ↳ Mogelijke terugbetaling: {refund.mutFactuur} — {refund.bedrijf}
+                      ↳ Mogelijke terugbetaling: factuur {refund.mutFactuur} · {refund.bedrijf}
                     </Typography>
                   )}
                 </Box>
@@ -325,7 +325,7 @@ export function BookingConfirmDialog({
                         />
                         {!edit?.ledger && (
                           <FormHelperText error sx={{ ml: 1.5, mt: 0.5 }}>
-                            Tegenrekening verplicht
+                            Kies een tegenrekening
                           </FormHelperText>
                         )}
                       </Box>
@@ -352,7 +352,7 @@ export function BookingConfirmDialog({
                 {/* Original bank line description for context */}
                 {item.omschrijving && item.omschrijving !== edit?.omschrijving && (
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-                    Bankregel: {item.omschrijving}
+                    Afschriftregel: {item.omschrijving}
                   </Typography>
                 )}
               </Box>
@@ -364,7 +364,7 @@ export function BookingConfirmDialog({
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 2 }}>
             <CircularProgress size={14} />
             <Typography variant="caption" color="text.secondary">
-              Openstaande facturen worden gecontroleerd...
+              Openstaande facturen controleren…
             </Typography>
           </Box>
         )}

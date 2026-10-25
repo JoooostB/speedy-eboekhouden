@@ -44,7 +44,7 @@ export function PasskeyRecovery() {
       track("Recovery Requested");
       setSent(true);
     } catch (err: any) {
-      setError(err.message || "Verzoek mislukt");
+      setError(err.message || "Versturen mislukt. Probeer het opnieuw.");
     } finally {
       setLoading(false);
     }
@@ -66,7 +66,7 @@ export function PasskeyRecovery() {
       if (name === "NotAllowedError" || msg.includes("not allowed") || msg.includes("timed out")) {
         setError("Passkey-registratie geannuleerd of verlopen. Probeer het opnieuw.");
       } else if (name === "SecurityError") {
-        setError("Beveiligingsfout: controleer of je de app opent via het juiste adres.");
+        setError("Beveiligingsfout. Controleer of je Speedy via het juiste webadres opent.");
       } else if (msg.includes("already registered") || name === "InvalidStateError") {
         setError("Deze passkey is al geregistreerd op dit apparaat.");
       } else {
@@ -105,13 +105,13 @@ export function PasskeyRecovery() {
         {registering ? (
           <Box sx={{ textAlign: "center", py: 4 }}>
             <CircularProgress sx={{ mb: 2 }} />
-            <Typography>Je nieuwe passkey wordt aangemaakt...</Typography>
+            <Typography>Je nieuwe passkey wordt aangemaakt…</Typography>
             {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
           </Box>
         ) : sent ? (
           <Box sx={{ textAlign: "center", py: 2 }}>
             <Alert severity="success" sx={{ mb: 2 }}>
-              Als er een account bestaat voor {email}, ontvang je een e-mail met een herstellink. Check ook je spammap.
+              Als er een account bestaat voor {email}, ontvang je een e-mail met een herstellink. Kijk ook in je spammap.
             </Alert>
             <Typography variant="body2" color="text.secondary">
               De link is 15 minuten geldig.

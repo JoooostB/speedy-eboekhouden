@@ -49,7 +49,7 @@ export function MailFolderSetupCard({ configured, reason, folderName, onSetup }:
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
           Je vindt je mailadres in e-Boekhouden onder Digitaal archief → Mail &amp; herken. Gebruik het adres{" "}
-          <Box component="strong" sx={{ color: "text.primary" }}>zonder</Box> 'herken' — Speedy leest de facturen zelf.
+          <Box component="strong" sx={{ color: "text.primary" }}>zonder</Box> 'herken': Speedy leest de facturen zelf uit.
         </Typography>
         <Typography variant="body2" color="text.secondary">
           Tip: stel in je mailprogramma een doorstuurregel in voor facturen, dan komen ze hier automatisch binnen.
@@ -64,7 +64,7 @@ export function MailFolderSetupCard({ configured, reason, folderName, onSetup }:
         Facturen automatisch binnenhalen
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: reason === "missing" ? 1 : 2.5 }}>
-        Stuur facturen naar je e-Boekhouden-mailadres; Speedy leest ze uit en koppelt ze aan je betalingen.
+        Stuur facturen naar je mailadres van e-Boekhouden. Speedy leest ze uit en zoekt de bijbehorende betalingen.
       </Typography>
       {reason === "missing" && (
         <Alert severity="warning" sx={{ mb: 2.5 }}>
@@ -98,7 +98,7 @@ export function MailFolderSetupCard({ configured, reason, folderName, onSetup }:
             value={folder}
             onChange={setFolder}
             label="Mailmap"
-            helperText="Kies de map waarin Mail & herken je bijlagen zet."
+            helperText="Mail & herken zet je bijlagen voortaan in deze map."
             disabled={submitting !== null}
             autoFocus
           />

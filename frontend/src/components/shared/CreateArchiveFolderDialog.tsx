@@ -76,7 +76,7 @@ export function CreateArchiveFolderDialog({
   const handleSubmit = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
-      setError("Naam is verplicht");
+      setError("Vul een naam in");
       return;
     }
     setSubmitting(true);
@@ -124,7 +124,7 @@ export function CreateArchiveFolderDialog({
                 {...params}
                 label="Bovenliggende map"
                 size="small"
-                helperText="Kies waar de nieuwe map onder komt te staan."
+                helperText="Kies in welke map de nieuwe map komt."
               />
             )}
           />

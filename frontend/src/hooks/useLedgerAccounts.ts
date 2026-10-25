@@ -30,7 +30,7 @@ export function useLedgerAccounts() {
         if (!cancelled) setData(res);
       })
       .catch((err) => {
-        if (!cancelled) setError(err?.message || "Kon grootboekrekeningen niet laden");
+        if (!cancelled) setError(err?.message || "Grootboekrekeningen laden mislukt");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

@@ -392,7 +392,7 @@ export function InvoiceReviewDialog({
           submitResults.push({
             filename: label,
             status: "error",
-            error: `PDF kon niet worden gelezen: ${err?.message ?? "onbekende fout"}`,
+            error: `Bestand lezen mislukt: ${err?.message ?? "onbekende fout"}`,
           });
           continue;
         }
@@ -425,8 +425,8 @@ export function InvoiceReviewDialog({
 
       // The result line: for a mail-folder document what happened to the
       // file ("Geboekt · verplaatst naar …"), for an upload the booking.
-      const receiptDetails = `Bonnetje: ${inv.leverancier || "onbekend"} — ${formatEuro(inv.bedragIncl)}`;
-      const invoiceDetails = `${inv.leverancier} — ${formatEuro(inv.bedragIncl)} — ${inv.factuurnummer}`;
+      const receiptDetails = `Bonnetje ${inv.leverancier || "onbekend"} · ${formatEuro(inv.bedragIncl)}`;
+      const invoiceDetails = `${inv.leverancier} · ${formatEuro(inv.bedragIncl)} · ${inv.factuurnummer}`;
       const detailsFor = (resp: SubmitArchiveOutcome) =>
         archiveSource ? archiveResultLine(resp, openBooking) : inv.isReceipt ? receiptDetails : invoiceDetails;
       const confidence = String(Math.round(inv.source.invoice.confidence * 100));
@@ -460,7 +460,7 @@ export function InvoiceReviewDialog({
               status: "warning",
               details: receiptDetails,
               error:
-                "Bonnetje is geboekt, maar de PDF kon niet naar het archief worden geüpload. Upload het bestand handmatig of probeer opnieuw.",
+                "Het bonnetje is geboekt, maar het bestand kon niet naar je digitale archief. Upload het zelf in e-Boekhouden; boek het niet opnieuw.",
             });
             track("Invoice Review Submitted", { confidence, mode: "receipt", outcome: "archive_warning" });
             continue;
@@ -500,7 +500,7 @@ export function InvoiceReviewDialog({
               status: "warning",
               details: invoiceDetails,
               error:
-                "Factuur is geboekt, maar de PDF kon niet naar het archief worden geüpload. Upload het bestand handmatig of probeer opnieuw.",
+                "De factuur is geboekt, maar het bestand kon niet naar je digitale archief. Upload het zelf in e-Boekhouden; boek het niet opnieuw.",
             });
             track("Invoice Review Submitted", { confidence, mode: "invoice", outcome: "archive_warning" });
             continue;
@@ -571,8 +571,8 @@ export function InvoiceReviewDialog({
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           {invoices.length === 1
-            ? "Controleer de gegevens en pas aan waar nodig."
-            : `${invoices.length} facturen gevonden. Controleer de gegevens en pas aan waar nodig.`}
+            ? "Controleer de gegevens en pas ze aan waar nodig."
+            : `${invoices.length} facturen. Controleer de gegevens en pas ze aan waar nodig.`}
         </Typography>
       </DialogTitle>
 
@@ -642,9 +642,9 @@ export function InvoiceReviewDialog({
           >
             <AlertTitle sx={{ fontWeight: 600 }}>
               {successCount} van {invoices.length} facturen geboekt
-              {warningCount > 0 && ` — ${warningCount} met waarschuwing`}
-              {skippedCount > 0 && ` — ${skippedCount} overgeslagen`}
-              {errorCount > 0 && ` — ${errorCount} mislukt`}
+              {warningCount > 0 && ` · ${warningCount} met waarschuwing`}
+              {skippedCount > 0 && ` · ${skippedCount} overgeslagen`}
+              {errorCount > 0 && ` · ${errorCount} mislukt`}
             </AlertTitle>
             {results!.map((r, i) => (
               <Typography key={i} variant="body2" sx={{ mt: 0.5 }}>
@@ -661,8 +661,8 @@ export function InvoiceReviewDialog({
                   <Box component="span" sx={{ color: "warning.main", fontWeight: 600 }} aria-label="Overgeslagen">~</Box>
                 )}{" "}
                 {r.filename}
-                {r.details ? ` — ${r.details}` : ""}
-                {r.error ? ` — ${r.error}` : ""}
+                {r.details ? ` · ${r.details}` : ""}
+                {r.error ? ` · ${r.error}` : ""}
               </Typography>
             ))}
           </Alert>
@@ -735,13 +735,12 @@ export function InvoiceReviewDialog({
                       Mogelijk dubbele factuur
                     </AlertTitle>
                     <Typography variant="body2">
-                      Deze PDF is eerder geboekt op{" "}
+                      Dit bestand is op{" "}
                       <strong>
                         {new Date(inv.source.alreadySubmitted.submittedAt).toLocaleDateString("nl-NL")}
                       </strong>{" "}
-                      als mutatie nr <strong>{inv.source.alreadySubmitted.mutNr}</strong>
-                      . Controleer of je deze opnieuw wilt boeken — het levert anders een dubbele
-                      mutatie op in e-Boekhouden.
+                      via Speedy geboekt als mutatie <strong>{inv.source.alreadySubmitted.mutNr}</strong>.
+                      Boek je het opnieuw, dan staat het dubbel in e-Boekhouden.
                     </Typography>
                   </Alert>
                 )}
@@ -760,7 +759,7 @@ export function InvoiceReviewDialog({
                       if (val !== null) updateField(index, "isReceipt", val === "receipt");
                     }}
                     disabled={submitting}
-                    aria-label="Type document"
+                    aria-label="Soort document"
                   >
                     <ToggleButton value="invoice" sx={{ textTransform: "none", fontWeight: 600 }}>
                       Factuur
@@ -810,13 +809,13 @@ export function InvoiceReviewDialog({
                       }}
                     >
                       <TextField
-                        label={inv.isReceipt ? "Leverancier (alleen omschrijving)" : "Leverancier"}
+                        label="Leverancier"
                         value={inv.leverancier}
                         onChange={(e) => updateField(index, "leverancier", e.target.value)}
                         size="small"
                         fullWidth
                         disabled={submitting}
-                        helperText={inv.isReceipt ? "Wordt alleen gebruikt in de omschrijving — geen relatie aangemaakt." : undefined}
+                        helperText={inv.isReceipt ? "Voor de omschrijving en de archiefnaam. Speedy maakt geen relatie aan." : undefined}
                       />
                       {!inv.isReceipt && (
                         <RelationPicker
@@ -972,7 +971,7 @@ export function InvoiceReviewDialog({
                           value={inv.archiveFolder}
                           onChange={(f) => updateField(index, "archiveFolder", f)}
                           disabled={submitting}
-                          helperText="Optioneel — laat leeg om de PDF niet in het digitaal archief op te slaan."
+                          helperText="Optioneel. Kies een map om het bestand in je digitale archief te bewaren."
                         />
                       )}
                     </Box>
@@ -1007,9 +1006,9 @@ export function InvoiceReviewDialog({
                           Verlegde BTW (reverse charge)
                         </Typography>
                         <Typography variant="body2">
-                          Dit is een buitenlandse factuur zonder Nederlandse BTW. De BTW wordt automatisch
-                          verlegd via BTW-code <strong>{formatBTWCode(inv.btwCode, vatCodes)}</strong>.
-                          Controleer of deze correct is — de BTW moet je zelf aangeven in je BTW-aangifte.
+                          Op deze factuur is de BTW naar jou verlegd. Speedy gebruikt BTW-code{" "}
+                          <strong>{formatBTWCode(inv.btwCode, vatCodes)}</strong>. Controleer of die klopt:
+                          de verlegde BTW geef je zelf aan in je BTW-aangifte.
                         </Typography>
                       </Alert>
                     )}
@@ -1050,7 +1049,7 @@ export function InvoiceReviewDialog({
                               }}
                             >
                               <AlertTitle sx={{ fontWeight: 700 }}>
-                                Let op — niet aftrekbare BTW
+                                Let op: niet-aftrekbare BTW
                               </AlertTitle>
                               <Typography variant="body2" sx={{ lineHeight: 1.55 }}>
                                 {tip.tekst}
@@ -1098,7 +1097,7 @@ export function InvoiceReviewDialog({
                           size="small"
                           fullWidth
                           disabled={submitting}
-                          helperText="Meerdere afschriftregels passen bij dit bedrag. Kies de betaling van deze factuur."
+                          helperText="Meerdere afschriftregels kunnen de betaling zijn. Kies de juiste."
                           sx={{ mt: 2 }}
                         >
                           {choices.map((line) => (
@@ -1143,17 +1142,17 @@ export function InvoiceReviewDialog({
                               variant="caption"
                               sx={{ ml: 1, fontWeight: 500, fontStyle: "italic" }}
                             >
-                              (geschatte koers — controleer bedrag)
+                              (geschatte koers, controleer het bedrag)
                             </Typography>
                           )}
                         </Typography>
                         <Typography variant="body2">
-                          {new Date(inv.bankLine.datum).toLocaleDateString("nl-NL")} — {new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" }).format(inv.bankLine.bedrag)} — {inv.bankLine.omschrijving.slice(0, 80)}
+                          {new Date(inv.bankLine.datum).toLocaleDateString("nl-NL")} · {new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" }).format(inv.bankLine.bedrag)} · {inv.bankLine.omschrijving.slice(0, 80)}
                         </Typography>
                         {inv.bankLine.currencyConverted && inv.bankLine.invoiceCurrency && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-                            Factuur: {inv.bankLine.invoiceAmount?.toFixed(2)} {inv.bankLine.invoiceCurrency} —
-                            omgerekend naar EUR voor matching. De boeking gebruikt het werkelijke EUR-bedrag van de bank.
+                            Factuur: {inv.bankLine.invoiceAmount?.toFixed(2)} {inv.bankLine.invoiceCurrency}, omgerekend
+                            naar euro om de betaling te vinden. Speedy vult het werkelijke eurobedrag van de bank in.
                           </Typography>
                         )}
                       </Alert>
@@ -1222,11 +1221,11 @@ export function InvoiceReviewDialog({
                             }
                           >
                             <Typography variant="body2">
-                              Het bonnetje is €{incl.toFixed(2)}, maar het afschrift
-                              toont €{bankAmount.toFixed(2)} — verschil van{" "}
-                              <strong>€{delta.toFixed(2)}</strong>. Dat is meestal
-                              een fooi. Splits in een aparte regel zonder BTW (fooien
-                              zijn geen aftrekbare BTW onder Nederlandse regels).
+                              Het bonnetje is €{incl.toFixed(2)}, maar op het afschrift
+                              staat €{bankAmount.toFixed(2)}: een verschil van{" "}
+                              <strong>€{delta.toFixed(2)}</strong>. Meestal is dat een
+                              fooi. Zet het verschil op een aparte regel zonder BTW, want
+                              op een fooi zit geen BTW.
                             </Typography>
                           </Alert>
                         );
@@ -1289,9 +1288,9 @@ export function InvoiceReviewDialog({
                                 onClick={() => removeExtraLine(index, lineIdx)}
                                 disabled={submitting}
                                 sx={{ minWidth: 0, alignSelf: "center" }}
-                                aria-label={`Verwijder regel ${lineIdx + 2}`}
+                                aria-label={`Regel ${lineIdx + 2} verwijderen`}
                               >
-                                Verwijder
+                                Verwijderen
                               </Button>
                             </Box>
                           ))}
@@ -1317,7 +1316,7 @@ export function InvoiceReviewDialog({
                               }
                               disabled={submitting}
                             >
-                              + Voeg regel toe
+                              + Regel toevoegen
                             </Button>
                             <Typography
                               variant="caption"
@@ -1331,7 +1330,7 @@ export function InvoiceReviewDialog({
                               {bankAmount > 0 && (
                                 <>
                                   {" "}
-                                  / bank {formatEuro(bankAmount.toFixed(2))}
+                                  / afschrift {formatEuro(bankAmount.toFixed(2))}
                                 </>
                               )}
                             </Typography>
@@ -1378,14 +1377,16 @@ export function InvoiceReviewDialog({
                 sx={{ mr: "auto", pl: 1 }}
               >
                 {(() => {
+                  const creditnotas = invoices.filter((inv) => inv.source.invoice.documentType === "creditnota").length;
                   const missingRel = invoices.filter((inv) => !inv.isReceipt && !inv.relation).length;
                   const missingLedger = invoices.filter((inv) => !inv.ledgerAccount).length;
                   const missingBank = invoices.filter((inv) => inv.isReceipt && !inv.importId).length;
                   const parts = [];
+                  if (creditnotas) parts.push(`${creditnotas} ${creditnotas === 1 ? "creditnota" : "creditnota's"}`);
                   if (missingRel) parts.push(`${missingRel} zonder relatie`);
                   if (missingLedger) parts.push(`${missingLedger} zonder tegenrekening`);
                   if (missingBank) parts.push(`${missingBank} bonnetje${missingBank > 1 ? "s" : ""} zonder afschriftregel`);
-                  return `${blockedCount} worden overgeslagen (${parts.join(", ")})`;
+                  return `${blockedCount} ${blockedCount === 1 ? "wordt" : "worden"} overgeslagen (${parts.join(", ")})`;
                 })()}
               </Typography>
             )}
@@ -1572,7 +1573,7 @@ function fileToBase64(file: File): Promise<string> {
     reader.onload = () => {
       const result = reader.result;
       if (typeof result !== "string") {
-        reject(new Error("Onverwacht resultaat bij het lezen van de PDF"));
+        reject(new Error("Het bestand kon niet worden gelezen"));
         return;
       }
       const comma = result.indexOf(",");
@@ -1693,7 +1694,7 @@ function DocumentPreview({ url: pdfUrl, filename, mediaType }: { url: string; fi
             <polyline points="10 9 9 9 8 9" />
           </Box>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Je browser kan dit PDF-bestand niet inline weergeven.
+            Je browser kan deze PDF hier niet tonen.
           </Typography>
           <Link
             href={pdfUrl}
@@ -1701,7 +1702,7 @@ function DocumentPreview({ url: pdfUrl, filename, mediaType }: { url: string; fi
             rel="noopener noreferrer"
             sx={{ fontWeight: 600, fontSize: "0.875rem" }}
           >
-            PDF openen in nieuw tabblad
+            PDF openen in een nieuw tabblad
           </Link>
         </Box>
       </Box>
@@ -1745,7 +1746,7 @@ function OpenInNewTabLink({ href }: { href: string }) {
         <polyline points="15 3 21 3 21 9" />
         <line x1="10" y1="14" x2="21" y2="3" />
       </Box>
-      Openen in nieuw tabblad
+      Openen in een nieuw tabblad
     </Link>
   );
 }
@@ -1763,15 +1764,15 @@ function ConfidenceBadge({ confidence }: { confidence: number }) {
   if (pct >= 80) {
     color = "#166534";
     bgcolor = "rgba(22, 163, 74, 0.1)";
-    label = `${pct}% — hoog vertrouwen`;
+    label = `Hoge zekerheid (${pct}%)`;
   } else if (pct >= 50) {
     color = "#92400e";
     bgcolor = "rgba(245, 158, 11, 0.1)";
-    label = `${pct}% — matig vertrouwen`;
+    label = `Matige zekerheid (${pct}%)`;
   } else {
     color = "#991b1b";
     bgcolor = "rgba(220, 38, 38, 0.1)";
-    label = `${pct}% — laag vertrouwen`;
+    label = `Lage zekerheid (${pct}%)`;
   }
 
   return (

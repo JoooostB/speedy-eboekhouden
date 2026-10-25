@@ -177,7 +177,7 @@ describe("summarizeRun", () => {
       { kind: "ok", status: "receipt_waiting" } as const,
       ...Array.from({ length: 2 }, () => ({ kind: "ok", status: "not_invoice" }) as const),
     ];
-    expect(summarizeRun(outcomes)).toBe("12 geanalyseerd · 7 met betaling · 3 zonder · 2 geen factuur");
+    expect(summarizeRun(outcomes)).toBe("12 geanalyseerd · 7 met betaling · 3 zonder betaling · 2 geen factuur");
   });
 
   it("leaves out zero parts and appends failures and skipped documents", () => {
@@ -234,7 +234,7 @@ describe("texts", () => {
   });
 
   it("builds the confirmation text with the estimated cost", () => {
-    expect(analyzeAllConfirmText(34)).toBe("Analyseer 34 documenten? Dit kost ongeveer € 1,02 aan AI-tegoed.");
+    expect(analyzeAllConfirmText(34)).toBe("34 documenten analyseren? Dat kost ongeveer € 1,02 van je tegoed bij Anthropic.");
   });
 
   it("builds the subtitle with Dutch singular and plural", () => {
@@ -242,7 +242,7 @@ describe("texts", () => {
     expect(inboxSubtitle(1, 1)).toBe("1 afschriftregel en 1 document om te verwerken");
     expect(inboxSubtitle(3, 0)).toBe("3 afschriftregels om te verwerken");
     expect(inboxSubtitle(0, 2)).toBe("2 documenten om te verwerken");
-    expect(inboxSubtitle(0, 0)).toBe("Je inbox is leeg. Alles is verwerkt!");
+    expect(inboxSubtitle(0, 0)).toBe("Je inbox is leeg. Alles is verwerkt.");
   });
 
   it("parses bare dates as local calendar dates", () => {
@@ -316,8 +316,8 @@ describe("documentSubtitle", () => {
 
   it("names the earlier booking of a duplicate", () => {
     const d = analyzed(1, "duplicate", { alreadySubmitted: { mutNr: 1234, submittedAt: "2026-10-03T10:00:00Z" } });
-    expect(documentSubtitle(d)).toBe("Zelfde bestand geboekt op 3 okt (mutatie 1234)");
-    expect(documentSubtitle(analyzed(1, "duplicate"))).toBe("Zelfde bestand is al geboekt");
+    expect(documentSubtitle(d)).toBe("Dit bestand is al geboekt op 3 okt (mutatie 1234)");
+    expect(documentSubtitle(analyzed(1, "duplicate"))).toBe("Dit bestand is al eens geboekt");
   });
 
   it("falls back to the backend subtitle", () => {

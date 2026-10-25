@@ -160,7 +160,7 @@ export function isOpenBooking(inv: BookingShape): boolean {
 
 /** The info alert for an open booking (UX flow 4). */
 export const NO_MATCH_ALERT_TEXT =
-  "Nog geen betaling gevonden. We boeken dit als openstaande factuur. Zodra de betaling op je afschrift staat, stelt Speedy voor om hem te koppelen.";
+  "Nog geen betaling gevonden, dus Speedy boekt dit als openstaande factuur. Staat het bedrag later op je afschrift, dan stelt Speedy voor om de betaling te koppelen.";
 
 export interface SubmitLabelInput {
   submitting: boolean;
@@ -174,7 +174,7 @@ export interface SubmitLabelInput {
 
 /** Text of the dialog's primary button. */
 export function submitButtonLabel(i: SubmitLabelInput): string {
-  if (i.submitting) return `Verwerken (${i.progress}/${i.total})...`;
+  if (i.submitting) return `Boeken (${i.progress}/${i.total})…`;
   if (i.total === 1) return i.openBooking ? "Boeken als openstaand" : "Boeken";
   if (i.blockedCount > 0) return `Boek ${i.total - i.blockedCount} van ${i.total}`;
   return `Alles boeken (${i.total})`;
@@ -196,12 +196,13 @@ export const MONTH_FOLDER_NAMES: readonly string[] = [
   "12 December",
 ];
 
-/** "Facturen/2026/10 Oktober": the folder the backend picks when none was
- *  chosen, for the booking date. An unreadable date means today, like the
- *  backend's bookingDate. */
+/** "Facturen / 2026 / 10 Oktober": the folder the backend picks when none
+ *  was chosen, for the booking date, written like the folder picker and the
+ *  backend's targetFolderPath write paths. An unreadable date means today,
+ *  like the backend's bookingDate. */
 export function autoArchiveFolderPath(datum: string, now: Date = new Date()): string {
   const d = parseDate(datum) ?? now;
-  return `Facturen/${d.getFullYear()}/${MONTH_FOLDER_NAMES[d.getMonth()]}`;
+  return `Facturen / ${d.getFullYear()} / ${MONTH_FOLDER_NAMES[d.getMonth()]}`;
 }
 
 export interface FolderHelperInput {
@@ -211,14 +212,15 @@ export interface FolderHelperInput {
   mailFolderName: string;
 }
 
-/** Helper text under the "Verplaatsen naar" picker: where the file goes
- *  when no folder is picked, and that it leaves the mail folder either way. */
+/** Helper text under the "Verplaatsen naar" picker: that the file gets an
+ *  archive name and leaves the mail folder either way, and where it goes
+ *  when no folder is picked. */
 export function archiveFolderHelperText(i: FolderHelperInput, now?: Date): string {
   const leaves = i.mailFolderName
-    ? `Het bestand gaat uit je mailmap ${i.mailFolderName}.`
-    : "Het bestand gaat uit je mailmap.";
+    ? `Het bestand krijgt een archiefnaam en verlaat je mailmap ${i.mailFolderName}.`
+    : "Het bestand krijgt een archiefnaam en verlaat je mailmap.";
   if (i.folderPicked) return leaves;
-  return `Geen map gekozen: ${autoArchiveFolderPath(i.datum, now)}. ${leaves}`;
+  return `${leaves} Kies je geen map, dan komt het in ${autoArchiveFolderPath(i.datum, now)}.`;
 }
 
 /** The result line of a booked mail-folder document: "Geboekt · verplaatst

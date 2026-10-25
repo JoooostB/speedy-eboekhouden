@@ -166,7 +166,7 @@ function OpenPostRows({ posts }: { posts: OpenPostGridItem[] }) {
         {posts.map((p, i) => {
           const due = parseDate(p.vervaldatum);
           const overdue = !!due && due < today;
-          const dueText = due ? `${overdue ? "vervallen op" : "vervalt"} ${formatShortDate(p.vervaldatum)}` : "";
+          const dueText = due ? `${overdue ? "vervallen op" : "vervalt op"} ${formatShortDate(p.vervaldatum)}` : "";
           const details = [p.mutFactuur ? `Factuur ${p.mutFactuur}` : null, dueText || null].filter(Boolean).join(" · ");
           return (
             <Box
@@ -477,7 +477,7 @@ export function DocumentList({ state, actions, aiStatus, onBook, onBookAll }: Pr
         }
       >
         <Typography component="span" sx={{ fontWeight: 600, display: "block" }}>
-          Kon je mailmap niet laden
+          Mailmap laden mislukt
         </Typography>
         {state.error}
       </Alert>
@@ -490,7 +490,7 @@ export function DocumentList({ state, actions, aiStatus, onBook, onBookAll }: Pr
 
   const hasWork = sections.ready.length > 0 || sections.todo.length > 0;
   const analyzeAllDisabled = targets.length === 0 || !!blockedReason || runActive;
-  const analyzeAllTooltip = blockedReason ?? (runActive ? "Er loopt al een analyse" : targets.length === 0 ? "Alles is al geanalyseerd" : "");
+  const analyzeAllTooltip = blockedReason ?? (runActive ? "Er loopt al een analyse" : targets.length === 0 ? "Er is niets meer te analyseren" : "");
 
   return (
     <Box>
@@ -551,7 +551,7 @@ export function DocumentList({ state, actions, aiStatus, onBook, onBookAll }: Pr
                   </Box>
                 </Tooltip>
                 <Typography variant="caption" color="text.secondary">
-                  ≈ € 0,03 per document via je eigen API-sleutel
+                  Ongeveer € 0,03 per document, van je eigen tegoed bij Anthropic
                 </Typography>
               </Box>
             )}
@@ -609,7 +609,7 @@ export function DocumentList({ state, actions, aiStatus, onBook, onBookAll }: Pr
               size="small"
               onClick={() => void handleArchiveAll()}
               disabled={archivingAll || runActive}
-              aria-label={`Ruim alle ${sections.processed.length} verwerkte documenten op`}
+              aria-label={`Alle ${sections.processed.length} verwerkte documenten opruimen`}
               sx={{ fontWeight: 600 }}
             >
               {archivingAll ? "Opruimen…" : "Alles opruimen"}
@@ -656,7 +656,7 @@ export function DocumentList({ state, actions, aiStatus, onBook, onBookAll }: Pr
               ) : (
                 <>
                   <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-                    Geboekte inkoopfacturen waarvan de betaling nog niet op je afschrift staat. Zodra die binnenkomt, stelt Speedy de koppeling voor.
+                    Inkoopfacturen die in e-Boekhouden nog openstaan. Verschijnt de betaling op je afschrift, dan stelt Speedy voor om die te koppelen.
                   </Typography>
                   <OpenPostRows posts={state.openPosts.items} />
                 </>
@@ -728,7 +728,7 @@ export function DocumentList({ state, actions, aiStatus, onBook, onBookAll }: Pr
             </Typography>
           )}
           <DialogContentText id="delete-document-text">
-            Dit bestand wordt definitief verwijderd uit je e-Boekhouden-archief. Dit kan niet ongedaan worden gemaakt.
+            Speedy verwijdert dit bestand definitief uit je digitale archief in e-Boekhouden. Dat kun je niet ongedaan maken.
           </DialogContentText>
           {deleteError && (
             <Alert severity="error" sx={{ mt: 2 }}>

@@ -28,7 +28,7 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
     return (
       <Box sx={{ mt: 3 }}>
         <Typography variant="body2" gutterBottom>
-          Bezig met indienen... ({total} items)
+          Uren indienen… ({total} {total === 1 ? "regel" : "regels"})
         </Typography>
         <LinearProgress />
       </Box>
@@ -56,10 +56,10 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
         >
           <CheckCircleOutlineIcon sx={{ fontSize: 56, color: "#16a34a", mb: 2 }} />
           <Typography variant="h5" sx={{ fontWeight: 700, color: "#15803d", mb: 1 }}>
-            Uren ingediend!
+            Uren ingediend
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-            {successes} {successes === 1 ? "item" : "items"} succesvol ingevoerd in e-boekhouden.
+            {successes} {successes === 1 ? "regel staat" : "regels staan"} nu in e-Boekhouden.
           </Typography>
           {onReset && (
             <Button variant="outlined" color="success" onClick={onReset}>
@@ -71,8 +71,8 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
         <>
           <Alert severity="warning" sx={{ mb: 2 }}>
             <AlertTitle>Gedeeltelijk ingediend</AlertTitle>
-            {successes} gelukt, {failures} mislukt van {results.length} items.
-            Controleer de fouten hieronder.
+            {successes} van de {results.length} {results.length === 1 ? "regel" : "regels"} gelukt, {failures} mislukt.
+            De fouten staan hieronder.
           </Alert>
           <List dense>
             {results
@@ -83,7 +83,7 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
                     <ErrorIcon color="error" />
                   </ListItemIcon>
                   <ListItemText
-                    primary={`Medewerker ${r.employeeId} — ${r.date}`}
+                    primary={`Medewerker ${r.employeeId} · ${r.date}`}
                     secondary={r.error}
                   />
                 </ListItem>
@@ -92,7 +92,7 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
           {successes > 0 && (
             <>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 2, mb: 1 }}>
-                Succesvol ingevoerd:
+                Gelukt:
               </Typography>
               <List dense>
                 {results.filter((r) => r.status === "ok").slice(0, 5).map((r, i) => (
@@ -100,13 +100,13 @@ export function SubmitResults({ results, loading, total, onReset }: Props) {
                     <ListItemIcon>
                       <CheckCircleIcon color="success" />
                     </ListItemIcon>
-                    <ListItemText primary={`Medewerker ${r.employeeId} — ${r.date}`} />
+                    <ListItemText primary={`Medewerker ${r.employeeId} · ${r.date}`} />
                   </ListItem>
                 ))}
                 {successes > 5 && (
                   <ListItem>
                     <ListItemText
-                      primary={`...en ${successes - 5} meer`}
+                      primary={`en nog ${successes - 5}`}
                       sx={{ color: "text.secondary" }}
                     />
                   </ListItem>

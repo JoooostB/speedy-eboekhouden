@@ -122,16 +122,15 @@ export function EBoekhoudenConnectDialog({ open, onClose }: Props) {
         noValidate
       >
         <DialogTitle id={dialogId} sx={{ pb: 0 }}>
-          {needsMFA ? "Verificatiecode invoeren" : "Verbinden met e-Boekhouden"}
+          {needsMFA ? "Verificatiecode invoeren" : "e-Boekhouden koppelen"}
         </DialogTitle>
 
         <DialogContent sx={{ pt: 2 }}>
           {!needsMFA ? (
             <>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5, mt: 1 }}>
-                Verbind met je e-Boekhouden account om aan de slag te gaan.
-                Voor je veiligheid slaan wij je wachtwoord niet op — daarom
-                vragen we je elke sessie opnieuw in te loggen.
+                Log in met je e-Boekhouden-account om je afschriften,
+                documenten en uren in Speedy te verwerken.
               </Typography>
 
               {error && (
@@ -200,8 +199,10 @@ export function EBoekhoudenConnectDialog({ open, onClose }: Props) {
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                 </Box>
                 <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5 }}>
-                  Je wachtwoord wordt doorgestuurd naar e-boekhouden.nl en
-                  direct verwijderd. Speedy slaat geen inloggegevens op.
+                  Speedy geeft je wachtwoord door aan e-boekhouden.nl en
+                  bewaart het niet. Wel bewaart Speedy versleuteld het
+                  toegangstoken dat e-Boekhouden teruggeeft, zodat je niet bij
+                  elk bezoek opnieuw hoeft in te loggen.
                 </Typography>
               </Box>
             </>
@@ -218,8 +219,8 @@ export function EBoekhoudenConnectDialog({ open, onClose }: Props) {
                   Verificatiecode nodig
                 </Typography>
                 <Typography variant="body2">
-                  e-Boekhouden heeft een code naar je e-mail gestuurd.
-                  Vul deze hieronder in om de koppeling te voltooien.
+                  e-Boekhouden heeft je een code gemaild. Vul die hieronder
+                  in om de koppeling af te ronden.
                 </Typography>
               </Alert>
 
@@ -250,9 +251,9 @@ export function EBoekhoudenConnectDialog({ open, onClose }: Props) {
             {loading ? (
               <CircularProgress size={22} color="inherit" aria-label="Bezig" />
             ) : needsMFA ? (
-              "Verifieer"
+              "Bevestigen"
             ) : (
-              "Verbinden"
+              "Inloggen"
             )}
           </Button>
         </DialogActions>

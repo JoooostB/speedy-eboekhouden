@@ -14,10 +14,10 @@ export const DISCONNECT_CANCEL_LABEL = "Annuleren";
 /** What the backend does on disconnect, in that order, plus what stays. */
 export const DISCONNECT_CONSEQUENCES: readonly string[] = [
   "Speedy meldt je af bij e-Boekhouden.",
-  "De verbindingstoken wordt uit Speedy verwijderd.",
-  "Tijdelijk opgeslagen analyses, suggesties, duplicaatmarkeringen en de negeerlijst van deze administratie worden verwijderd.",
-  "Geleerde boekingen blijven staan (verwijderbaar via Instellingen).",
-  "Je kunt op elk moment opnieuw verbinden.",
+  "Speedy verwijdert het opgeslagen toegangstoken van e-Boekhouden.",
+  "Speedy wist de tijdelijk bewaarde analyses, boekingsvoorstellen, duplicaatmarkeringen en je negeerlijst.",
+  "Je geleerde boekingen blijven bewaard. Die kun je verwijderen onder Instellingen.",
+  "Je kunt e-Boekhouden op elk moment opnieuw koppelen.",
 ];
 
 /** Shown when the disconnect request itself failed; nothing changed then. */

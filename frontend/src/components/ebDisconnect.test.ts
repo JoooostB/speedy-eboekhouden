@@ -26,11 +26,11 @@ describe("disconnect dialog texts", () => {
   it("explains logout, token, caches, learned bookings and reconnecting", () => {
     const all = DISCONNECT_CONSEQUENCES.join(" ");
     expect(all).toContain("meldt je af bij e-Boekhouden");
-    expect(all).toContain("verbindingstoken");
+    expect(all).toContain("toegangstoken");
     expect(all).toContain("duplicaatmarkeringen");
     expect(all).toContain("negeerlijst");
-    expect(all).toContain("Geleerde boekingen blijven staan");
-    expect(all).toContain("opnieuw verbinden");
+    expect(all).toContain("geleerde boekingen blijven bewaard");
+    expect(all).toContain("opnieuw koppelen");
     expect(DISCONNECT_CONSEQUENCES).toHaveLength(5);
   });
 
@@ -45,7 +45,8 @@ describe("disconnect dialog texts", () => {
     const texts = [DISCONNECT_TITLE, DISCONNECT_ERROR, ...DISCONNECT_CONSEQUENCES, disconnectResultMessage({ ebLoggedOut: false })];
     for (const t of texts) {
       expect(t).not.toMatch(/wordt je/);
-      expect(t).not.toMatch(/verbindings token|duplicaat markeringen|negeer lijst/);
+      expect(t).not.toMatch(/toegangs token|duplicaat markeringen|negeer lijst/);
+      expect(t).not.toMatch(/—/);
     }
   });
 });

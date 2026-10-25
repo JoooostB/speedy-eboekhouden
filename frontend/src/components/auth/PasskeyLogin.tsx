@@ -107,7 +107,7 @@ export function PasskeyLogin() {
         : "Passkey-registratie geannuleerd of verlopen. Probeer het opnieuw.";
     }
     if (name === "SecurityError" || msg.includes("security")) {
-      return "Beveiligingsfout: controleer of je de app opent via het juiste adres (localhost of het eigen domein).";
+      return "Beveiligingsfout. Controleer of je Speedy via het juiste webadres opent.";
     }
     if (name === "InvalidStateError" || msg.includes("already registered") || msg.includes("invalid state")) {
       return "Deze passkey is al geregistreerd op dit apparaat.";
@@ -119,10 +119,10 @@ export function PasskeyLogin() {
       return "Geen passkey gevonden. Heb je al een account aangemaakt?";
     }
     if (msg.includes("user handle") || msg.includes("user id") || msg.includes("do not match")) {
-      return "Passkey komt niet overeen met je account. Verwijder de oude passkey uit je browser/apparaat en registreer opnieuw.";
+      return "Deze passkey past niet bij je account. Verwijder de oude passkey van je apparaat en vraag via 'Passkey kwijt?' een nieuwe aan.";
     }
     if (msg.includes("credential not found") || msg.includes("finishing login") || msg.includes("not found")) {
-      return "Deze passkey is niet meer geldig. Verwijder hem uit je browser (Instellingen → Wachtwoorden/Passkeys) en maak een nieuw account aan.";
+      return "Speedy kent deze passkey niet meer. Verwijder hem uit je wachtwoordbeheer en vraag via 'Passkey kwijt?' een nieuwe aan.";
     }
 
     // API errors (already in Dutch from our backend)
@@ -215,7 +215,7 @@ export function PasskeyLogin() {
                 color="text.secondary"
                 sx={{ mb: 3, textAlign: "center" }}
               >
-                Log in met je passkey — geen wachtwoord nodig.
+                Log in met je passkey. Een wachtwoord heb je niet nodig.
               </Typography>
 
               {error && (
@@ -280,7 +280,7 @@ export function PasskeyLogin() {
                 color="text.secondary"
                 sx={{ mb: 3, textAlign: "center" }}
               >
-                Je apparaat wordt je sleutel. Geen wachtwoord om te onthouden.
+                Je logt in met je apparaat, zonder wachtwoord.
               </Typography>
 
               {error && (
@@ -346,10 +346,10 @@ export function PasskeyLogin() {
                 }}
               >
                 <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
-                  <strong>Wat is een passkey?</strong> Een passkey gebruikt de
-                  beveiliging van je apparaat (vingerafdruk, gezichtsherkenning
-                  of pincode) om je te identificeren. Veiliger dan een
-                  wachtwoord en niets om te onthouden.
+                  <strong>Wat is een passkey?</strong> Met een passkey log je
+                  in via de beveiliging van je apparaat: vingerafdruk,
+                  gezichtsherkenning of pincode. Dat is veiliger dan een
+                  wachtwoord en je hoeft niets te onthouden.
                 </Typography>
               </Box>
 

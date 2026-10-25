@@ -229,7 +229,7 @@ export function useMailDocuments(eboekhoudenConnected: boolean): { state: MailDo
         loading: false,
         refreshing: false,
         loaded: true,
-        error: opts?.silent && s.documents.length > 0 ? s.error : errorMessage(err, "Kon je mailmap niet laden"),
+        error: opts?.silent && s.documents.length > 0 ? s.error : errorMessage(err, "Probeer het zo opnieuw."),
       }));
       return null;
     }
@@ -439,7 +439,7 @@ export function useMailDocuments(eboekhoudenConnected: boolean): { state: MailDo
           ...s.openPosts,
           loading: false,
           loaded: true,
-          error: errorMessage(err, "Kon openstaande posten niet laden"),
+          error: errorMessage(err, "Openstaande inkoopfacturen laden mislukt"),
         },
       }));
     }

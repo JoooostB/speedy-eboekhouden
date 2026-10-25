@@ -17,9 +17,9 @@ export function aiBlocked(status: AiStatus | null | undefined): boolean {
 export function aiBlockedReason(status: AiStatus | null | undefined): string | null {
   switch (status?.status) {
     case "not_configured":
-      return "AI-analyse is niet actief: stel eerst een API-sleutel in";
+      return "Stel eerst een API-sleutel in";
     case "no_credits":
-      return "AI-tegoed is op";
+      return "Je tegoed bij Anthropic is op";
     case "invalid":
       return "API-sleutel is ongeldig";
     default:
@@ -76,20 +76,20 @@ export function AiStatusAlert({ status, variant, sx }: Props) {
         action={statusAction(status)}
       >
         <AlertTitle sx={{ fontWeight: 600 }}>
-          {status.status === "not_configured" && "AI-classificatie is niet actief"}
-          {status.status === "no_credits" && "AI-tegoed is op"}
+          {status.status === "not_configured" && "Geen boekingsvoorstellen zonder API-sleutel"}
+          {status.status === "no_credits" && "Je tegoed bij Anthropic is op"}
           {status.status === "invalid" && "API-sleutel is ongeldig"}
-          {status.status === "active" && "AI is beschikbaar — klik op 'Vernieuwen' om te classificeren"}
-          {status.status === "error" && "AI-status kon niet worden gecontroleerd"}
+          {status.status === "active" && "AI staat klaar: klik op Vernieuwen voor boekingsvoorstellen"}
+          {status.status === "error" && "Speedy kon de AI-status niet controleren"}
         </AlertTitle>
         {status.status === "not_configured" && (
-          "Met een Anthropic API-sleutel classificeert Speedy je afschriftregels automatisch. Bankkosten, abonnementen en leveranciersbetalingen worden herkend en met een klik verwerkt."
+          "Met een Anthropic API-sleutel doet Speedy bij het laden van je inbox een boekingsvoorstel voor elke afschriftregel. Bankkosten, abonnementen en betalingen aan leveranciers herkent de AI dan zelf, en die boek je met een paar klikken."
         )}
         {status.status === "no_credits" && (
-          "Je API-sleutel is geldig, maar je tegoed bij Anthropic is op. Waardeer je tegoed op om AI-classificatie te hervatten."
+          "Je API-sleutel werkt, maar je tegoed bij Anthropic is op. Waardeer het op om weer boekingsvoorstellen te krijgen."
         )}
         {status.status === "invalid" && (
-          "Controleer je API-sleutel in de instellingen."
+          "Controleer je API-sleutel onder Instellingen."
         )}
       </Alert>
     );
@@ -105,18 +105,18 @@ export function AiStatusAlert({ status, variant, sx }: Props) {
     >
       <AlertTitle sx={{ fontWeight: 600 }}>
         {status.status === "not_configured" && "Geen API-sleutel ingesteld"}
-        {status.status === "no_credits" && "AI-tegoed is op"}
+        {status.status === "no_credits" && "Je tegoed bij Anthropic is op"}
         {status.status === "invalid" && "API-sleutel is ongeldig"}
       </AlertTitle>
-      AI-analyse is niet actief — je kunt documenten wel bekijken en negeren.{" "}
+      Je kunt documenten nog wel bekijken en negeren, maar Speedy kan ze niet uitlezen.{" "}
       {status.status === "not_configured" && (
-        "Met een Anthropic API-sleutel leest Speedy je facturen uit en koppelt ze aan je betalingen."
+        "Met een Anthropic API-sleutel kan Speedy je facturen uitlezen en de bijbehorende betalingen zoeken."
       )}
       {status.status === "no_credits" && (
-        "Je API-sleutel is geldig, maar je tegoed bij Anthropic is op. Waardeer je tegoed op om AI-analyse te hervatten."
+        "Je API-sleutel werkt, maar je tegoed bij Anthropic is op. Waardeer het op om weer documenten te laten uitlezen."
       )}
       {status.status === "invalid" && (
-        "Controleer je API-sleutel in de instellingen."
+        "Controleer je API-sleutel onder Instellingen."
       )}
     </Alert>
   );

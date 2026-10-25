@@ -21,6 +21,14 @@ import { PasskeysSection } from "./PasskeysSection";
 import { LearnedSection } from "./LearnedSection";
 import { EBoekhoudenDisconnectDialog } from "../EBoekhoudenDisconnectDialog";
 
+/** Display names of the onderneming types; the stored values are codes. */
+const ENTITY_TYPE_LABELS: Record<"BV" | "ZZP" | "EM" | "ANDERS", string> = {
+  BV: "B.V.",
+  ZZP: "ZZP",
+  EM: "Eenmanszaak",
+  ANDERS: "Anders",
+};
+
 /** Inline SVG icon: Link / connection */
 function LinkIcon(props: { sx?: object }) {
   return (
@@ -266,9 +274,9 @@ export function SettingsPage() {
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Nodig voor AI-functies: factuurherkenning en boekingsuggesties.
-          Je sleutel wordt versleuteld opgeslagen en nooit gedeeld.
-          Nog geen sleutel?{" "}
+          Nodig voor de AI-functies: facturen uitlezen en boekingen voorstellen.
+          Speedy bewaart je sleutel versleuteld en gebruikt hem alleen voor jouw
+          aanvragen bij Anthropic. Nog geen sleutel?{" "}
           <Typography
             component="a"
             variant="body2"
@@ -319,8 +327,8 @@ export function SettingsPage() {
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {eboekhoudenConnected
-            ? "Speedy is verbonden met je e-Boekhouden-administratie. Verbreek de verbinding om je af te melden bij e-Boekhouden en de tijdelijk opgeslagen gegevens van deze administratie uit Speedy te verwijderen. Je wachtwoord bewaart Speedy nooit."
-            : "Speedy is niet verbonden met e-Boekhouden. Koppel je administratie om afschriften, documenten en uren te verwerken."}
+            ? "Speedy is gekoppeld aan je administratie in e-Boekhouden. Verbreek je de verbinding, dan meldt Speedy je af bij e-Boekhouden en wist het de tijdelijk bewaarde gegevens. Je wachtwoord bewaart Speedy nooit."
+            : "Speedy is niet gekoppeld aan e-Boekhouden. Koppel je administratie om afschriften, documenten en uren te verwerken."}
         </Typography>
 
         {eboekhoudenConnected ? (
@@ -339,14 +347,14 @@ export function SettingsPage() {
         <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
           <ServerIcon sx={{ mr: 1, color: "primary.main", flexShrink: 0 }} />
           <Typography variant="h6" component="h2">Type onderneming</Typography>
-          {entityType && <Chip label={entityType} color="success" size="small" sx={{ ml: 1 }} />}
+          {entityType && <Chip label={ENTITY_TYPE_LABELS[entityType]} color="success" size="small" sx={{ ml: 1 }} />}
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Bepaalt hoe Speedy je transacties classificeert. Voor een <strong>B.V.</strong> is elke
-          transactie zakelijk — beleggingen komen op de balans als Effecten, niet als privé vermogen.
-          Voor een <strong>ZZP</strong>'er of eenmanszaak mag privégebruik gemengd worden met
-          zakelijk.
+          Speedy houdt hier rekening mee bij de boekingsvoorstellen voor je afschriften. Bij een{" "}
+          <strong>B.V.</strong> is elke transactie zakelijk: beleggingen komen op de balans als
+          Effecten, niet als privévermogen. Bij een <strong>zzp'er</strong> of eenmanszaak kunnen
+          privé en zakelijk op dezelfde rekening door elkaar lopen.
         </Typography>
 
         <ToggleButtonGroup
@@ -383,8 +391,9 @@ export function SettingsPage() {
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Nodig voor relaties, saldi, openstaande posten en mutaties.
-          Je vindt deze gegevens in e-Boekhouden onder Beheer &gt; Instellingen &gt; API/SOAP.
+          Optioneel. De schermen van Speedy werken zonder deze gegevens: relaties en openstaande
+          posten haalt Speedy op via je gewone koppeling met e-Boekhouden. Je vindt de gegevens in
+          e-Boekhouden onder Beheer &gt; Instellingen &gt; API/SOAP.
         </Typography>
 
         {soapMessage && (
@@ -446,8 +455,8 @@ export function SettingsPage() {
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Nodig voor verkoopfacturen en kostenplaatsen.
-          Je vindt je access token in e-Boekhouden onder Beheer &gt; Instellingen &gt; API/SOAP.
+          Optioneel. Speedy gebruikt dit token op dit moment nergens voor. Je vindt je access token
+          in e-Boekhouden onder Beheer &gt; Instellingen &gt; API/SOAP.
         </Typography>
 
         {restMessage && (
@@ -531,7 +540,7 @@ export function SettingsPage() {
               </Button>
             )}
             <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
-              Max 2 MB. JPEG, PNG of WebP.
+              Maximaal 2 MB, als JPEG, PNG of WebP.
             </Typography>
           </Box>
         </Box>

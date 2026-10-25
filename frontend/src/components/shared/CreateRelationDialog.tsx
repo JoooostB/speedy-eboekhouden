@@ -170,7 +170,7 @@ export function CreateRelationDialog({
       const results = await api.searchKvK(query);
       setSearchResults(results);
       if (results.length === 0) {
-        setSearchError("Geen resultaten gevonden.");
+        setSearchError("Niets gevonden in het KvK-register.");
       }
     } catch (err: any) {
       setSearchError(err.message || "Zoeken mislukt.");
@@ -264,11 +264,11 @@ export function CreateRelationDialog({
   const handleSubmit = useCallback(async () => {
     // Validation
     if (!form.code.trim()) {
-      setSubmitError("Code is verplicht.");
+      setSubmitError("Vul een code in.");
       return;
     }
     if (!form.bedrijf.trim()) {
-      setSubmitError("Bedrijfsnaam is verplicht.");
+      setSubmitError("Vul een bedrijfsnaam in.");
       return;
     }
 
@@ -351,7 +351,7 @@ export function CreateRelationDialog({
           Nieuwe relatie aanmaken
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Dit maakt een crediteur/leverancier aan in e-boekhouden.
+          Speedy maakt deze relatie aan in e-Boekhouden.
         </Typography>
       </DialogTitle>
 
@@ -422,7 +422,7 @@ export function CreateRelationDialog({
             </Box>
 
             <Typography id="kvk-search-hint" variant="caption" color="text.secondary" sx={{ mb: 2, display: "block" }}>
-              Zoek in het KvK-register om gegevens automatisch in te vullen.
+              Kies een bedrijf uit het KvK-register, dan vult Speedy de gegevens voor je in.
             </Typography>
 
             {/* Error / empty state — announced to screen readers */}
@@ -457,7 +457,7 @@ export function CreateRelationDialog({
                         }}
                         role="button"
                         tabIndex={0}
-                        aria-label={`${r.bedrijf}, ${r.plaats}, KvK ${r.kvkNummer} — klik om te selecteren`}
+                        aria-label={`Kies ${r.bedrijf}, ${r.plaats}, KvK ${r.kvkNummer}`}
                         sx={{ cursor: "pointer" }}
                       >
                         <TableCell>
@@ -497,7 +497,7 @@ export function CreateRelationDialog({
               <Alert severity="info" sx={{ mb: 2 }} role="status" aria-live="polite">
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                   <CircularProgress size={14} aria-hidden="true" />
-                  Adresgegevens ophalen...
+                  Adres ophalen…
                 </Box>
               </Alert>
             )}
@@ -593,7 +593,7 @@ export function CreateRelationDialog({
 
             {/* Optional fields */}
             <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
-              Optioneel
+              Optioneel. Deze velden gaan niet mee naar e-Boekhouden; vul ze daar zelf aan.
             </Typography>
 
             <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr 1fr" }, gap: 2 }}>
@@ -669,7 +669,7 @@ export function CreateRelationDialog({
               )
             }
           >
-            {submitting ? "Aanmaken..." : "Aanmaken"}
+            {submitting ? "Aanmaken…" : "Aanmaken"}
           </Button>
         )}
       </DialogActions>

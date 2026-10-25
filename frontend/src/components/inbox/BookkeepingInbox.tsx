@@ -81,7 +81,7 @@ function TabLabel({ text, count }: { text: string; count: number | null }) {
 const FILTER_TABS: { value: InboxCategory | "all"; label: string }[] = [
   { value: "all", label: "Alles" },
   { value: "auto", label: "Auto" },
-  { value: "review", label: "Controleer" },
+  { value: "review", label: "Controleren" },
   { value: "invoice", label: "Factuur" },
   { value: "manual", label: "Handmatig" },
 ];
@@ -96,16 +96,16 @@ const SUMMARY_COLORS: Record<InboxCategory, { color: string; bgcolor: string }> 
 
 const SUMMARY_LABELS: Record<InboxCategory, string> = {
   auto: "auto",
-  review: "controleer",
-  invoice: "factuur",
+  review: "te controleren",
+  invoice: "factuur nodig",
   manual: "handmatig",
 };
 
 const CATEGORY_TOOLTIPS: Record<InboxCategory, string> = {
-  auto: "Geen factuur nodig — bankkosten, belasting, prive. Verwerk met een klik.",
-  review: "AI heeft een suggestie. Controleer de velden voor verwerking.",
-  invoice: "Factuur of bon vereist. Upload het PDF-bestand om te verwerken.",
-  manual: "Vul de boeking handmatig in.",
+  auto: "Geen factuur nodig, zoals bij bankkosten, belastingen en privéopnames. Deze regels kun je meteen boeken.",
+  review: "De AI doet een voorstel. Controleer het voordat je boekt.",
+  invoice: "Hier hoort een factuur of bonnetje bij. Upload het bestand of boek het document uit je mailmap.",
+  manual: "Vul de boeking zelf in.",
 };
 
 function getGreeting(): string {
@@ -380,7 +380,7 @@ export function BookkeepingInbox() {
           // Same case here — defer to the AuthContext-driven not-connected branch.
           return;
         }
-        setError(err2 instanceof Error ? err2.message : "Kon afschriften niet laden");
+        setError(err2 instanceof Error ? err2.message : "Afschriften laden mislukt");
       }
     } finally {
       setLoading(false);
@@ -542,7 +542,7 @@ export function BookkeepingInbox() {
           {getGreeting()}{firstName ? `, ${firstName}` : ""}
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
-          Welkom bij Speedy e-Boekhouden. Verbind eerst met e-Boekhouden om je inbox te laden.
+          Welkom bij Speedy e-Boekhouden. Koppel eerst e-Boekhouden, dan laadt Speedy je inbox.
         </Typography>
         <Alert
           severity="info"
@@ -553,14 +553,14 @@ export function BookkeepingInbox() {
               onClick={() => window.dispatchEvent(new CustomEvent("eb:connect"))}
               sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
             >
-              Verbinden
+              e-Boekhouden koppelen
             </Button>
           }
         >
-          <AlertTitle sx={{ fontWeight: 600 }}>Verbind met e-Boekhouden</AlertTitle>
-          Log in met je e-boekhouden.nl account om je bankafschriften en uitgaven te verwerken.
-          Voor je veiligheid slaan wij je wachtwoord niet op — daarom vragen we je elke sessie
-          opnieuw in te loggen.
+          <AlertTitle sx={{ fontWeight: 600 }}>e-Boekhouden is niet gekoppeld</AlertTitle>
+          Log in met je account van e-boekhouden.nl om je afschriften en documenten te verwerken.
+          Speedy bewaart je wachtwoord niet. Verloopt je sessie bij e-Boekhouden, dan log je hier
+          opnieuw in.
         </Alert>
       </Box>
     );
@@ -581,12 +581,12 @@ export function BookkeepingInbox() {
               is fine. */}
           {loading && items.length === 0
             ? classifying
-              ? "Afschriften worden geclassificeerd met AI — dit duurt even bij een nieuwe verbinding..."
-              : "Inbox wordt geladen..."
+              ? "Afschriftregels ophalen en laten indelen door de AI. Dat kan even duren…"
+              : "Inbox laden…"
             : classifying && items.length > 0
               ? "Vernieuwen…"
               : !docsKnown && totalActive === 0
-                ? "Inbox wordt geladen..."
+                ? "Inbox laden…"
                 : inboxSubtitle(totalActive, docsKnown ? docCount : 0)}
         </Typography>
       </Box>
@@ -633,7 +633,7 @@ export function BookkeepingInbox() {
               )
             }
           >
-            {analyzingInvoices ? "Analyseren..." : "Facturen uploaden"}
+            {analyzingInvoices ? "Analyseren…" : "Facturen uploaden"}
             <input
               type="file"
               accept={INVOICE_FILE_ACCEPT}
@@ -685,7 +685,7 @@ export function BookkeepingInbox() {
           <Box
             sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}
             role="status"
-            aria-label="Overzicht inboxcategorieen"
+            aria-label="Overzicht van de categorieën"
           >
             {(Object.keys(SUMMARY_COLORS) as InboxCategory[]).map((cat) => {
               const count = summary[cat];
@@ -906,13 +906,13 @@ export function BookkeepingInbox() {
                 size="small"
                 inputProps={{
                   "aria-label": allVisibleSelected
-                    ? "Deselecteer alle zichtbare items"
-                    : "Selecteer alle zichtbare items",
+                    ? "Deselecteer alle zichtbare regels"
+                    : "Selecteer alle zichtbare regels",
                 }}
                 sx={{ p: 0.5 }}
               />
               <Typography variant="caption" color="text.secondary" fontWeight={500}>
-                {filter === "all" ? "Alle items" : FILTER_TABS.find((t) => t.value === filter)?.label}
+                {filter === "all" ? "Alle regels" : FILTER_TABS.find((t) => t.value === filter)?.label}
                 {` (${activeItems.length})`}
               </Typography>
             </Box>
@@ -923,7 +923,7 @@ export function BookkeepingInbox() {
             <Box
               component="ul"
               role="list"
-              aria-label="Inboxitems"
+              aria-label="Afschriftregels"
               sx={{ m: 0, p: 0 }}
             >
               {activeItems.map((item) => (
@@ -956,7 +956,7 @@ export function BookkeepingInbox() {
             Alle afschriftregels zijn verwerkt
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            {docCount === 1 ? "Er staat nog 1 document" : `Er staan nog ${docCount} documenten`} in je mailmap.
+            {docCount === 1 ? "Er staat nog 1 document" : `Er staan nog ${docCount} documenten`} in je mailmap om te verwerken.
           </Typography>
           <Button variant="outlined" size="small" onClick={() => setTab("documenten")} sx={{ fontWeight: 600 }}>
             Bekijk documenten
@@ -1002,10 +1002,10 @@ export function BookkeepingInbox() {
             <polyline points="22 4 12 14.01 9 11.01" />
           </Box>
           <Typography variant="h6" component="p" gutterBottom>
-            Inbox zero!
+            Alles verwerkt
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Alle afschriftregels en documenten zijn verwerkt. Kom later terug of klik op Vernieuwen.
+            Er wachten geen afschriftregels of documenten meer. Kom later terug of klik op Vernieuwen.
           </Typography>
         </Paper>
       )}

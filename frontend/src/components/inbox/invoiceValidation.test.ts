@@ -24,8 +24,8 @@ describe("invoiceBlocker — factuur mode", () => {
   });
 
   it("blocks a credit note in either mode, even when complete", () => {
-    expect(factuur({ isCreditnota: true })).toBe("Creditnota's boek je voorlopig in e-Boekhouden zelf");
-    expect(factuur({ isCreditnota: true, isReceipt: true })).toBe("Creditnota's boek je voorlopig in e-Boekhouden zelf");
+    expect(factuur({ isCreditnota: true })).toBe("Een creditnota boek je voorlopig zelf in e-Boekhouden");
+    expect(factuur({ isCreditnota: true, isReceipt: true })).toBe("Een creditnota boek je voorlopig zelf in e-Boekhouden");
   });
 
   it("does NOT require a bank line for factuur mode", () => {
