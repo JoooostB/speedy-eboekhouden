@@ -13,6 +13,7 @@ import { startRegistration } from "@simplewebauthn/browser";
 import { api } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { track } from "../../analytics";
+import { isBackendMessage, passkeyErrorMessage } from "./passkeyErrors";
 
 export function PasskeyRecovery() {
   const { refreshMe } = useAuth();
@@ -43,8 +44,8 @@ export function PasskeyRecovery() {
       await api.recoverRequest(email);
       track("Recovery Requested");
       setSent(true);
-    } catch (err: any) {
-      setError(err.message || "Versturen mislukt. Probeer het opnieuw.");
+    } catch (err: unknown) {
+      setError(isBackendMessage(err) ? err.message : "Versturen mislukt. Probeer het opnieuw.");
     } finally {
       setLoading(false);
     }
@@ -60,18 +61,10 @@ export function PasskeyRecovery() {
       await api.recoverFinish(challengeId, userId, credential);
       track("Recovery Complete");
       await refreshMe();
-    } catch (err: any) {
-      const name = err?.name || "";
-      const msg = (err?.message || "").toLowerCase();
-      if (name === "NotAllowedError" || msg.includes("not allowed") || msg.includes("timed out")) {
-        setError("Passkey-registratie geannuleerd of verlopen. Probeer het opnieuw.");
-      } else if (name === "SecurityError") {
-        setError("Beveiligingsfout. Controleer of je Speedy via het juiste webadres opent.");
-      } else if (msg.includes("already registered") || name === "InvalidStateError") {
-        setError("Deze passkey is al geregistreerd op dit apparaat.");
-      } else {
-        setError("Herstel mislukt. Vraag een nieuwe link aan.");
-      }
+    } catch (err: unknown) {
+      // The backend's own (Dutch) answer when it gave one, such as an
+      // expired or already used link; the request form shows below it.
+      setError(passkeyErrorMessage(err, "recovery"));
       setRegistering(false);
     }
   };

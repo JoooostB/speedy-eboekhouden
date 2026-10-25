@@ -14,6 +14,7 @@ import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
 import { api } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { errorClass, track } from "../../analytics";
+import { passkeyErrorMessage } from "./passkeyErrors";
 
 /**
  * PasskeyLogin handles both login and registration.
@@ -95,46 +96,8 @@ export function PasskeyLogin() {
     }
   };
 
-  /** Translate WebAuthn and API errors to Dutch */
-  const translateError = (err: any, context: "login" | "register"): string => {
-    const name = err?.name || "";
-    const msg = (err?.message || "").toLowerCase();
-
-    // WebAuthn browser errors
-    if (name === "NotAllowedError" || msg.includes("not allowed") || msg.includes("timed out")) {
-      return context === "login"
-        ? "Passkey-aanvraag geannuleerd of verlopen. Probeer het opnieuw."
-        : "Passkey-registratie geannuleerd of verlopen. Probeer het opnieuw.";
-    }
-    if (name === "SecurityError" || msg.includes("security")) {
-      return "Beveiligingsfout. Controleer of je Speedy via het juiste webadres opent.";
-    }
-    if (name === "InvalidStateError" || msg.includes("already registered") || msg.includes("invalid state")) {
-      return "Deze passkey is al geregistreerd op dit apparaat.";
-    }
-    if (name === "AbortError" || msg.includes("abort")) {
-      return "Aanvraag afgebroken. Probeer het opnieuw.";
-    }
-    if (msg.includes("no credentials") || msg.includes("no passkey")) {
-      return "Geen passkey gevonden. Heb je al een account aangemaakt?";
-    }
-    if (msg.includes("user handle") || msg.includes("user id") || msg.includes("do not match")) {
-      return "Deze passkey past niet bij je account. Verwijder de oude passkey van je apparaat en vraag via 'Passkey kwijt?' een nieuwe aan.";
-    }
-    if (msg.includes("credential not found") || msg.includes("finishing login") || msg.includes("not found")) {
-      return "Speedy kent deze passkey niet meer. Verwijder hem uit je wachtwoordbeheer en vraag via 'Passkey kwijt?' een nieuwe aan.";
-    }
-
-    // API errors (already in Dutch from our backend)
-    if (msg.includes("e-mailadres") || msg.includes("geregistreerd") || msg.includes("challenge")) {
-      return err.message;
-    }
-
-    // Fallback — generic Dutch message
-    return context === "login"
-      ? "Inloggen mislukt. Probeer het opnieuw."
-      : "Registratie mislukt. Probeer het opnieuw.";
-  };
+  /** Translate WebAuthn and API errors to Dutch (passkeyErrors.ts). */
+  const translateError = (err: unknown, context: "login" | "register"): string => passkeyErrorMessage(err, context);
 
   const switchMode = (newMode: "login" | "register") => {
     setMode(newMode);
