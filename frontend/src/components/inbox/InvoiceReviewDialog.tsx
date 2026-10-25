@@ -50,8 +50,11 @@ import {
   previewKind,
   submitButtonLabel,
 } from "./mailDocumentReview";
+import { isBooked, submitOutcome } from "./submitOutcome";
 import type {
   AnalyzedInvoice,
+  InvoiceSubmitFullResponse,
+  InvoiceSubmitReceiptResponse,
   LedgerAccount,
   MatchedBankLine,
   ReceiptExtraLine,
@@ -432,88 +435,32 @@ export function InvoiceReviewDialog({
       const confidence = String(Math.round(inv.source.invoice.confidence * 100));
 
       try {
-        let details: string;
-        if (inv.isReceipt) {
-          // Bonnetje flow — no relation, "Geld uitgegeven" mutation. The
-          // user-added split lines (typically the tip) travel as extraLines
-          // with a BTW split per line (receiptExtraLines).
-          const receiptResp = await api.submitReceipt(
-            buildReceiptSubmitPayload({ ...payloadInput, extraLines: receiptExtraLines(inv.extraLines, vatRate) }),
-          );
+        // Bonnetje flow — no relation, "Geld uitgegeven" mutation. The
+        // user-added split lines (typically the tip) travel as extraLines
+        // with a BTW split per line (receiptExtraLines). An invoice is a
+        // FactuurOntvangen, plus the payment when a bank line is linked.
+        const resp: InvoiceSubmitFullResponse | InvoiceSubmitReceiptResponse = inv.isReceipt
+          ? await api.submitReceipt(
+              buildReceiptSubmitPayload({ ...payloadInput, extraLines: receiptExtraLines(inv.extraLines, vatRate) }),
+            )
+          : await api.submitInvoiceFull(buildFullSubmitPayload(payloadInput));
 
-          // The booking stands, but the mail-folder document could not be
-          // linked, renamed or moved; the backend says what state it is in.
-          if (receiptResp.archiveWarning) {
-            submitResults.push({
-              filename: label,
-              status: "warning",
-              details: detailsFor(receiptResp),
-              error: receiptResp.archiveWarning,
-            });
-            track("Invoice Review Submitted", { confidence, mode: "receipt", outcome: "archive_warning" });
-            continue;
-          }
-
-          if (archiveExpected && receiptResp.archived === false) {
-            submitResults.push({
-              filename: label,
-              status: "warning",
-              details: receiptDetails,
-              error:
-                "Het bonnetje is geboekt, maar het bestand kon niet naar je digitale archief. Upload het zelf in e-Boekhouden; boek het niet opnieuw.",
-            });
-            track("Invoice Review Submitted", { confidence, mode: "receipt", outcome: "archive_warning" });
-            continue;
-          }
-          details = detailsFor(receiptResp);
-        } else {
-          const fullResp = await api.submitInvoiceFull(buildFullSubmitPayload(payloadInput));
-
-          // FactuurOntvangen succeeded but the bank-line-clearing payment
-          // mutation didn't — surface as a yellow warning so the user
-          // doesn't think the booking is done.
-          if (fullResp.paymentWarning) {
-            submitResults.push({
-              filename: label,
-              status: "warning",
-              details: detailsFor(fullResp),
-              error: fullResp.paymentWarning,
-            });
-            track("Invoice Review Submitted", { confidence, mode: "invoice", outcome: "payment_warning" });
-            continue;
-          }
-
-          if (fullResp.archiveWarning) {
-            submitResults.push({
-              filename: label,
-              status: "warning",
-              details: detailsFor(fullResp),
-              error: fullResp.archiveWarning,
-            });
-            track("Invoice Review Submitted", { confidence, mode: "invoice", outcome: "archive_warning" });
-            continue;
-          }
-
-          if (archiveExpected && fullResp.archived === false) {
-            submitResults.push({
-              filename: label,
-              status: "warning",
-              details: invoiceDetails,
-              error:
-                "De factuur is geboekt, maar het bestand kon niet naar je digitale archief. Upload het zelf in e-Boekhouden; boek het niet opnieuw.",
-            });
-            track("Invoice Review Submitted", { confidence, mode: "invoice", outcome: "archive_warning" });
-            continue;
-          }
-          details = detailsFor(fullResp);
-        }
-
-        submitResults.push({ filename: label, status: "ok", details });
-
-        track("Invoice Review Submitted", {
-          confidence,
-          mode: inv.isReceipt ? "receipt" : "invoice",
+        // The booking stands. A payment that failed (the bank line stays
+        // open) and a document that could not be archived, linked, renamed
+        // or moved are separate problems, so every warning is shown.
+        const outcome = submitOutcome({ isReceipt: inv.isReceipt, archiveExpected, resp });
+        submitResults.push({
+          filename: label,
+          status: outcome.status,
+          details: detailsFor(resp),
+          error: outcome.warnings.length > 0 ? outcome.warnings.join(" ") : undefined,
         });
+
+        const mode = inv.isReceipt ? "receipt" : "invoice";
+        track(
+          "Invoice Review Submitted",
+          outcome.outcome ? { confidence, mode, outcome: outcome.outcome } : { confidence, mode },
+        );
       } catch (err: any) {
         submitResults.push({
           filename: label,
@@ -534,16 +481,17 @@ export function InvoiceReviewDialog({
     });
   }, [invoices, vatRate]);
 
-  /** Close and trigger refresh if anything was submitted */
+  /** Close and trigger refresh if anything was booked; a booking with a
+   *  warning is booked too, so the lists behind the dialog must reload. */
   const handleClose = useCallback(() => {
-    if (results && results.some((r) => r.status === "ok")) {
+    if (results && results.some((r) => isBooked(r.status))) {
       onComplete();
     }
     onClose();
   }, [results, onComplete, onClose]);
 
   const allDone = results !== null;
-  const successCount = results?.filter((r) => r.status === "ok").length ?? 0;
+  const bookedCount = results?.filter((r) => isBooked(r.status)).length ?? 0;
   const errorCount = results?.filter((r) => r.status === "error").length ?? 0;
   const skippedCount = results?.filter((r) => r.status === "skipped").length ?? 0;
   const warningCount = results?.filter((r) => r.status === "warning").length ?? 0;
@@ -641,7 +589,7 @@ export function InvoiceReviewDialog({
             aria-live="polite"
           >
             <AlertTitle sx={{ fontWeight: 600 }}>
-              {successCount} van {invoices.length} facturen geboekt
+              {bookedCount} van {invoices.length} facturen geboekt
               {warningCount > 0 && ` · ${warningCount} met waarschuwing`}
               {skippedCount > 0 && ` · ${skippedCount} overgeslagen`}
               {errorCount > 0 && ` · ${errorCount} mislukt`}

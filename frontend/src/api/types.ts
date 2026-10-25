@@ -397,7 +397,10 @@ export interface SubmitArchiveOutcome {
   /** Breadcrumb of the folder the file ended up in: "Facturen / 2026 / 10 Oktober". */
   targetFolderPath?: string;
   /** Dutch warning when the booking succeeded but linking, renaming or
-   *  moving the mail-folder document did not. Same role as paymentWarning. */
+   *  moving the document did not (a mail-folder document, or an upload that
+   *  reached the archive but could not be linked), including an expired
+   *  e-boekhouden session after the booking. Can come together with
+   *  paymentWarning; the review dialog shows both (submitOutcome.ts). */
   archiveWarning?: string;
 }
 
