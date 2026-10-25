@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joooostb/speedy-eboekhouden/internal/auth"
@@ -215,16 +216,8 @@ func (h *PasskeyHandler) Me(c *gin.Context) {
 }
 
 func (h *PasskeyHandler) setSessionCookie(c *gin.Context, sessionID string) {
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(
-		session.CookieName,
-		sessionID,
-		h.config.SessionMaxAge*60,
-		"/",
-		h.config.CookieDomain,
-		h.config.CookieSecure,
-		true,
-	)
+	session.SetCookie(c, sessionID, time.Duration(h.config.SessionMaxAge)*time.Minute,
+		session.CookieOptions{Domain: h.config.CookieDomain, Secure: h.config.CookieSecure})
 }
 
 // RecoverRequest handles POST /api/v1/auth/recover — sends a recovery email.

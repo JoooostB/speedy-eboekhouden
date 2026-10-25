@@ -127,7 +127,7 @@ func main() {
 
 		// Authenticated routes (Speedy account required)
 		authed := api.Group("")
-		authed.Use(session.Middleware(store))
+		authed.Use(session.Middleware(store, session.CookieOptions{Domain: cfg.CookieDomain, Secure: cfg.CookieSecure}))
 		{
 			// Session management
 			authed.GET("/auth/me", passkeyHandler.Me)

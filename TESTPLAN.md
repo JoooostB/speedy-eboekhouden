@@ -118,7 +118,8 @@ The automated tests cover the handler against a fake e-boekhouden; what e-boekho
 ## 10. Session expiry
 
 - [ ] Log in and connect e-boekhouden
-- [ ] Wait 30+ minutes after login, or delete the `session:*` key from Redis. The session cookie is set once at login and is not refreshed, so this also happens while you are active
+- [ ] Stay active for more than 30 minutes (click around every few minutes): you stay logged in, because every API call renews both the Redis TTL and the cookie
+- [ ] Then leave the app idle for 30+ minutes, or delete the `session:*` key from Redis
 - [ ] The next API call shows the login screen
 - [ ] No stale data is visible
 

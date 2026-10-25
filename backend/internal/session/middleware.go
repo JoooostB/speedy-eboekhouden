@@ -2,6 +2,7 @@ package session
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joooostb/speedy-eboekhouden/internal/eboekhouden"
@@ -13,8 +14,25 @@ const (
 	ClientContextKey = "ebClient"
 )
 
+// CookieOptions are the deployment-dependent attributes of the session cookie.
+type CookieOptions struct {
+	Domain string
+	Secure bool
+}
+
+// SetCookie issues the session cookie for id, valid for maxAge. Login and
+// the middleware both go through here, so a refresh never changes the
+// cookie's attributes.
+func SetCookie(c *gin.Context, id string, maxAge time.Duration, opts CookieOptions) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(CookieName, id, int(maxAge.Seconds()), "/", opts.Domain, opts.Secure, true)
+}
+
 // Middleware validates the session cookie via Redis and injects session + e-boekhouden client into context.
-func Middleware(store *Store) gin.HandlerFunc {
+// Every authenticated request re-issues the cookie with the full max age, in
+// step with the sliding Redis TTL; without that the browser dropped the
+// cookie maxAge after login, however active the user was.
+func Middleware(store *Store, opts CookieOptions) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cookie, err := c.Cookie(CookieName)
 		if err != nil || cookie == "" {
@@ -33,6 +51,7 @@ func Middleware(store *Store) gin.HandlerFunc {
 		}
 
 		c.Set(ContextKey, sess)
+		SetCookie(c, cookie, store.maxAge, opts)
 
 		// Reconstruct e-boekhouden client from stored auth token (only when MFA is complete)
 		if sess.EBoekhoudenToken != "" && !sess.MFAPending {
@@ -70,7 +89,7 @@ func RequireEBoekhouden() gin.HandlerFunc {
 		if ClientFromContext(c) == nil {
 			c.AbortWithStatusJSON(http.StatusPreconditionFailed, gin.H{
 				"error":   "eboekhouden_not_connected",
-				"message": "Verbind Speedy eerst met e-Boekhouden.",
+				"message": "Koppel Speedy eerst aan e-Boekhouden.",
 			})
 			return
 		}
