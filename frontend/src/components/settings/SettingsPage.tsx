@@ -132,7 +132,10 @@ export function SettingsPage() {
   const [hasRestAccessToken, setHasRestAccessToken] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
+  // Every card has its own message, shown in that card: a shared one put
+  // "Type onderneming opgeslagen" and avatar errors in the API-key card.
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [avatarMessage, setAvatarMessage] = useState<string | null>(null);
 
   // SOAP credential fields
   const [soapUsername, setSoapUsername] = useState("");
@@ -149,6 +152,7 @@ export function SettingsPage() {
   // Onderneming type — drives Claude's classification rules
   const [entityType, setEntityType] = useState<"BV" | "ZZP" | "EM" | "ANDERS" | "">("");
   const [entitySaving, setEntitySaving] = useState(false);
+  const [entityMessage, setEntityMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -164,13 +168,14 @@ export function SettingsPage() {
 
   const handleSaveEntityType = async (value: "BV" | "ZZP" | "EM" | "ANDERS" | "") => {
     setEntitySaving(true);
+    setEntityMessage(null);
     try {
       await api.setEntityType(value);
       setEntityType(value);
       track("Entity Type Set", { type: value || "none" });
-      setMessage({ type: "success", text: "Type onderneming opgeslagen" });
+      setEntityMessage({ type: "success", text: "Type onderneming opgeslagen" });
     } catch (err: any) {
-      setMessage({ type: "error", text: err?.message || "Opslaan mislukt" });
+      setEntityMessage({ type: "error", text: err?.message || "Opslaan mislukt" });
     } finally {
       setEntitySaving(false);
     }
@@ -380,6 +385,12 @@ export function SettingsPage() {
             Anders
           </ToggleButton>
         </ToggleButtonGroup>
+
+        {entityMessage && (
+          <Alert severity={entityMessage.type} sx={{ mt: 2 }} role="status">
+            {entityMessage.text}
+          </Alert>
+        )}
       </Paper>
 
       {/* SOAP API Credentials */}
@@ -514,11 +525,12 @@ export function SettingsPage() {
                 onChange={async (e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
+                  setAvatarMessage(null);
                   try {
                     const result = await api.uploadAvatar(file);
                     setAvatarUrl(result.avatarUrl);
                   } catch (err: any) {
-                    setMessage({ type: "error", text: err.message });
+                    setAvatarMessage(err.message);
                   }
                 }}
               />
@@ -528,11 +540,12 @@ export function SettingsPage() {
                 size="small"
                 color="error"
                 onClick={async () => {
+                  setAvatarMessage(null);
                   try {
                     await api.deleteAvatar();
                     setAvatarUrl("");
                   } catch (err: any) {
-                    setMessage({ type: "error", text: err.message });
+                    setAvatarMessage(err.message);
                   }
                 }}
               >
@@ -544,6 +557,8 @@ export function SettingsPage() {
             </Typography>
           </Box>
         </Box>
+
+        {avatarMessage && <Alert severity="error" sx={{ mb: 2 }}>{avatarMessage}</Alert>}
 
         <List dense>
           <ListItem>
