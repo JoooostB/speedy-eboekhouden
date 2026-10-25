@@ -66,7 +66,7 @@ func (h *PasskeySettingsHandler) Rename(c *gin.Context) {
 
 	credID, err := base64.RawURLEncoding.DecodeString(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ongeldige passkey id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig passkey-id."})
 		return
 	}
 
@@ -74,21 +74,21 @@ func (h *PasskeySettingsHandler) Rename(c *gin.Context) {
 		FriendlyName string `json:"friendlyName"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "naam is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Geef de passkey een naam."})
 		return
 	}
 	name := strings.TrimSpace(req.FriendlyName)
 	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "naam mag niet leeg zijn"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Geef de passkey een naam."})
 		return
 	}
 	if len(name) > 64 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "naam is te lang (max 64 tekens)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "De naam mag maximaal 64 tekens lang zijn."})
 		return
 	}
 
 	if err := h.db.RenameCredential(c.Request.Context(), credID, sess.UserID, name); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "passkey hernoemen mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Hernoemen is mislukt. Probeer het opnieuw."})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -105,24 +105,24 @@ func (h *PasskeySettingsHandler) Delete(c *gin.Context) {
 
 	credID, err := base64.RawURLEncoding.DecodeString(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ongeldige passkey id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig passkey-id."})
 		return
 	}
 
 	creds, err := h.db.GetCredentialsByUserID(c.Request.Context(), sess.UserID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "passkeys laden mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Je passkeys konden niet worden geladen, dus er is niets verwijderd. Probeer het opnieuw."})
 		return
 	}
 	if len(creds) <= 1 {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Je kunt je laatste passkey niet verwijderen — je zou jezelf buitensluiten.",
+			"error": "Je laatste passkey kun je niet verwijderen, want zonder passkey kun je niet meer inloggen.",
 		})
 		return
 	}
 
 	if err := h.db.DeleteCredential(c.Request.Context(), credID, sess.UserID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "passkey verwijderen mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Verwijderen is mislukt. Probeer het opnieuw."})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

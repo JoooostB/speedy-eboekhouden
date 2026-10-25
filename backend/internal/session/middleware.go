@@ -70,7 +70,7 @@ func RequireEBoekhouden() gin.HandlerFunc {
 		if ClientFromContext(c) == nil {
 			c.AbortWithStatusJSON(http.StatusPreconditionFailed, gin.H{
 				"error":   "eboekhouden_not_connected",
-				"message": "Verbind eerst met e-Boekhouden",
+				"message": "Verbind Speedy eerst met e-Boekhouden.",
 			})
 			return
 		}

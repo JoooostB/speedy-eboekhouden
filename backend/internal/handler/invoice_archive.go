@@ -38,10 +38,10 @@ func (e *badRequestError) Error() string { return e.msg }
 // Target-folder validation outcomes (validateTargetFolder). The texts are
 // user-facing.
 var (
-	errTargetFolderMissing = errors.New("Doelmap niet gevonden")
-	errTargetFolderDeleted = errors.New("Doelmap bestaat niet meer")
-	errTargetIsMailFolder  = errors.New("De mailmap kan geen doelmap zijn")
-	errTargetInMailFolder  = errors.New("Een submap van de mailmap kan geen doelmap zijn")
+	errTargetFolderMissing = errors.New("De doelmap bestaat niet. Kies een andere map.")
+	errTargetFolderDeleted = errors.New("De doelmap is verwijderd. Kies een andere map.")
+	errTargetIsMailFolder  = errors.New("De mailmap kan geen doelmap zijn. Kies een andere map.")
+	errTargetInMailFolder  = errors.New("Een submap van de mailmap kan geen doelmap zijn. Kies een andere map.")
 )
 
 // archiveSourceInput is the archive part of a submit request.
@@ -100,7 +100,7 @@ func (s archiveSource) archiveName(in archiveNameInput) string {
 // it is known how e-boekhouden books a received credit note, the user books
 // it there; the mail-folder file then shows up as linked and can be cleaned
 // up from Speedy.
-const errCreditnotaNotSupported = "Creditnota's kun je nog niet via Speedy boeken. Boek deze creditnota in e-Boekhouden zelf."
+const errCreditnotaNotSupported = "Creditnota's kun je nog niet via Speedy boeken. Boek deze creditnota zelf in e-Boekhouden."
 
 // submitFullDocType reduces the documentType a SubmitFull request may carry
 // to creditnota when it says so, factuur otherwise. SubmitFull refuses a
@@ -126,10 +126,10 @@ func bookingDate(datum string) time.Time {
 // source and a sane archive file id.
 func validateArchiveSource(archiveFileID int, pdfBase64, uploadKey string) error {
 	if archiveFileID < 0 {
-		return &badRequestError{"Ongeldig document-id"}
+		return &badRequestError{"Ongeldig document-id."}
 	}
 	if archiveFileID > 0 && (pdfBase64 != "" || uploadKey != "") {
-		return &badRequestError{"Kies één bron voor het document"}
+		return &badRequestError{"Kies één bron voor het document."}
 	}
 	return nil
 }
@@ -221,7 +221,7 @@ func prepareMailFolderSource(client *eboekhouden.Client, fileID, targetFolderID 
 	mailFolderID, file, err := mailFolderFile(client, fileID)
 	switch {
 	case errors.Is(err, errDocumentNotInMailFolder), errors.Is(err, errMailFolderNotConfigured):
-		return archiveSource{}, &badRequestError{"Document niet gevonden in de mailmap"}
+		return archiveSource{}, &badRequestError{"Dit document staat niet in de mailmap. Misschien is het verplaatst of verwijderd."}
 	case err != nil:
 		return archiveSource{}, err
 	}
@@ -287,7 +287,7 @@ func (h *InvoiceHandler) writeArchiveSourceError(c *gin.Context, sess *session.S
 		// Response written: the frontend shows the reconnect prompt.
 	default:
 		log.Printf("Submit: archive source check failed: %s", errClass(err))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Document controleren in e-Boekhouden mislukt"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Speedy kon het document niet controleren in e-Boekhouden. Er is nog niets geboekt. Probeer het opnieuw."})
 	}
 }
 
@@ -445,7 +445,7 @@ func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhoude
 		return arch
 	}
 	if !linked {
-		arch.warning = "Het document kon niet aan de boeking worden gekoppeld en blijft in de mailmap staan."
+		arch.warning = "De boeking is gelukt, maar het document is er niet aan gekoppeld. Het staat nog in de mailmap. Koppel het zelf in e-Boekhouden."
 		return arch
 	}
 
@@ -454,7 +454,7 @@ func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhoude
 		id, err := h.findOrCreateArchiveFolder(client, datum)
 		if err != nil {
 			log.Printf("Submit: archive folder lookup failed for file %d: %s", src.fileID, errClass(err))
-			arch.warning = "Doelmap aanmaken mislukt, het bestand staat nog in de mailmap: " + err.Error()
+			arch.warning = "Het document is geboekt en gekoppeld, maar Speedy kon de maandmap onder Facturen niet vinden of aanmaken. Het staat nog in de mailmap. Ruim het later op met Alles opruimen."
 			return arch
 		}
 		target = id
@@ -466,7 +466,7 @@ func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhoude
 		}
 	}
 	if target == src.mailFolderID || isFolderWithin(folders, target, src.mailFolderID) {
-		arch.warning = "De doelmap ligt in de mailmap, het bestand is niet verplaatst. Kies een andere map."
+		arch.warning = "Het document is geboekt en gekoppeld, maar niet verplaatst: de doelmap ligt in de mailmap. Verplaats het zelf met Verplaatsen naar…"
 		return arch
 	}
 

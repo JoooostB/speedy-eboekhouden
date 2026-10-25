@@ -108,7 +108,7 @@ func TestBuildInvoiceContentBlockUnsupported(t *testing.T) {
 				t.Errorf("mediaType %q: expected an empty block on error", mediaType)
 			}
 			// The user-facing text is Dutch and must not echo the input.
-			if err.Error() != "Bestandstype niet ondersteund" {
+			if err.Error() != "Speedy kan alleen PDF-, JPG- en PNG-bestanden lezen." {
 				t.Errorf("error text = %q", err.Error())
 			}
 		})

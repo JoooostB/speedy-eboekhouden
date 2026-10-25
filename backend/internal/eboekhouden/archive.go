@@ -83,7 +83,7 @@ func (c *Client) SetMailFolder(folderID int) error {
 	if err != nil {
 		return err
 	}
-	return expectTrue(raw, "setting mail folder")
+	return expectTrue(raw, "het instellen van de mailmap")
 }
 
 // ListArchiveFiles returns the files in an archive folder, leaving out
@@ -127,7 +127,7 @@ func (c *Client) RenameArchiveFile(fileID, parentFolderID int, name string) erro
 	if err != nil {
 		return err
 	}
-	return expectTrue(raw, "rename")
+	return expectTrue(raw, "het hernoemen")
 }
 
 // bulkUpdateResult is the response of POST /v1/api/folder/bulk/update/{id}.
@@ -170,7 +170,7 @@ func (c *Client) MoveArchiveFiles(targetFolderID int, fileIDs []int) (moved []in
 		return moved, &APIError{Path: "/v1/api/folder/bulk/update", Status: 200, Message: capMessage(joinRawMessages(res.ErrorMessages)), BodyLen: len(raw)}
 	}
 	if len(res.NotFoundIDs) > 0 {
-		return moved, fmt.Errorf("e-Boekhouden: files not found: %v", res.NotFoundIDs)
+		return moved, fmt.Errorf("e-Boekhouden kent bestand-id %v niet", res.NotFoundIDs)
 	}
 	updated := make(map[int]bool, len(moved))
 	for _, id := range moved {
@@ -178,7 +178,7 @@ func (c *Client) MoveArchiveFiles(targetFolderID int, fileIDs []int) (moved []in
 	}
 	for _, id := range fileIDs {
 		if !updated[id] {
-			return moved, fmt.Errorf("e-Boekhouden: file %d was not moved", id)
+			return moved, fmt.Errorf("e-Boekhouden heeft bestand %d niet verplaatst", id)
 		}
 	}
 	return moved, nil
@@ -190,7 +190,7 @@ func (c *Client) DeleteArchiveFile(fileID int) error {
 	if err != nil {
 		return err
 	}
-	return expectTrue(raw, "delete")
+	return expectTrue(raw, "het verwijderen")
 }
 
 // expectTrue checks the bare boolean body that the folder endpoints return.
@@ -198,10 +198,10 @@ func (c *Client) DeleteArchiveFile(fileID int) error {
 func expectTrue(raw json.RawMessage, action string) error {
 	var ok bool
 	if err := json.Unmarshal(raw, &ok); err != nil {
-		return fmt.Errorf("e-Boekhouden: unexpected response to %s", action)
+		return fmt.Errorf("e-Boekhouden gaf een onverwacht antwoord bij %s", action)
 	}
 	if !ok {
-		return fmt.Errorf("e-Boekhouden: %s was not accepted", action)
+		return fmt.Errorf("e-Boekhouden meldt dat %s niet is gelukt", action)
 	}
 	return nil
 }

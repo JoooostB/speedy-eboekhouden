@@ -185,7 +185,7 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 		return
 	}
 	if len(data) > maxInvoiceFileSize {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "bestand is te groot (max 10 MB)"})
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Het bestand is te groot. Speedy leest bestanden tot 10 MB."})
 		return
 	}
 
@@ -220,7 +220,7 @@ type analyzeOptions struct {
 func writeUnsupportedMediaType(c *gin.Context) {
 	c.JSON(http.StatusUnsupportedMediaType, gin.H{
 		"error":   "unsupported_media_type",
-		"message": "Bestandstype niet ondersteund. Upload een PDF, JPG of PNG.",
+		"message": "Speedy kan alleen PDF-, JPG- en PNG-bestanden lezen.",
 	})
 }
 
@@ -231,7 +231,7 @@ func (h *InvoiceHandler) writeAnalyzeError(c *gin.Context, sess *session.Session
 	var readErr *claudeReadError
 	switch {
 	case errors.Is(err, errNoAPIKey):
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Stel eerst een Anthropic API-sleutel in"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Vul eerst je Anthropic API-sleutel in bij Instellingen."})
 	case errors.Is(err, claude.ErrUnsupportedMediaType):
 		writeUnsupportedMediaType(c)
 	case HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err):
@@ -522,7 +522,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek."})
 		return
 	}
 
@@ -533,22 +533,22 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 
 	// Validate monetary amounts
 	if req.BedragExcl <= 0 || req.BedragIncl <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Bedrag moet positief zijn"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Het bedrag moet groter zijn dan nul."})
 		return
 	}
 	if math.IsNaN(req.BedragExcl) || math.IsInf(req.BedragExcl, 0) ||
 		math.IsNaN(req.BedragIncl) || math.IsInf(req.BedragIncl, 0) ||
 		math.IsNaN(req.BTWBedrag) || math.IsInf(req.BTWBedrag, 0) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig bedrag"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig bedrag."})
 		return
 	}
 
 	if req.RelatieId == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Selecteer een relatie (leverancier)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een relatie (crediteur)."})
 		return
 	}
 	if req.TegenRekeningId == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Selecteer een kostenrekening (grootboekrekening)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een grootboekrekening."})
 		return
 	}
 
@@ -573,7 +573,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 			}
 		}
 		if req.RekeningId == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geen crediteurenrekening gevonden in je administratie. Controleer je grootboekrekeningen in e-Boekhouden."})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Speedy vindt geen crediteurenrekening in je administratie. Controleer je grootboekrekeningen in e-Boekhouden."})
 			return
 		}
 	}
@@ -634,7 +634,7 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	mutResp, err := client.CreateMutatie(invoiceMutPayload)
 	if err != nil {
 		log.Printf("SubmitFull CreateMutatie error: %s", errClass(err))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Factuur ontvangen mislukt: " + err.Error()})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "De factuur is niet geboekt: " + err.Error()})
 		return
 	}
 
@@ -644,12 +644,12 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	}
 	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
 		log.Printf("SubmitFull invoice unmarshal error: %v (%d bytes)", jsonErr, len(mutResp))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden bij factuur ontvangen"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden gaf een onverwacht antwoord. Kijk in e-Boekhouden of de factuur is geboekt voordat je het opnieuw probeert."})
 		return
 	}
 	if mutResult.MutNr == 0 {
 		log.Printf("SubmitFull invoice mutNr=0 (%d bytes)", len(mutResp))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Factuur ontvangen niet aangemaakt — controleer de gegevens"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden heeft de factuur niet geboekt en gaf geen reden. Controleer de gegevens en probeer het opnieuw."})
 		return
 	}
 
@@ -721,24 +721,24 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 			payResp, err := client.CreateMutatie(paymentPayload)
 			if err != nil {
 				log.Printf("SubmitFull payment mutation error for invoice mutNr=%d: %s", mutResult.MutNr, errClass(err))
-				paymentWarning = "Factuur is geboekt, maar de afschriftregel kon niet worden gemarkeerd: " + err.Error()
+				paymentWarning = "De factuur is geboekt, maar de betaling niet, dus de afschriftregel staat nog open. Reden: " + err.Error()
 			} else {
 				var payResult struct {
 					MutNr int `json:"mutNr"`
 				}
 				if jsonErr := json.Unmarshal(payResp, &payResult); jsonErr != nil {
 					log.Printf("SubmitFull payment unmarshal error: %v (%d bytes)", jsonErr, len(payResp))
-					paymentWarning = "Factuur is geboekt, maar het antwoord van e-Boekhouden voor de betaling was onverwacht. Controleer de afschriftregel handmatig."
+					paymentWarning = "De factuur is geboekt. Op de betaling gaf e-Boekhouden een onverwacht antwoord: kijk in e-Boekhouden of de afschriftregel is verwerkt."
 				} else if payResult.MutNr == 0 {
 					log.Printf("SubmitFull payment returned mutNr=0 (%d bytes)", len(payResp))
-					paymentWarning = "Factuur is geboekt, maar de betalingsmutatie is niet aangemaakt — afschriftregel is mogelijk niet gemarkeerd. Controleer in e-Boekhouden."
+					paymentWarning = "De factuur is geboekt, maar e-Boekhouden heeft de betaling niet geboekt en gaf geen reden. De afschriftregel staat dus nog open."
 				} else {
 					paymentMutNr = payResult.MutNr
 				}
 			}
 		} else {
 			log.Printf("SubmitFull: could not resolve bankAccountId for importId=%d (bank line not found in grid)", req.ImportId)
-			paymentWarning = "Factuur is geboekt, maar de afschriftregel kon niet worden gevonden. Controleer in e-Boekhouden."
+			paymentWarning = "De factuur is geboekt, maar de betaling niet: Speedy vond de afschriftregel niet meer. Kijk in e-Boekhouden of die al is verwerkt."
 		}
 	}
 
@@ -856,22 +856,22 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek."})
 		return
 	}
 
 	if req.BedragIncl <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Bedrag moet positief zijn"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Het bedrag moet groter zijn dan nul."})
 		return
 	}
 	if math.IsNaN(req.BedragIncl) || math.IsInf(req.BedragIncl, 0) ||
 		math.IsNaN(req.BedragExcl) || math.IsInf(req.BedragExcl, 0) ||
 		math.IsNaN(req.BTWBedrag) || math.IsInf(req.BTWBedrag, 0) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig bedrag"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig bedrag."})
 		return
 	}
 	if req.TegenRekeningId == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Selecteer een kostenrekening (grootboekrekening)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een grootboekrekening."})
 		return
 	}
 	if req.BTWCode == "" {
@@ -886,19 +886,19 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	// tegenrekening. Derive bedragExcl when missing, same as the main line.
 	const maxExtraLines = 10
 	if len(req.ExtraLines) > maxExtraLines {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Maximaal %d extra regels per boeking", maxExtraLines)})
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Een boeking kan maximaal %d extra regels hebben.", maxExtraLines)})
 		return
 	}
 	for i := range req.ExtraLines {
 		el := &req.ExtraLines[i]
 		if el.BedragIncl <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: bedrag moet positief zijn", i+1)})
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: het bedrag moet groter zijn dan nul.", i+1)})
 			return
 		}
 		if math.IsNaN(el.BedragIncl) || math.IsInf(el.BedragIncl, 0) ||
 			math.IsNaN(el.BedragExcl) || math.IsInf(el.BedragExcl, 0) ||
 			math.IsNaN(el.BTWBedrag) || math.IsInf(el.BTWBedrag, 0) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: ongeldig bedrag", i+1)})
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: ongeldig bedrag.", i+1)})
 			return
 		}
 		if el.TegenRekeningId == 0 {
@@ -957,7 +957,7 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		}
 	}
 	if bankAccountId == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Geen bankrekening gevonden voor deze boeking. Koppel een afschriftregel."})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Speedy weet niet van welke bankrekening dit bonnetje is betaald. Koppel het aan een afschriftregel die nog openstaat."})
 		return
 	}
 
@@ -1037,7 +1037,7 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	mutResp, err := client.CreateMutatie(mutPayload)
 	if err != nil {
 		log.Printf("SubmitReceipt CreateMutatie error: %s", errClass(err))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje boeken mislukt: " + err.Error()})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Het bonnetje is niet geboekt: " + err.Error()})
 		return
 	}
 
@@ -1047,12 +1047,12 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	}
 	if jsonErr := json.Unmarshal(mutResp, &mutResult); jsonErr != nil {
 		log.Printf("SubmitReceipt unmarshal error: %v (%d bytes)", jsonErr, len(mutResp))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden gaf een onverwacht antwoord. Kijk in e-Boekhouden of het bonnetje is geboekt voordat je het opnieuw probeert."})
 		return
 	}
 	if mutResult.MutNr == 0 {
 		log.Printf("SubmitReceipt mutNr=0 (%d bytes)", len(mutResp))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Bonnetje niet aangemaakt — controleer de gegevens"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden heeft het bonnetje niet geboekt en gaf geen reden. Controleer de gegevens en probeer het opnieuw."})
 		return
 	}
 

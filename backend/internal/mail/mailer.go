@@ -38,12 +38,13 @@ func sanitizeHeader(s string) string {
 
 // SendRecoveryEmail sends a passkey recovery link.
 func (m *Mailer) SendRecoveryEmail(to, name, recoveryURL string) error {
-	subject := "Nieuwe passkey instellen — Speedy e-Boekhouden"
+	subject := "Nieuwe passkey instellen voor Speedy e-Boekhouden"
 	plain := fmt.Sprintf("Hoi %s,\r\n\r\n"+
-		"Je hebt een nieuwe passkey aangevraagd voor je Speedy e-Boekhouden account.\r\n\r\n"+
-		"Klik op de volgende link om een nieuwe passkey in te stellen:\r\n%s\r\n\r\n"+
-		"Deze link is 15 minuten geldig en kan maar een keer worden gebruikt.\r\n\r\n"+
-		"Heb je dit niet aangevraagd? Dan kun je deze e-mail negeren.\r\n\r\n"+
+		"Er is een link aangevraagd om een nieuwe passkey in te stellen voor je account bij Speedy e-Boekhouden. "+
+		"Open de link op het apparaat waarmee je wilt inloggen:\r\n\r\n"+
+		"%s\r\n\r\n"+
+		"De link is 15 minuten geldig en werkt één keer. Lukt het niet? Vraag dan een nieuwe aan via \"Passkey kwijt?\" op de inlogpagina.\r\n\r\n"+
+		"Heb je dit niet zelf aangevraagd? Dan kun je deze e-mail negeren. Zonder de link verandert er niets aan je account.\r\n\r\n"+
 		"Met vriendelijke groet,\r\nSpeedy e-Boekhouden",
 		sanitizeHeader(name), sanitizeHeader(recoveryURL))
 	return m.sendPlain(sanitizeHeader(to), subject, plain)
@@ -57,12 +58,16 @@ func (m *Mailer) SendWelcomeEmail(to, name, appURL string) error {
 	safeURL := html.EscapeString(appURL)
 	htmlBody := welcomeHTML(safeName, safeURL)
 	plain := fmt.Sprintf("Hoi %s,\r\n\r\n"+
-		"Welkom bij Speedy e-Boekhouden! Je account is aangemaakt.\r\n\r\n"+
-		"Wat kun je doen?\r\n"+
-		"- Uren in bulk invoeren voor je hele team\r\n"+
-		"- Bankafschriften verwerken met AI-suggesties\r\n"+
-		"- Inkoopfacturen automatisch laten uitlezen\r\n\r\n"+
-		"Ga aan de slag: %s\r\n\r\n"+
+		"Welkom bij Speedy e-Boekhouden. Je account is aangemaakt.\r\n\r\n"+
+		"Speedy werkt rechtstreeks in je eigen administratie in e-Boekhouden. Alles wat je via Speedy boekt, staat daar gewoon.\r\n\r\n"+
+		"Met Speedy kun je onder meer:\r\n"+
+		"- de uren van je hele team in één keer boeken;\r\n"+
+		"- je bankafschriften verwerken, met per regel een boekingsvoorstel van AI;\r\n"+
+		"- facturen en bonnetjes laten uitlezen en boeken, ook als je ze naar het mailadres van je administratie stuurt.\r\n\r\n"+
+		"Zo begin je:\r\n"+
+		"1. Klik in Speedy op Verbinden en log in met je e-Boekhouden-gegevens.\r\n"+
+		"2. Wil je AI gebruiken? Vul dan bij Instellingen je eigen Anthropic API-sleutel in. De kosten lopen via je eigen Anthropic-account.\r\n\r\n"+
+		"Naar Speedy: %s\r\n\r\n"+
 		"Met vriendelijke groet,\r\nSpeedy e-Boekhouden",
 		sanitizeHeader(name), sanitizeHeader(appURL))
 	return m.sendHTML(sanitizeHeader(to), subject, htmlBody, plain)

@@ -46,7 +46,7 @@ func HandleEBoekhoudenSessionExpired(
 	c.Set(session.ClientContextKey, nil)
 	c.JSON(http.StatusPreconditionFailed, gin.H{
 		"error":   "eboekhouden_session_expired",
-		"message": "Je e-Boekhouden sessie is verlopen. Verbind opnieuw om door te gaan.",
+		"message": "Je sessie bij e-Boekhouden is verlopen. Verbind opnieuw om verder te gaan.",
 	})
 	return true
 }

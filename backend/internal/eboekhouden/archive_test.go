@@ -197,7 +197,7 @@ func TestMoveArchiveFiles(t *testing.T) {
 			ids:       []int{42, 43},
 			resp:      `{"updatedIds":[42],"notFoundIds":[43],"errorMessages":[],"successMessages":[]}`,
 			wantMoved: []int{42},
-			wantErr:   "not found: [43]",
+			wantErr:   "kent bestand-id [43] niet",
 		},
 		{
 			name:      "error message",
@@ -218,7 +218,7 @@ func TestMoveArchiveFiles(t *testing.T) {
 			ids:       []int{42, 43},
 			resp:      `{"updatedIds":[42],"notFoundIds":[],"errorMessages":[],"successMessages":[]}`,
 			wantMoved: []int{42},
-			wantErr:   "43 was not moved",
+			wantErr:   "bestand 43 niet verplaatst",
 		},
 	}
 	for _, tc := range tests {

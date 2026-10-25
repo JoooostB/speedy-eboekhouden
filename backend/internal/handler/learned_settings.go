@@ -30,7 +30,7 @@ func (h *LearnedSettingsHandler) List(c *gin.Context) {
 
 	rows, err := h.db.ListLearned(c.Request.Context(), sess.UserID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Geleerde boekingen laden mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "De geleerde boekingen konden niet worden geladen. Probeer het opnieuw."})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"learned": rows})
@@ -48,12 +48,12 @@ func (h *LearnedSettingsHandler) Delete(c *gin.Context) {
 
 	signal := c.Query("signal")
 	if signal == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "signal is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "De parameter signal is verplicht."})
 		return
 	}
 
 	if err := h.db.DeleteLearned(c.Request.Context(), sess.UserID, signal); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Verwijderen mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Verwijderen is mislukt. Probeer het opnieuw."})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -75,12 +75,12 @@ func (h *LearnedSettingsHandler) DeleteAll(c *gin.Context) {
 	}
 
 	if c.Query("confirm") != "true" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "confirm=true is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Bevestig het wissen met confirm=true."})
 		return
 	}
 
 	if err := h.db.DeleteAllLearned(c.Request.Context(), sess.UserID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Wissen mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Wissen is mislukt. Probeer het opnieuw."})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

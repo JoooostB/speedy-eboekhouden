@@ -20,7 +20,7 @@ func SearchKvK(c *gin.Context) {
 
 	query := c.Query("q")
 	if query == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Zoekterm is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vul een zoekterm in."})
 		return
 	}
 

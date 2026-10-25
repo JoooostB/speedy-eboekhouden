@@ -59,7 +59,7 @@ func (c *RestClient) ensureSession() (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		io.ReadAll(io.LimitReader(resp.Body, 1024)) // drain but don't use in error
-		return "", fmt.Errorf("sessie met e-boekhouden.nl REST API mislukt (status %d)", resp.StatusCode)
+		return "", fmt.Errorf("sessie openen bij de REST-API van e-Boekhouden is mislukt (status %d)", resp.StatusCode)
 	}
 
 	var session struct {
@@ -106,7 +106,7 @@ func (c *RestClient) request(method, path string, body interface{}) (json.RawMes
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("e-boekhouden.nl REST API fout (status %d)", resp.StatusCode)
+		return nil, fmt.Errorf("de REST-API van e-Boekhouden gaf een fout (status %d)", resp.StatusCode)
 	}
 
 	if resp.StatusCode == 204 || len(respBody) == 0 {

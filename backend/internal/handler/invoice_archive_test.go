@@ -57,11 +57,11 @@ func TestValidateArchiveSource(t *testing.T) {
 		{"upload key only", 0, "", "key", ""},
 		{"base64 and upload key", 0, "b64", "key", ""},
 		{"archive file only", 5, "", "", ""},
-		{"archive file and base64", 5, "b64", "", "Kies één bron voor het document"},
-		{"archive file and upload key", 5, "", "key", "Kies één bron voor het document"},
-		{"archive file and both", 5, "b64", "key", "Kies één bron voor het document"},
-		{"negative id", -1, "", "", "Ongeldig document-id"},
-		{"negative id beats double source", -1, "b64", "", "Ongeldig document-id"},
+		{"archive file and base64", 5, "b64", "", "Kies één bron voor het document."},
+		{"archive file and upload key", 5, "", "key", "Kies één bron voor het document."},
+		{"archive file and both", 5, "b64", "key", "Kies één bron voor het document."},
+		{"negative id", -1, "", "", "Ongeldig document-id."},
+		{"negative id beats double source", -1, "b64", "", "Ongeldig document-id."},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -327,20 +327,20 @@ func TestArchiveOutcomeAddTo(t *testing.T) {
 		},
 		{
 			name: "link failed",
-			out:  archiveOutcome{fileID: 501, name: "Kachelbrandje.pdf", warning: "Het document kon niet aan de boeking worden gekoppeld en blijft in de mailmap staan."},
+			out:  archiveOutcome{fileID: 501, name: "Kachelbrandje.pdf", warning: "De boeking is gelukt, maar het document is er niet aan gekoppeld. Het staat nog in de mailmap. Koppel het zelf in e-Boekhouden."},
 			want: gin.H{"archived": true, "linked": false, "renamed": false, "moved": false, "archiveName": "Kachelbrandje.pdf",
-				"archiveWarning": "Het document kon niet aan de boeking worden gekoppeld en blijft in de mailmap staan."},
+				"archiveWarning": "De boeking is gelukt, maar het document is er niet aan gekoppeld. Het staat nog in de mailmap. Koppel het zelf in e-Boekhouden."},
 		},
 		{
 			name: "rename failed",
-			out:  archiveOutcome{fileID: 501, linked: true, name: "Kachelbrandje.pdf", warning: "Hernoemen mislukt: x"},
-			want: gin.H{"archived": true, "linked": true, "renamed": false, "moved": false, "archiveName": "Kachelbrandje.pdf", "archiveWarning": "Hernoemen mislukt: x"},
+			out:  archiveOutcome{fileID: 501, linked: true, name: "Kachelbrandje.pdf", warning: "Het document staat ongewijzigd in de mailmap: x"},
+			want: gin.H{"archived": true, "linked": true, "renamed": false, "moved": false, "archiveName": "Kachelbrandje.pdf", "archiveWarning": "Het document staat ongewijzigd in de mailmap: x"},
 		},
 		{
 			name: "move failed after rename",
-			out:  archiveOutcome{fileID: 501, linked: true, renamed: true, name: "2026-10-12_Anthropic_INV-0042.pdf", warning: "Verplaatsen mislukt, het bestand is wel hernoemd: x"},
+			out:  archiveOutcome{fileID: 501, linked: true, renamed: true, name: "2026-10-12_Anthropic_INV-0042.pdf", warning: "Het document is hernoemd, maar staat nog in de mailmap: x"},
 			want: gin.H{"archived": true, "linked": true, "renamed": true, "moved": false, "archiveName": "2026-10-12_Anthropic_INV-0042.pdf",
-				"archiveWarning": "Verplaatsen mislukt, het bestand is wel hernoemd: x"},
+				"archiveWarning": "Het document is hernoemd, maar staat nog in de mailmap: x"},
 		},
 	}
 	for _, tc := range tests {
@@ -696,7 +696,7 @@ func TestSubmitFullMailDocumentAutoFolderInsideMailFolder(t *testing.T) {
 	if resp["linked"] != true || resp["renamed"] != false || resp["moved"] != false {
 		t.Errorf("response = %v", resp)
 	}
-	if w, _ := resp["archiveWarning"].(string); !strings.HasPrefix(w, "De doelmap ligt in de mailmap") {
+	if w, _ := resp["archiveWarning"].(string); !strings.HasPrefix(w, "Het document is geboekt en gekoppeld, maar niet verplaatst: de doelmap ligt in de mailmap") {
 		t.Errorf("archiveWarning = %q", w)
 	}
 	for _, c := range fake.writes() {
@@ -712,14 +712,14 @@ func TestSubmitFullMailDocumentRefusedBeforeBooking(t *testing.T) {
 		extra   map[string]any
 		wantErr string
 	}{
-		{"target is the mail folder", map[string]any{"archiveFileId": 501, "targetFolderId": 100}, "De mailmap kan geen doelmap zijn"},
-		{"target is inside the mail folder", map[string]any{"archiveFileId": 501, "targetFolderId": 102}, "Een submap van de mailmap kan geen doelmap zijn"},
-		{"target is deleted", map[string]any{"archiveFileId": 501, "targetFolderId": 300}, "Doelmap bestaat niet meer"},
-		{"target does not exist", map[string]any{"archiveFileId": 501, "targetFolderId": 999}, "Doelmap niet gevonden"},
-		{"file not in the mail folder", map[string]any{"archiveFileId": 600, "targetFolderId": 202}, "Document niet gevonden in de mailmap"},
-		{"file unknown", map[string]any{"archiveFileId": 999}, "Document niet gevonden in de mailmap"},
-		{"two sources", map[string]any{"archiveFileId": 501, "pdfBase64": "AAAA"}, "Kies één bron voor het document"},
-		{"negative id", map[string]any{"archiveFileId": -3}, "Ongeldig document-id"},
+		{"target is the mail folder", map[string]any{"archiveFileId": 501, "targetFolderId": 100}, "De mailmap kan geen doelmap zijn. Kies een andere map."},
+		{"target is inside the mail folder", map[string]any{"archiveFileId": 501, "targetFolderId": 102}, "Een submap van de mailmap kan geen doelmap zijn. Kies een andere map."},
+		{"target is deleted", map[string]any{"archiveFileId": 501, "targetFolderId": 300}, "De doelmap is verwijderd. Kies een andere map."},
+		{"target does not exist", map[string]any{"archiveFileId": 501, "targetFolderId": 999}, "De doelmap bestaat niet. Kies een andere map."},
+		{"file not in the mail folder", map[string]any{"archiveFileId": 600, "targetFolderId": 202}, "Dit document staat niet in de mailmap. Misschien is het verplaatst of verwijderd."},
+		{"file unknown", map[string]any{"archiveFileId": 999}, "Dit document staat niet in de mailmap. Misschien is het verplaatst of verwijderd."},
+		{"two sources", map[string]any{"archiveFileId": 501, "pdfBase64": "AAAA"}, "Kies één bron voor het document."},
+		{"negative id", map[string]any{"archiveFileId": -3}, "Ongeldig document-id."},
 		{"creditnota from the mail folder", map[string]any{"archiveFileId": 501, "documentType": "creditnota"}, errCreditnotaNotSupported},
 		{"creditnota upload", map[string]any{"pdfBase64": "JVBERi0=", "documentType": " Creditnota "}, errCreditnotaNotSupported},
 	}
@@ -745,7 +745,7 @@ func TestSubmitFullMailDocumentNoMailFolder(t *testing.T) {
 	fake.menh = 0
 
 	status, resp := callSubmit(t, h.SubmitFull, client, fullRequest(map[string]any{"archiveFileId": 501}))
-	if status != http.StatusBadRequest || resp["error"] != "Document niet gevonden in de mailmap" {
+	if status != http.StatusBadRequest || resp["error"] != "Dit document staat niet in de mailmap. Misschien is het verplaatst of verwijderd." {
 		t.Errorf("status %d, response %v", status, resp)
 	}
 	if writes := fake.writes(); len(writes) != 0 {
@@ -767,7 +767,7 @@ func TestSubmitFullMailDocumentLinkFails(t *testing.T) {
 	if resp["archiveName"] != "Kachelbrandje.pdf" {
 		t.Errorf("archiveName = %v, want the unchanged name", resp["archiveName"])
 	}
-	if w, _ := resp["archiveWarning"].(string); !strings.Contains(w, "kon niet aan de boeking worden gekoppeld") {
+	if w, _ := resp["archiveWarning"].(string); !strings.Contains(w, "het document is er niet aan gekoppeld") {
 		t.Errorf("archiveWarning = %q", w)
 	}
 	wantWrites := []string{"POST /v1/api/mutatie", "POST /v1/api/folderkoppel/koppel/item"}
@@ -790,7 +790,7 @@ func TestSubmitFullMailDocumentRenameFails(t *testing.T) {
 	if resp["linked"] != true || resp["renamed"] != false || resp["moved"] != false || resp["archiveName"] != "Kachelbrandje.pdf" {
 		t.Errorf("response = %v", resp)
 	}
-	if w, _ := resp["archiveWarning"].(string); !strings.HasPrefix(w, "Hernoemen mislukt: ") {
+	if w, _ := resp["archiveWarning"].(string); !strings.HasPrefix(w, "Het document staat ongewijzigd in de mailmap: ") {
 		t.Errorf("archiveWarning = %q", w)
 	}
 	if _, moved := fake.call(http.MethodPost, "/v1/api/folder/bulk/update/202"); moved {
@@ -812,7 +812,7 @@ func TestSubmitFullMailDocumentMoveFails(t *testing.T) {
 	if _, ok := resp["targetFolderId"]; ok {
 		t.Error("targetFolderId must be absent when the file was not moved")
 	}
-	if w, _ := resp["archiveWarning"].(string); !strings.HasPrefix(w, "Verplaatsen mislukt, het bestand is wel hernoemd: ") {
+	if w, _ := resp["archiveWarning"].(string); !strings.HasPrefix(w, "Het document is hernoemd, maar staat nog in de mailmap: ") {
 		t.Errorf("archiveWarning = %q", w)
 	}
 	// The file sits in the mail folder under its new name.
@@ -945,7 +945,7 @@ func TestSubmitReceiptRefusesTwoSources(t *testing.T) {
 	fake, h, client := submitTestEnv(t)
 
 	status, resp := callSubmit(t, h.SubmitReceipt, client, receiptRequest(map[string]any{"archiveFileId": 502, "uploadKey": "uploads/x/document.jpg"}))
-	if status != http.StatusBadRequest || resp["error"] != "Kies één bron voor het document" {
+	if status != http.StatusBadRequest || resp["error"] != "Kies één bron voor het document." {
 		t.Errorf("status %d, response %v", status, resp)
 	}
 	if writes := fake.writes(); len(writes) != 0 {
@@ -963,11 +963,11 @@ func TestArchiveDocumentsExplicitTargetFolder(t *testing.T) {
 	}{
 		{"ok", 202, ""},
 		{"root folder ok", 200, ""},
-		{"mail folder", 100, "De mailmap kan geen doelmap zijn"},
-		{"direct child of mail folder", 101, "Een submap van de mailmap kan geen doelmap zijn"},
-		{"deep descendant of mail folder", 102, "Een submap van de mailmap kan geen doelmap zijn"},
-		{"deleted", 300, "Doelmap bestaat niet meer"},
-		{"missing", 999, "Doelmap niet gevonden"},
+		{"mail folder", 100, "De mailmap kan geen doelmap zijn. Kies een andere map."},
+		{"direct child of mail folder", 101, "Een submap van de mailmap kan geen doelmap zijn. Kies een andere map."},
+		{"deep descendant of mail folder", 102, "Een submap van de mailmap kan geen doelmap zijn. Kies een andere map."},
+		{"deleted", 300, "De doelmap is verwijderd. Kies een andere map."},
+		{"missing", 999, "De doelmap bestaat niet. Kies een andere map."},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1010,9 +1010,9 @@ func TestArchiveDocumentsAutoFolder(t *testing.T) {
 		// The file was received on 2026-10-24 and has no analysis, so it goes to Facturen/2026/10 Oktober (202).
 		{"month folder outside the mail folder", 100, 202, ""},
 		// With "Facturen" as the mail folder that month folder lies inside it.
-		{"month folder inside the mail folder", 200, 0, "Een submap van de mailmap kan geen doelmap zijn"},
+		{"month folder inside the mail folder", 200, 0, "Een submap van de mailmap kan geen doelmap zijn. Kies een andere map."},
 		// With "10 Oktober" itself as the mail folder the auto target is the mail folder.
-		{"month folder is the mail folder", 202, 0, "De mailmap kan geen doelmap zijn"},
+		{"month folder is the mail folder", 202, 0, "De mailmap kan geen doelmap zijn. Kies een andere map."},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

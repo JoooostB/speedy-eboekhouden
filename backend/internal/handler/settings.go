@@ -66,7 +66,7 @@ func (h *SettingsHandler) CheckAPIKey(c *gin.Context) {
 
 	decrypted, err := crypto.Decrypt(h.encKey, settings.AnthropicKeyEnc)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status": "error", "message": "Sleutel kon niet worden ontsleuteld"})
+		c.JSON(http.StatusOK, gin.H{"status": "error", "message": "Speedy kan je opgeslagen API-sleutel niet meer ontsleutelen. Vul de sleutel opnieuw in."})
 		return
 	}
 
@@ -92,20 +92,20 @@ func (h *SettingsHandler) CheckAPIKey(c *gin.Context) {
 		if strings.Contains(msg, "credit balance") || strings.Contains(msg, "billing") {
 			c.JSON(http.StatusOK, gin.H{
 				"status":  "no_credits",
-				"message": "Je API-sleutel is geldig, maar je tegoed is op. Vul je tegoed aan op console.anthropic.com/settings/plans.",
+				"message": "Je API-sleutel werkt, maar je tegoed bij Anthropic is op. Vul het aan op console.anthropic.com/settings/plans.",
 			})
 			return
 		}
 		if strings.Contains(msg, "invalid_api_key") || strings.Contains(msg, "authentication") {
 			c.JSON(http.StatusOK, gin.H{
 				"status":  "invalid",
-				"message": "Je API-sleutel is ongeldig. Controleer of je de juiste sleutel hebt.",
+				"message": "Anthropic accepteert je API-sleutel niet. Controleer de sleutel of maak een nieuwe aan in de Anthropic Console.",
 			})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "error",
-			"message": "Kon de API-sleutel niet verifiëren. Probeer het later opnieuw.",
+			"message": "Speedy kon je API-sleutel niet controleren bij Anthropic. Probeer het later opnieuw.",
 		})
 		return
 	}
@@ -133,7 +133,7 @@ func (h *SettingsHandler) SetAPIKey(c *gin.Context) {
 
 	// Format check
 	if !strings.HasPrefix(req.APIKey, "sk-ant-") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldige sleutel. Een Anthropic API-sleutel begint met sk-ant-"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Dit is geen Anthropic API-sleutel. Die begint met sk-ant-."})
 		return
 	}
 
@@ -189,7 +189,7 @@ func (h *SettingsHandler) SetSoapCredentials(c *gin.Context) {
 
 	var req setSoapCredentialsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Alle drie de velden zijn verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vul alle drie de velden in."})
 		return
 	}
 
@@ -240,7 +240,7 @@ func (h *SettingsHandler) SetRestAccessToken(c *gin.Context) {
 
 	var req setRestTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "accessToken is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vul je access token in."})
 		return
 	}
 
@@ -286,12 +286,12 @@ func validateAnthropicKey(ctx context.Context, apiKey string) error {
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "invalid_api_key") || strings.Contains(msg, "authentication") {
-			return fmt.Errorf("Ongeldige API-sleutel. Controleer of je de juiste sleutel hebt gekopieerd.")
+			return fmt.Errorf("Anthropic accepteert deze API-sleutel niet. Controleer of je de hele sleutel hebt gekopieerd.")
 		}
 		if strings.Contains(msg, "credit balance") || strings.Contains(msg, "billing") {
-			return fmt.Errorf("API-sleutel is geldig, maar je tegoed is op. Vul je tegoed aan op console.anthropic.com.")
+			return fmt.Errorf("Deze API-sleutel werkt, maar je tegoed bij Anthropic is op. Vul het aan op console.anthropic.com en sla de sleutel daarna opnieuw op.")
 		}
-		return fmt.Errorf("API-sleutel kon niet worden geverifieerd. Probeer het opnieuw.")
+		return fmt.Errorf("Speedy kon de API-sleutel niet controleren bij Anthropic en heeft hem niet opgeslagen. Probeer het opnieuw.")
 	}
 	return nil
 }
@@ -303,9 +303,9 @@ func validateSoapCredentials(username, code1, code2 string) error {
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "session") || strings.Contains(msg, "SecurityCode") || strings.Contains(msg, "Username") {
-			return fmt.Errorf("Ongeldige SOAP-gegevens. Controleer je gebruikersnaam en beveiligingscodes.")
+			return fmt.Errorf("Inloggen bij de SOAP-API van e-Boekhouden is mislukt. Controleer je gebruikersnaam en beide beveiligingscodes.")
 		}
-		return fmt.Errorf("SOAP-verbinding mislukt: %s", sanitizeError(msg))
+		return fmt.Errorf("De verbinding met de SOAP-API van e-Boekhouden is mislukt: %s", sanitizeError(msg))
 	}
 	return nil
 }
@@ -317,9 +317,9 @@ func validateRestToken(accessToken string) error {
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "401") || strings.Contains(msg, "403") {
-			return fmt.Errorf("Ongeldig access token. Controleer of je het juiste token hebt gekopieerd.")
+			return fmt.Errorf("e-Boekhouden accepteert dit access token niet. Controleer of je het hele token hebt gekopieerd.")
 		}
-		return fmt.Errorf("REST API-verbinding mislukt. Controleer je token.")
+		return fmt.Errorf("Speedy kon het access token niet controleren bij e-Boekhouden en heeft het niet opgeslagen. Probeer het opnieuw.")
 	}
 	return nil
 }
@@ -340,7 +340,7 @@ func (h *SettingsHandler) SetEntityType(c *gin.Context) {
 		EntityType string `json:"entityType"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ongeldig verzoek"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek."})
 		return
 	}
 
@@ -349,7 +349,7 @@ func (h *SettingsHandler) SetEntityType(c *gin.Context) {
 	case "BV", "ZZP", "EM", "ANDERS", "":
 		// allowed (empty string clears the preference)
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Onbekend type onderneming"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Onbekend type onderneming."})
 		return
 	}
 
@@ -366,7 +366,7 @@ func (h *SettingsHandler) SetEntityType(c *gin.Context) {
 	}
 	body, _ := json.Marshal(prefs)
 	if err := h.db.SetPreferences(c.Request.Context(), sess.UserID, body); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Opslaan mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Opslaan is mislukt. Probeer het opnieuw."})
 		return
 	}
 

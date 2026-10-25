@@ -182,7 +182,7 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 
 	apiKey, err := h.getAPIKey(c, sess.UserID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Stel eerst een Anthropic API-sleutel in"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Vul eerst je Anthropic API-sleutel in bij Instellingen."})
 		return nil, nil, false
 	}
 
@@ -427,7 +427,7 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 	// Get API key
 	apiKey, err := h.getAPIKey(c, sess.UserID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Stel eerst een Anthropic API-sleutel in"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Vul eerst je Anthropic API-sleutel in bij Instellingen."})
 		return
 	}
 
@@ -441,7 +441,7 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 
 	file, _, err := c.Request.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "PDF-bestand is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een PDF-bestand."})
 		return
 	}
 	defer file.Close()
@@ -455,7 +455,7 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 	const maxFileSize = 10 << 20
 	pdfBytes, err := io.ReadAll(io.LimitReader(file, maxFileSize+1))
 	if err != nil || len(pdfBytes) > maxFileSize {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Bestand is te groot (max 10 MB)"})
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Het bestand is te groot. Speedy leest bestanden tot 10 MB."})
 		return
 	}
 
@@ -508,7 +508,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 
 	const maxBatchItems = 100
 	if len(req.Items) > maxBatchItems {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Maximaal %d regels per batch", maxBatchItems)})
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Je kunt maximaal %d regels tegelijk boeken.", maxBatchItems)})
 		return
 	}
 
@@ -611,7 +611,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		}
 		if jsonErr := json.Unmarshal(mutResp, &resp); jsonErr != nil {
 			log.Printf("CreateMutatie response unmarshal error for item %d: %v (%d bytes)", item.ID, jsonErr, len(mutResp))
-			results = append(results, result{ID: item.ID, Status: "error", Error: "Onverwacht antwoord van e-Boekhouden"})
+			results = append(results, result{ID: item.ID, Status: "error", Error: "e-Boekhouden gaf een onverwacht antwoord. Kijk in e-Boekhouden of deze regel is geboekt voordat je het opnieuw probeert."})
 			continue
 		}
 		// Defense-in-depth: even if the client missed an error envelope,
@@ -619,7 +619,7 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		// else means nothing was actually booked.
 		if resp.MutNr == 0 {
 			log.Printf("CreateMutatie returned mutNr=0 for item %d (%d bytes)", item.ID, len(mutResp))
-			results = append(results, result{ID: item.ID, Status: "error", Error: "Boeking niet aangemaakt — controleer de gegevens"})
+			results = append(results, result{ID: item.ID, Status: "error", Error: "e-Boekhouden heeft de boeking niet aangemaakt en gaf geen reden. Controleer de gegevens en probeer het opnieuw."})
 			continue
 		}
 		results = append(results, result{ID: item.ID, Status: "ok", MutNr: fmt.Sprintf("%d", resp.MutNr)})

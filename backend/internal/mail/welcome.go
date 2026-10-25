@@ -31,44 +31,29 @@ func welcomeHTML(name, appURL string) string {
     Welkom, %s!
   </h2>
   <p style="margin:0 0 24px;font-size:16px;line-height:1.6;color:#546e7a;">
-    Je account is aangemaakt. Tijd om je e-boekhouden.nl administratie te superchargen.
+    Je account is aangemaakt. Speedy werkt rechtstreeks in je eigen administratie in e-Boekhouden. Alles wat je via Speedy boekt, staat daar gewoon.
   </p>
 
   <!-- Features -->
   <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="margin-bottom:32px;">
     <tr>
-      <td style="padding:16px;background-color:#f8fafc;border-radius:8px;margin-bottom:8px;">
-        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-          <td style="vertical-align:top;padding-right:12px;font-size:20px;">&#9200;</td>
-          <td>
-            <strong style="color:#1a1a2e;">Urenregistratie</strong><br>
-            <span style="color:#546e7a;font-size:14px;">Boek uren voor je hele team in 30 seconden.</span>
-          </td>
-        </tr></table>
+      <td style="padding:16px;background-color:#f8fafc;border-radius:8px;">
+        <strong style="color:#1a1a2e;">Uren</strong><br>
+        <span style="color:#546e7a;font-size:14px;">Boek de uren van je hele team in één keer.</span>
       </td>
     </tr>
     <tr><td style="height:8px;"></td></tr>
     <tr>
       <td style="padding:16px;background-color:#f8fafc;border-radius:8px;">
-        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-          <td style="vertical-align:top;padding-right:12px;font-size:20px;">&#128182;</td>
-          <td>
-            <strong style="color:#1a1a2e;">Afschriften verwerken</strong><br>
-            <span style="color:#546e7a;font-size:14px;">AI stelt boekingen voor bij je bankafschriften.</span>
-          </td>
-        </tr></table>
+        <strong style="color:#1a1a2e;">Afschriften</strong><br>
+        <span style="color:#546e7a;font-size:14px;">AI stelt per bankregel een boeking voor, jij controleert en boekt.</span>
       </td>
     </tr>
     <tr><td style="height:8px;"></td></tr>
     <tr>
       <td style="padding:16px;background-color:#f8fafc;border-radius:8px;">
-        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-          <td style="vertical-align:top;padding-right:12px;font-size:20px;">&#128196;</td>
-          <td>
-            <strong style="color:#1a1a2e;">Factuurverwerking</strong><br>
-            <span style="color:#546e7a;font-size:14px;">Upload een PDF en AI leest alle gegevens uit.</span>
-          </td>
-        </tr></table>
+        <strong style="color:#1a1a2e;">Facturen en bonnetjes</strong><br>
+        <span style="color:#546e7a;font-size:14px;">Upload een PDF, JPG of PNG, of mail het document naar je administratie. AI leest leverancier, datum en bedragen uit en Speedy zoekt de betaling erbij.</span>
       </td>
     </tr>
   </table>
@@ -86,9 +71,9 @@ func welcomeHTML(name, appURL string) string {
 
   <!-- Next steps -->
   <p style="margin:32px 0 0;font-size:14px;line-height:1.6;color:#546e7a;">
-    <strong style="color:#1a1a2e;">Volgende stappen:</strong><br>
-    1. Verbind je e-boekhouden.nl account via het dashboard<br>
-    2. Stel optioneel een Anthropic API-sleutel in voor AI-functies
+    <strong style="color:#1a1a2e;">Zo begin je</strong><br>
+    1. Klik in Speedy op Verbinden en log in met je e-Boekhouden-gegevens.<br>
+    2. Wil je AI gebruiken? Vul dan bij Instellingen je eigen Anthropic API-sleutel in. De kosten lopen via je eigen Anthropic-account.
   </p>
 </td>
 </tr>
@@ -97,7 +82,7 @@ func welcomeHTML(name, appURL string) string {
 <tr>
 <td style="padding:24px 40px;border-top:1px solid #e2e8f0;text-align:center;">
   <p style="margin:0;font-size:13px;color:#94a3b8;line-height:1.6;">
-    Je ontvangt deze e-mail omdat je een account hebt aangemaakt bij
+    Je krijgt deze e-mail omdat je een account hebt aangemaakt bij
     <a href="%s" style="color:#1565c0;text-decoration:none;">Speedy e-Boekhouden</a>.
   </p>
 </td>

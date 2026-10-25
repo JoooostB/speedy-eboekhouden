@@ -210,7 +210,7 @@ func NewService() *Service {
 // ErrUnsupportedMediaType is returned by ReadInvoice when the file is not a
 // PDF, JPEG or PNG. The message is Dutch and generic on purpose so handlers
 // can pass it straight to the UI without leaking the offending media type.
-var ErrUnsupportedMediaType = errors.New("Bestandstype niet ondersteund")
+var ErrUnsupportedMediaType = errors.New("Speedy kan alleen PDF-, JPG- en PNG-bestanden lezen.")
 
 // normalizeMediaType reduces a Content-Type style value to a bare, lowercase
 // media type: parameters ("; charset=binary") are dropped and the common
@@ -301,7 +301,7 @@ func (s *Service) ReadInvoice(ctx context.Context, apiKey string, mediaType stri
 	// description) or the prompt itself needs tightening.
 	if string(msg.StopReason) == "max_tokens" {
 		log.Printf("Claude ReadInvoice hit max_tokens (limit=%d); response is truncated", readInvoiceMaxTokens)
-		return nil, fmt.Errorf("Factuur te complex voor automatische verwerking. Voer de gegevens handmatig in of probeer een ander bestand.")
+		return nil, fmt.Errorf("Dit document bevat te veel gegevens om automatisch uit te lezen. Vul de gegevens zelf in of probeer een ander bestand.")
 	}
 
 	text := extractText(msg)
@@ -315,7 +315,7 @@ func (s *Service) ReadInvoice(ctx context.Context, apiKey string, mediaType stri
 	if err := json.Unmarshal([]byte(cleaned), &invoice); err != nil {
 		log.Printf("Claude ReadInvoice unmarshal failed: err=%s stopReason=%s responseLen=%d",
 			jsonErrClass(err), msg.StopReason, len(cleaned))
-		return nil, fmt.Errorf("Factuurgegevens konden niet worden verwerkt. Probeer het opnieuw of voer handmatig in.")
+		return nil, fmt.Errorf("Het antwoord van AI was onleesbaar. Probeer het opnieuw of vul de gegevens zelf in.")
 	}
 
 	NormalizeDocumentType(&invoice)
@@ -386,10 +386,10 @@ func extractText(msg *anthropic.Message) string {
 func classifyAPIError(err error) error {
 	msg := err.Error()
 	if strings.Contains(msg, "credit balance") || strings.Contains(msg, "billing") {
-		return fmt.Errorf("Je Anthropic API-tegoed is op. Vul je tegoed aan op console.anthropic.com/settings/plans.")
+		return fmt.Errorf("Je tegoed bij Anthropic is op. Vul het aan op console.anthropic.com/settings/plans.")
 	}
 	if strings.Contains(msg, "invalid_api_key") || strings.Contains(msg, "authentication") {
-		return fmt.Errorf("Ongeldige API-sleutel. Controleer je sleutel in Instellingen.")
+		return fmt.Errorf("Anthropic accepteert je API-sleutel niet. Controleer de sleutel bij Instellingen.")
 	}
 	if strings.Contains(msg, "rate_limit") {
 		return fmt.Errorf("Te veel AI-verzoeken. Wacht even en probeer het opnieuw.")

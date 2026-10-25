@@ -55,7 +55,7 @@ type inboxBatchItem struct {
 // errFactuurbetalingIncomplete is the per-item error for a soort 3/4 item
 // without the relation or invoice number e-boekhouden needs to find the open
 // invoice. User-facing Dutch.
-var errFactuurbetalingIncomplete = errors.New("Relatie en factuurnummer zijn verplicht voor een factuurbetaling")
+var errFactuurbetalingIncomplete = errors.New("Een factuurbetaling heeft een relatie en een factuurnummer nodig.")
 
 // buildFactuurbetalingRegel is the single mutatieRegel of a factuurbetaling:
 // the gross amount, no BTW, and the relation plus invoice number that

@@ -196,16 +196,16 @@ func parseDocumentID(s string) (int, bool) {
 // is user-facing Dutch.
 func validateFileIDs(ids []int) ([]int, error) {
 	if len(ids) == 0 {
-		return nil, errors.New("Geen documenten opgegeven")
+		return nil, errors.New("Kies minstens één document.")
 	}
 	if len(ids) > maxArchiveFileIDs {
-		return nil, fmt.Errorf("Maximaal %d documenten per keer", maxArchiveFileIDs)
+		return nil, fmt.Errorf("Maximaal %d documenten per keer.", maxArchiveFileIDs)
 	}
 	seen := make(map[int]bool, len(ids))
 	out := make([]int, 0, len(ids))
 	for _, id := range ids {
 		if id <= 0 {
-			return nil, errors.New("Ongeldig document-id")
+			return nil, errors.New("Ongeldig document-id.")
 		}
 		if !seen[id] {
 			seen[id] = true
@@ -263,9 +263,9 @@ func (h *InvoiceHandler) writeDocumentsError(c *gin.Context, sess *session.Sessi
 	switch {
 	case HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err):
 	case errors.Is(err, errMailFolderNotConfigured):
-		c.JSON(http.StatusConflict, gin.H{"error": "mail_folder_not_configured", "message": "Er is nog geen mailmap ingesteld"})
+		c.JSON(http.StatusConflict, gin.H{"error": "mail_folder_not_configured", "message": "Er is nog geen mailmap ingesteld."})
 	case errors.Is(err, errDocumentNotInMailFolder):
-		c.JSON(http.StatusNotFound, gin.H{"error": "Document niet gevonden in de mailmap"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Dit document staat niet in de mailmap. Misschien is het verplaatst of verwijderd."})
 	default:
 		log.Printf("Documents: e-boekhouden error: %s", errClass(err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -276,7 +276,7 @@ func (h *InvoiceHandler) writeDocumentsError(c *gin.Context, sess *session.Sessi
 // analysis cache and lock all live there.
 func (h *InvoiceHandler) requireRedis(c *gin.Context) bool {
 	if h.redis == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Opslag is niet beschikbaar"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "De opslag van Speedy is niet bereikbaar. Probeer het later opnieuw."})
 		return false
 	}
 	return true
@@ -577,7 +577,7 @@ func (h *InvoiceHandler) AnalyzeDocument(c *gin.Context) {
 	}
 	id, ok := parseDocumentID(c.Param("id"))
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig document-id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig document-id."})
 		return
 	}
 	ctx := c.Request.Context()
@@ -587,11 +587,11 @@ func (h *InvoiceHandler) AnalyzeDocument(c *gin.Context) {
 	locked, err := h.redis.SetNX(ctx, lockKey, "1", documentAnalyzeLockTTL).Result()
 	if err != nil {
 		log.Printf("Documents: lock error for file %d: %v", id, err)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Opslag is niet beschikbaar"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "De opslag van Speedy is niet bereikbaar. Probeer het later opnieuw."})
 		return
 	}
 	if !locked {
-		c.JSON(http.StatusConflict, gin.H{"error": "Wordt al geanalyseerd"})
+		c.JSON(http.StatusConflict, gin.H{"error": "Dit document wordt al geanalyseerd."})
 		return
 	}
 	// Release with a fresh context: the request context is cancelled when the
@@ -622,7 +622,7 @@ func (h *InvoiceHandler) AnalyzeDocument(c *gin.Context) {
 			return
 		}
 		log.Printf("Documents: download failed for file %d: %s", id, errClass(err))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Downloaden uit e-Boekhouden mislukt"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Speedy kon het document niet uit e-Boekhouden ophalen, of het is groter dan 10 MB."})
 		return
 	}
 	mediaType, ok := detectDocumentMediaType(data)
@@ -640,7 +640,7 @@ func (h *InvoiceHandler) AnalyzeDocument(c *gin.Context) {
 	body, err := json.Marshal(resp)
 	if err != nil {
 		log.Printf("Documents: encoding analysis for file %d: %v", id, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Analyse opslaan mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "De analyse kon niet worden opgeslagen. Probeer het opnieuw."})
 		return
 	}
 	pdfHash, _ := resp["pdfHash"].(string)
@@ -698,7 +698,7 @@ func (h *InvoiceHandler) DocumentContent(c *gin.Context) {
 	}
 	id, ok := parseDocumentID(c.Param("id"))
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig document-id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig document-id."})
 		return
 	}
 	_, file, err := mailFolderFile(client, id)
@@ -712,7 +712,7 @@ func (h *InvoiceHandler) DocumentContent(c *gin.Context) {
 			return
 		}
 		log.Printf("Documents: download failed for file %d: %s", id, errClass(err))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Downloaden uit e-Boekhouden mislukt"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Speedy kon het document niet uit e-Boekhouden ophalen, of het is groter dan 10 MB."})
 		return
 	}
 	mediaType, ok := detectDocumentMediaType(data)
@@ -765,7 +765,7 @@ func (h *InvoiceHandler) IgnoreDocument(c *gin.Context) {
 	}
 	id, ok := parseDocumentID(c.Param("id"))
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig document-id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig document-id."})
 		return
 	}
 	if _, _, err := mailFolderFile(client, id); err != nil {
@@ -774,7 +774,7 @@ func (h *InvoiceHandler) IgnoreDocument(c *gin.Context) {
 	}
 	if err := h.redis.SAdd(c.Request.Context(), documentIgnoredKey(sess.UserID), id).Err(); err != nil {
 		log.Printf("Documents: ignore write error for file %d: %v", id, err)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Negeren opslaan mislukt"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Negeren is mislukt. Probeer het opnieuw."})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"id": id, "ignored": true})
@@ -794,12 +794,12 @@ func (h *InvoiceHandler) UnignoreDocument(c *gin.Context) {
 	}
 	id, ok := parseDocumentID(c.Param("id"))
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig document-id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig document-id."})
 		return
 	}
 	if err := h.redis.SRem(c.Request.Context(), documentIgnoredKey(sess.UserID), id).Err(); err != nil {
 		log.Printf("Documents: unignore write error for file %d: %v", id, err)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Negeren ongedaan maken mislukt"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Niet meer negeren is mislukt. Probeer het opnieuw."})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"id": id, "ignored": false})
@@ -827,7 +827,7 @@ func (h *InvoiceHandler) DeleteDocument(c *gin.Context) {
 	}
 	id, ok := parseDocumentID(c.Param("id"))
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig document-id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig document-id."})
 		return
 	}
 	_, file, err := mailFolderFile(client, id)
@@ -836,7 +836,7 @@ func (h *InvoiceHandler) DeleteDocument(c *gin.Context) {
 		return
 	}
 	if file.KoppelCount > 0 {
-		c.JSON(http.StatusConflict, gin.H{"error": "Dit document is gekoppeld aan een boeking"})
+		c.JSON(http.StatusConflict, gin.H{"error": "Dit document is gekoppeld aan een boeking. Speedy verwijdert het daarom niet."})
 		return
 	}
 	if err := client.DeleteArchiveFile(id); err != nil {
@@ -892,7 +892,7 @@ func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 		TargetFolderID int   `json:"targetFolderId"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek."})
 		return
 	}
 	ids, err := validateFileIDs(req.FileIDs)
@@ -901,7 +901,7 @@ func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 		return
 	}
 	if req.TargetFolderID < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldige doelmap"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldige doelmap."})
 		return
 	}
 	ctx := c.Request.Context()
@@ -948,7 +948,7 @@ func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 	for _, id := range ids {
 		file, ok := byID[id]
 		if !ok {
-			failed = append(failed, failedItem{ID: id, Error: "Document niet gevonden in de mailmap"})
+			failed = append(failed, failedItem{ID: id, Error: "Dit document staat niet in de mailmap. Misschien is het verplaatst of verwijderd."})
 			continue
 		}
 		datum, name := archiveNameFor(file, entries[id].invoice(), now)
@@ -965,7 +965,7 @@ func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 						return
 					}
 					log.Printf("Documents: archive folder lookup failed for file %d: %s", id, errClass(err))
-					failed = append(failed, failedItem{ID: id, Error: "Doelmap aanmaken mislukt"})
+					failed = append(failed, failedItem{ID: id, Error: "Speedy kon de maandmap onder Facturen niet vinden of aanmaken. Het document staat nog in de mailmap."})
 					continue
 				}
 				monthFolders[month] = folderID
@@ -1008,11 +1008,11 @@ func archiveErrorMessage(err error) string {
 	var moveErr *archiveMoveError
 	switch {
 	case errors.As(err, &moveErr):
-		return "Verplaatsen mislukt, het bestand is wel hernoemd: " + moveErr.err.Error()
+		return "Het document is hernoemd, maar staat nog in de mailmap: " + moveErr.err.Error()
 	case errors.As(err, &renameErr):
-		return "Hernoemen mislukt: " + renameErr.err.Error()
+		return "Het document staat ongewijzigd in de mailmap: " + renameErr.err.Error()
 	default:
-		return "Opruimen mislukt: " + err.Error()
+		return "Opruimen is mislukt: " + err.Error()
 	}
 }
 
@@ -1033,11 +1033,11 @@ func (h *InvoiceHandler) SetupMailFolder(c *gin.Context) {
 		FolderID int `json:"folderId"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig verzoek."})
 		return
 	}
 	if req.FolderID < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldige map"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldige map."})
 		return
 	}
 
@@ -1053,7 +1053,7 @@ func (h *InvoiceHandler) SetupMailFolder(c *gin.Context) {
 	}
 	if header.MenhFolderID > 0 && req.FolderID == 0 {
 		if current, ok := findArchiveFolder(folders, header.MenhFolderID); ok && !current.IsDeleted {
-			c.JSON(http.StatusConflict, gin.H{"error": "Er is al een mailmap ingesteld"})
+			c.JSON(http.StatusConflict, gin.H{"error": "Er is al een mailmap ingesteld."})
 			return
 		}
 	}
@@ -1062,7 +1062,7 @@ func (h *InvoiceHandler) SetupMailFolder(c *gin.Context) {
 	if req.FolderID > 0 {
 		f, ok := findArchiveFolder(folders, req.FolderID)
 		if !ok || f.IsDeleted {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Map niet gevonden"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Deze map bestaat niet in e-Boekhouden."})
 			return
 		}
 		target = f
@@ -1081,7 +1081,7 @@ func (h *InvoiceHandler) SetupMailFolder(c *gin.Context) {
 				return
 			}
 			if json.Unmarshal(raw, &target) != nil || target.ID == 0 {
-				c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden bij het aanmaken van de map"})
+				c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden gaf een onverwacht antwoord bij het aanmaken van de map. Kijk of de map Inbox toch is aangemaakt en kies hem dan met Bestaande map kiezen."})
 				return
 			}
 			if target.Naam == "" {
@@ -1108,7 +1108,7 @@ func (h *InvoiceHandler) GetOpenPosts(c *gin.Context) {
 	}
 	soort := c.Query("soort")
 	if soort != eboekhouden.OpenPostCrediteur && soort != eboekhouden.OpenPostDebiteur {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldige soort, gebruik Crediteur of Debiteur"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldige soort. Gebruik Crediteur of Debiteur."})
 		return
 	}
 	raw, err := client.GetOpenPostGrid(soort)
@@ -1119,7 +1119,7 @@ func (h *InvoiceHandler) GetOpenPosts(c *gin.Context) {
 	posts, err := eboekhouden.ParseOpenPostGrid(raw)
 	if err != nil {
 		log.Printf("Documents: open post grid parse error: %s", errClass(err))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Onverwacht antwoord van e-Boekhouden"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "e-Boekhouden gaf een onverwacht antwoord."})
 		return
 	}
 	c.JSON(http.StatusOK, posts)

@@ -45,7 +45,7 @@ func (h *PasskeyHandler) RegisterBegin(c *gin.Context) {
 	// Check if email is already registered
 	existing, _ := h.webauthn.DB().GetUserByEmail(c.Request.Context(), req.Email)
 	if existing != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "E-mailadres is al geregistreerd"})
+		c.JSON(http.StatusConflict, gin.H{"error": "Er bestaat al een account met dit e-mailadres. Log in met je passkey."})
 		return
 	}
 
@@ -230,7 +230,7 @@ func (h *PasskeyHandler) setSessionCookie(c *gin.Context, sessionID string) {
 // RecoverRequest handles POST /api/v1/auth/recover — sends a recovery email.
 func (h *PasskeyHandler) RecoverRequest(c *gin.Context) {
 	if h.mailer == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "E-mail is niet geconfigureerd"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Deze server kan geen e-mail versturen, dus ook geen herstellink."})
 		return
 	}
 
@@ -238,7 +238,7 @@ func (h *PasskeyHandler) RecoverRequest(c *gin.Context) {
 		Email string `json:"email" binding:"required,email"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "E-mailadres is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vul een geldig e-mailadres in."})
 		return
 	}
 
@@ -267,19 +267,19 @@ func (h *PasskeyHandler) RecoverFinishBegin(c *gin.Context) {
 		Token string `json:"token" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Token is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "De herstellink is onvolledig. Open de link uit de e-mail opnieuw."})
 		return
 	}
 
 	userID, err := h.db.ValidateRecoveryToken(c.Request.Context(), req.Token)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldige of verlopen link. Vraag een nieuwe aan."})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Deze herstellink is ongeldig, verlopen of al gebruikt. Vraag een nieuwe aan."})
 		return
 	}
 
 	user, err := h.db.GetUserByID(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Gebruiker niet gevonden"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Het account bij deze herstellink bestaat niet meer."})
 		return
 	}
 
@@ -311,7 +311,7 @@ func (h *PasskeyHandler) RecoverFinishComplete(c *gin.Context) {
 	// Let's directly finish the WebAuthn ceremony and add the credential to the existing user.
 	user, err := h.db.GetUserByID(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Gebruiker niet gevonden"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Het account bij deze herstellink bestaat niet meer."})
 		return
 	}
 
@@ -346,14 +346,14 @@ func (h *PasskeyHandler) RecoverFinishComplete(c *gin.Context) {
 		UserVerified:    credential.Flags.UserVerified,
 	}
 	if err := h.db.StoreCredential(c.Request.Context(), dbCred); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Passkey opslaan mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "De nieuwe passkey kon niet worden opgeslagen. Vraag een nieuwe herstellink aan."})
 		return
 	}
 
 	// Create session
 	sess, err := h.sessions.Create(c.Request.Context(), user.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Sessie aanmaken mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Je nieuwe passkey is opgeslagen, maar Speedy kon je niet inloggen. Log in met je nieuwe passkey."})
 		return
 	}
 

@@ -180,7 +180,7 @@ func (s *Service) ClassifyBatch(ctx context.Context, apiKey, entityType string, 
 		// bank lines and is never logged, not even as a preview.
 		log.Printf("Claude batch classify unmarshal failed: err=%s stopReason=%s lines=%d responseLen=%d",
 			jsonErrClass(err), msg.StopReason, len(lines), len(cleaned))
-		return nil, fmt.Errorf("AI-classificatie kon niet worden verwerkt")
+		return nil, fmt.Errorf("Het antwoord van AI kon niet worden verwerkt. Probeer het opnieuw.")
 	}
 
 	return results, nil

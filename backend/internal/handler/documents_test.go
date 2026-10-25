@@ -414,7 +414,7 @@ func TestParseDocumentID(t *testing.T) {
 }
 
 func TestValidateFileIDs(t *testing.T) {
-	if _, err := validateFileIDs(nil); err == nil || !strings.Contains(err.Error(), "Geen documenten") {
+	if _, err := validateFileIDs(nil); err == nil || !strings.Contains(err.Error(), "Kies minstens één document") {
 		t.Errorf("empty list: err = %v", err)
 	}
 	tooMany := make([]int, maxArchiveFileIDs+1)

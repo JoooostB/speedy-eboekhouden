@@ -87,7 +87,7 @@ func (h *EBoekhoudenAuthHandler) Login(c *gin.Context) {
 			cleaned := strings.TrimSpace(strings.TrimPrefix(errMsg, "new_ip:"))
 			c.JSON(http.StatusUnauthorized, gin.H{"error": cleaned, "code": "new_ip"})
 		} else {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Inloggen bij e-Boekhouden mislukt. Controleer je gegevens."})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Inloggen bij e-Boekhouden is mislukt. Controleer je e-mailadres en wachtwoord en probeer het opnieuw."})
 		}
 		return
 	}
@@ -137,12 +137,12 @@ func (h *EBoekhoudenAuthHandler) MFA(c *gin.Context) {
 	// Retrieve the original client with its cookie jar from the login request
 	val, ok := h.pendingMFA.LoadAndDelete(sess.ID)
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Geen actieve MFA-aanvraag. Log opnieuw in bij e-Boekhouden."})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Er is geen aanmelding meer die op deze code wacht. Log opnieuw in met je e-mailadres en wachtwoord."})
 		return
 	}
 	entry := val.(*pendingMFAEntry)
 	if time.Now().After(entry.ExpiresAt) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "MFA-aanvraag verlopen. Log opnieuw in bij e-Boekhouden."})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "De 5 minuten voor de verificatiecode zijn voorbij. Log opnieuw in met je e-mailadres en wachtwoord."})
 		return
 	}
 

@@ -34,7 +34,7 @@ var allowedImageTypes = map[string]bool{
 // Upload handles POST /api/v1/avatar — uploads avatar to R2.
 func (h *AvatarHandler) Upload(c *gin.Context) {
 	if h.r2 == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Bestandsopslag is niet geconfigureerd"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Deze server heeft geen bestandsopslag voor foto's."})
 		return
 	}
 
@@ -46,7 +46,7 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 
 	file, header, err := c.Request.FormFile("avatar")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Afbeelding is verplicht"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een foto."})
 		return
 	}
 	defer file.Close()
@@ -54,18 +54,18 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 	// Validate content type
 	contentType := header.Header.Get("Content-Type")
 	if !allowedImageTypes[contentType] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Alleen JPEG, PNG en WebP zijn toegestaan"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een JPG-, PNG- of WebP-bestand."})
 		return
 	}
 
 	// Read with size limit
 	data, err := io.ReadAll(io.LimitReader(file, maxAvatarSize+1))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Bestand kon niet worden gelezen"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Het bestand kon niet worden gelezen. Probeer het opnieuw."})
 		return
 	}
 	if len(data) > maxAvatarSize {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Afbeelding is te groot (max 2 MB)"})
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "De foto is te groot. Kies een bestand tot 2 MB."})
 		return
 	}
 
@@ -75,7 +75,7 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 
 	// Upload to R2
 	if err := h.r2.Upload(c.Request.Context(), key, data, contentType); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Upload mislukt"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Uploaden is mislukt. Probeer het opnieuw."})
 		return
 	}
 
@@ -87,7 +87,7 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 
 	// Save key to database
 	if err := h.db.SetAvatarKey(c.Request.Context(), sess.UserID, key); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Avatar opslaan mislukt"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "De foto kon niet worden opgeslagen. Probeer het opnieuw."})
 		return
 	}
 
@@ -100,7 +100,7 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 // Delete handles DELETE /api/v1/avatar — removes avatar.
 func (h *AvatarHandler) Delete(c *gin.Context) {
 	if h.r2 == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Bestandsopslag is niet geconfigureerd"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Deze server heeft geen bestandsopslag voor foto's."})
 		return
 	}
 

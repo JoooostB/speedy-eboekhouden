@@ -267,11 +267,11 @@ func (e *archiveMoveError) Unwrap() error { return e.err }
 // detectable with errors.Is.
 func archiveMailDocument(client *eboekhouden.Client, file eboekhouden.ArchiveFile, mailFolderID int, name string, targetFolderID int) (string, error) {
 	if targetFolderID == mailFolderID {
-		return "", &archiveRenameError{err: fmt.Errorf("target folder %d is the mail folder", targetFolderID)}
+		return "", &archiveRenameError{err: fmt.Errorf("doelmap %d is de mailmap", targetFolderID)}
 	}
 	existing, err := client.ListArchiveFiles(targetFolderID)
 	if err != nil {
-		return "", &archiveRenameError{err: fmt.Errorf("listing target folder: %w", err)}
+		return "", &archiveRenameError{err: fmt.Errorf("doelmap uitlezen: %w", err)}
 	}
 	finalName := uniqueName(name, fileNameSet(existing))
 	if finalName != file.Naam {
