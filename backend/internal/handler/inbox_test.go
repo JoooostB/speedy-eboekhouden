@@ -490,9 +490,10 @@ func TestApplyInboxOverlays(t *testing.T) {
 		t.Errorf("line 2: prefill lost: %+v", r)
 	}
 
-	// Line 3: incoming line on a debiteur post without a name hit.
+	// Line 3: incoming line on a debiteur post without a name hit: suggested,
+	// but for review, never approvable in bulk.
 	r = rows[2]
-	if !r.OpenPostMatch || r.Soort != "FactuurbetalingOntvangen" || r.Confidence != 0.9 || r.Category != "auto" {
+	if !r.OpenPostMatch || r.Soort != "FactuurbetalingOntvangen" || r.Confidence != 0.9 || r.Category != "review" {
 		t.Errorf("line 3: %+v", r)
 	}
 
@@ -502,13 +503,35 @@ func TestApplyInboxOverlays(t *testing.T) {
 	}
 
 	// Summary is recounted after the overlay.
-	wantSummary := map[string]int{"auto": 3, "review": 0, "invoice": 1, "manual": 0}
+	wantSummary := map[string]int{"auto": 2, "review": 1, "invoice": 1, "manual": 0}
 	if got := summarizeInbox(rows); !reflect.DeepEqual(got, wantSummary) {
 		t.Errorf("summary = %v, want %v", got, wantSummary)
 	}
 	wantBaseSummary := map[string]int{"auto": 1, "review": 2, "invoice": 0, "manual": 1}
 	if got := summarizeInbox(base); !reflect.DeepEqual(got, wantBaseSummary) {
 		t.Errorf("base summary = %v, want %v", got, wantBaseSummary)
+	}
+}
+
+// An open post with the same amount but without the company in the bank
+// description must not overrule what the user's confirmed learned memory
+// decided: a €50 subscription booked as cost twice stays a cost even when an
+// unrelated €50 invoice is open. With a name hit the open post still wins.
+func TestApplyInboxOverlaysKeepsLearnedRowOnAmountOnlyMatch(t *testing.T) {
+	learnedRow := inboxClassifiedRow{
+		ID: 1, Bedrag: -50, Omschrijving: "Voorbeeld Abonnement oktober", Category: "auto", Confidence: 1.0,
+		Grootboekcode: "4300", BTWCode: "HOOG_INK_21", Soort: "GeldUitgegeven", Indicator: "Eerder geboekt", Learned: true,
+	}
+	other := post("Andere Leverancier B.V.", "AL-7", "2026-10-01", 50)
+
+	rows := applyInboxOverlays([]inboxClassifiedRow{learnedRow}, map[int]openPostMatch{1: {Post: other, NameHit: false}}, nil)
+	if !reflect.DeepEqual(rows[0], learnedRow) {
+		t.Errorf("amount-only match overruled the learned row: %+v", rows[0])
+	}
+
+	rows = applyInboxOverlays([]inboxClassifiedRow{learnedRow}, map[int]openPostMatch{1: {Post: other, NameHit: true}}, nil)
+	if !rows[0].OpenPostMatch || rows[0].Category != "auto" || rows[0].Learned {
+		t.Errorf("name hit should still win over the learned row: %+v", rows[0])
 	}
 }
 

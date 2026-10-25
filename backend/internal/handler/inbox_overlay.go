@@ -381,14 +381,17 @@ type inboxDocumentMatch struct {
 }
 
 // applyInboxOverlays returns base with the fresh open-post and document
-// matches applied. An open post wins over everything: the invoice is already
-// booked and the line just settles it. Otherwise a document match turns the
-// line into an invoice line. base itself is not modified, so a cached base
-// can be overlaid again on the next request.
+// matches applied. An open post wins: the invoice is already booked and the
+// line just settles it. The exception is a match on the amount alone (no
+// company name in the description) against a row the user's confirmed
+// learned memory decided: an equal amount is too weak to overrule that, so
+// the learned suggestion stays. Otherwise a document match turns the line
+// into an invoice line. base itself is not modified, so a cached base can be
+// overlaid again on the next request.
 func applyInboxOverlays(base []inboxClassifiedRow, posts map[int]openPostMatch, docs map[int]inboxDocumentMatch) []inboxClassifiedRow {
 	out := make([]inboxClassifiedRow, len(base))
 	for i, row := range base {
-		if m, ok := posts[row.ID]; ok {
+		if m, ok := posts[row.ID]; ok && (m.NameHit || !row.Learned) {
 			row = withOpenPostMatch(row, m)
 		} else if d, ok := docs[row.ID]; ok {
 			row = withDocumentMatch(row, d)
@@ -401,12 +404,15 @@ func applyInboxOverlays(base []inboxClassifiedRow, posts map[int]openPostMatch, 
 // withOpenPostMatch turns a row into the factuurbetaling suggestion for m.
 // The bank line's own description is used as booking description, as the
 // e-boekhouden web UI does; the learned flag is dropped because the
-// suggestion no longer comes from the user's memory.
+// suggestion no longer comes from the user's memory. Only a name hit is
+// "auto" (approvable in bulk); a match on the amount alone is "review", so
+// the user confirms which invoice the line pays before it is booked.
 func withOpenPostMatch(row inboxClassifiedRow, m openPostMatch) inboxClassifiedRow {
-	row.Category = "auto"
+	row.Category = "review"
 	row.NeedsInvoice = false
 	row.Confidence = 0.9
 	if m.NameHit {
+		row.Category = "auto"
 		row.Confidence = 1.0
 	}
 	row.Soort = soortNameFactuurbetalingOntvangen

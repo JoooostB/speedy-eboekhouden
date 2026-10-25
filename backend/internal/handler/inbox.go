@@ -212,10 +212,13 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 	// feedback for recurring transactions they've already booked once.
 	learned, _ := h.db.LookupLearnedBatch(ctx, sess.UserID)
 
-	// Convert to batch lines, but skip lines that pay an open post and lines
-	// that have a confirmed learned mapping (count >= 2 with confirmed_at
-	// set). The learned hit is still recorded for open-post lines so the row
-	// keeps a suggestion should the open post disappear from a later overlay.
+	// Convert to batch lines, but skip lines that have a confirmed learned
+	// mapping (count >= 2 with confirmed_at set) and lines that pay an open
+	// post by name. The learned hit is still recorded for open-post lines so
+	// the row keeps a suggestion should the open post disappear from a later
+	// overlay. A line that matches an open post on the amount alone still
+	// goes to Claude: that overlay is only a "review" suggestion, and the row
+	// needs its own classification when the user turns it down.
 	var lines []claude.BatchLine
 	learnedHits := make(map[int]*database.LearnedClassification)
 	for _, row := range rows {
@@ -229,7 +232,7 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 			learnedHits[id] = hit
 			continue
 		}
-		if _, ok := openMatches[id]; ok {
+		if m, ok := openMatches[id]; ok && m.NameHit {
 			continue
 		}
 
