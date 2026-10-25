@@ -399,7 +399,7 @@ func TestAssignDocumentsToBankLines(t *testing.T) {
 }
 
 func TestParseDocumentID(t *testing.T) {
-	ok := map[string]int{"1": 1, "90461397": 90461397, " 7 ": 7}
+	ok := map[string]int{"1": 1, "12340002": 12340002, " 7 ": 7}
 	for in, want := range ok {
 		got, valid := parseDocumentID(in)
 		if !valid || got != want {
@@ -443,11 +443,11 @@ func TestValidateFileIDs(t *testing.T) {
 
 func TestArchiveNameFor(t *testing.T) {
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
-	file := eboekhouden.ArchiveFile{ID: 1, Naam: "Kachelbrandje.pdf", Datum: "2026-10-24T15:43:35.67"}
+	file := eboekhouden.ArchiveFile{ID: 1, Naam: "Voorbeeld-Bijlage.pdf", Datum: "2026-10-24T15:43:35.67"}
 
 	t.Run("without analysis: received date and base name", func(t *testing.T) {
 		datum, name := archiveNameFor(file, nil, now)
-		if name != "2026-10-24_Kachelbrandje_document.pdf" {
+		if name != "2026-10-24_Voorbeeld-Bijlage_document.pdf" {
 			t.Errorf("name = %q", name)
 		}
 		if datum.Format("2006-01-02") != "2026-10-24" {

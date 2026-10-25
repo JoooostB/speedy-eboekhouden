@@ -18,7 +18,7 @@ const uploadSource: SubmitSource = {
 
 const archiveSource: SubmitSource = {
   uploadKey: "",
-  filename: "Kachelbrandje.pdf",
+  filename: "Voorbeeld-Bijlage.pdf",
   pdfHash: "hash-2",
   crediteurenId: 1600,
   archiveFileId: 501,

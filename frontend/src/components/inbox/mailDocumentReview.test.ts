@@ -50,7 +50,7 @@ const candidate = (id: number, overrides: Partial<BankLineCandidate> = {}): Bank
 
 const analysis = (overrides: Partial<InvoiceAnalyzeResponse> = {}): InvoiceAnalyzeResponse => ({
   invoice: invoice(),
-  filename: "Kachelbrandje.pdf",
+  filename: "Voorbeeld-Bijlage.pdf",
   uploadKey: "",
   pdfUrl: "",
   pdfHash: "abc",
@@ -63,14 +63,14 @@ const analysis = (overrides: Partial<InvoiceAnalyzeResponse> = {}): InvoiceAnaly
 
 const document = (overrides: Partial<MailDocument> = {}): MailDocument => ({
   id: 501,
-  naam: "Kachelbrandje.pdf",
+  naam: "Voorbeeld-Bijlage.pdf",
   datum: "2026-10-24T15:43:35.67",
   size: 228310,
   mediaType: "application/pdf",
   koppelCount: 0,
   status: "matched",
   title: "Anthropic · 12 okt 2026 · € 21,78",
-  subtitle: "Factuur INV-0042 · Kachelbrandje.pdf",
+  subtitle: "Factuur INV-0042 · Voorbeeld-Bijlage.pdf",
   ignored: false,
   documentType: "factuur",
   analyzedAt: "2026-10-24T16:00:00Z",
@@ -80,7 +80,7 @@ const document = (overrides: Partial<MailDocument> = {}): MailDocument => ({
   ...overrides,
 });
 
-const pdfFile = () => new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], "Kachelbrandje.pdf", { type: "application/pdf" });
+const pdfFile = () => new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], "Voorbeeld-Bijlage.pdf", { type: "application/pdf" });
 
 describe("accepted files", () => {
   it("lists PDF, JPG and PNG by extension and media type", () => {
@@ -115,7 +115,7 @@ describe("accepted files", () => {
 describe("documentFile", () => {
   it("names the file like the document and types it from the blob", () => {
     const file = documentFile(document(), new Blob(["x"], { type: "application/pdf" }));
-    expect(file.name).toBe("Kachelbrandje.pdf");
+    expect(file.name).toBe("Voorbeeld-Bijlage.pdf");
     expect(file.type).toBe("application/pdf");
   });
 
@@ -154,7 +154,7 @@ describe("buildAnalyzedInvoiceFromDocument", () => {
     expect(out.archiveFileId).toBe(501);
     expect(out.mailFolderName).toBe("Inbox");
     expect(out.documentTitle).toBe("Anthropic · 12 okt 2026 · € 21,78");
-    expect(out.filename).toBe("Kachelbrandje.pdf");
+    expect(out.filename).toBe("Voorbeeld-Bijlage.pdf");
   });
 
   it("never uses R2 for a mail-folder document", () => {

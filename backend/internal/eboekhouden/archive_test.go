@@ -12,7 +12,7 @@ import (
 
 func TestGetFolderHeader(t *testing.T) {
 	var last recordedRequest
-	srv := jsonServer(t, 200, `{"menhFolderId":90460978,"credits":113,"dataLimit":5368709120,"dataUsed":12345678,`+
+	srv := jsonServer(t, 200, `{"menhFolderId":12340001,"credits":113,"dataLimit":5368709120,"dataUsed":12345678,`+
 		`"directoryInfo":{"directoryName":"Inbox","deleted":false,"fileCount":3,"subDirectoryCount":1,"totalSize":456789}}`, &last)
 	c := newTestClient(t, srv)
 
@@ -23,7 +23,7 @@ func TestGetFolderHeader(t *testing.T) {
 	assertRequest(t, last, "GET", "/v1/api/folder/0/header", "")
 
 	want := &FolderHeader{
-		MenhFolderID: 90460978,
+		MenhFolderID: 12340001,
 		Credits:      113,
 		DataLimit:    5368709120,
 		DataUsed:     12345678,
@@ -44,10 +44,10 @@ func TestGetFolderHeaderSessionExpired(t *testing.T) {
 	srv := jsonServer(t, 401, ``, &last)
 	c := newTestClient(t, srv)
 
-	if _, err := c.GetFolderHeader(90460978); !errors.Is(err, ErrSessionExpired) {
+	if _, err := c.GetFolderHeader(12340001); !errors.Is(err, ErrSessionExpired) {
 		t.Fatalf("err = %v, want ErrSessionExpired", err)
 	}
-	assertRequest(t, last, "GET", "/v1/api/folder/90460978/header", "")
+	assertRequest(t, last, "GET", "/v1/api/folder/12340001/header", "")
 }
 
 func TestSetMailFolder(t *testing.T) {
@@ -56,10 +56,10 @@ func TestSetMailFolder(t *testing.T) {
 		srv := jsonServer(t, 200, `true`, &last)
 		c := newTestClient(t, srv)
 
-		if err := c.SetMailFolder(90460978); err != nil {
+		if err := c.SetMailFolder(12340001); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		assertRequest(t, last, "POST", "/v1/api/administratie/menhfolder", "90460978")
+		assertRequest(t, last, "POST", "/v1/api/administratie/menhfolder", "12340001")
 	})
 
 	t.Run("false is an error", func(t *testing.T) {
@@ -124,11 +124,11 @@ func TestDownloadArchiveFile(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := newTestClient(t, srv)
 
-	data, contentType, filename, err := c.DownloadArchiveFile(90461397, 10<<20)
+	data, contentType, filename, err := c.DownloadArchiveFile(12340002, 10<<20)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	assertRequest(t, last, "GET", "/v1/api/folder/90461397/download", "")
+	assertRequest(t, last, "GET", "/v1/api/folder/12340002/download", "")
 	if string(data) != string(pdf) {
 		t.Errorf("data = %q, want %q", data, pdf)
 	}
@@ -146,12 +146,12 @@ func TestRenameArchiveFile(t *testing.T) {
 		srv := jsonServer(t, 200, `true`, &last)
 		c := newTestClient(t, srv)
 
-		err := c.RenameArchiveFile(90461397, 90460978, "2026-10-12_Voorbeeld-Leverancier_INV-0042.pdf")
+		err := c.RenameArchiveFile(12340002, 12340001, "2026-10-12_Voorbeeld-Leverancier_INV-0042.pdf")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		assertRequest(t, last, "PUT", "/v1/api/folder/filename",
-			`{"folderId":90461397,"parentFolderId":90460978,"name":"2026-10-12_Voorbeeld-Leverancier_INV-0042.pdf"}`)
+			`{"folderId":12340002,"parentFolderId":12340001,"name":"2026-10-12_Voorbeeld-Leverancier_INV-0042.pdf"}`)
 	})
 
 	t.Run("false is an error", func(t *testing.T) {
@@ -295,10 +295,10 @@ func TestDeleteArchiveFile(t *testing.T) {
 		srv := jsonServer(t, 200, `true`, &last)
 		c := newTestClient(t, srv)
 
-		if err := c.DeleteArchiveFile(90461397); err != nil {
+		if err := c.DeleteArchiveFile(12340002); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		assertRequest(t, last, "DELETE", "/v1/api/folder/90461397", "")
+		assertRequest(t, last, "DELETE", "/v1/api/folder/12340002", "")
 	})
 
 	t.Run("false is an error", func(t *testing.T) {

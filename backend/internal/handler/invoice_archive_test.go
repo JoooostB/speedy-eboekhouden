@@ -190,7 +190,7 @@ func TestArchiveSourceName(t *testing.T) {
 	}{
 		{
 			name: "SubmitFull invoice from mail folder pdf",
-			src:  mailFile("Kachelbrandje.pdf"),
+			src:  mailFile("Voorbeeld-Bijlage.pdf"),
 			in:   archiveNameInput{"Anthropic, PBC", "INV-0042", "2026-10-12", submitFullDocType("")},
 			want: "2026-10-12_Anthropic_INV-0042.pdf",
 		},
@@ -220,7 +220,7 @@ func TestArchiveSourceName(t *testing.T) {
 		},
 		{
 			name: "mail folder file falls back to its received date",
-			src:  mailFile("Kachelbrandje.pdf"),
+			src:  mailFile("Voorbeeld-Bijlage.pdf"),
 			in:   archiveNameInput{"Anthropic", "INV-0042", "", submitFullDocType("")},
 			want: "2026-10-24_Anthropic_INV-0042.pdf",
 		},
@@ -327,14 +327,14 @@ func TestArchiveOutcomeAddTo(t *testing.T) {
 		},
 		{
 			name: "link failed",
-			out:  archiveOutcome{fileID: 501, name: "Kachelbrandje.pdf", warning: "De boeking is gelukt, maar het document is er niet aan gekoppeld. Het staat nog in de mailmap. Koppel het zelf in e-Boekhouden."},
-			want: gin.H{"archived": true, "linked": false, "renamed": false, "moved": false, "archiveName": "Kachelbrandje.pdf",
+			out:  archiveOutcome{fileID: 501, name: "Voorbeeld-Bijlage.pdf", warning: "De boeking is gelukt, maar het document is er niet aan gekoppeld. Het staat nog in de mailmap. Koppel het zelf in e-Boekhouden."},
+			want: gin.H{"archived": true, "linked": false, "renamed": false, "moved": false, "archiveName": "Voorbeeld-Bijlage.pdf",
 				"archiveWarning": "De boeking is gelukt, maar het document is er niet aan gekoppeld. Het staat nog in de mailmap. Koppel het zelf in e-Boekhouden."},
 		},
 		{
 			name: "rename failed",
-			out:  archiveOutcome{fileID: 501, linked: true, name: "Kachelbrandje.pdf", warning: "Het document staat ongewijzigd in de mailmap: x"},
-			want: gin.H{"archived": true, "linked": true, "renamed": false, "moved": false, "archiveName": "Kachelbrandje.pdf", "archiveWarning": "Het document staat ongewijzigd in de mailmap: x"},
+			out:  archiveOutcome{fileID: 501, linked: true, name: "Voorbeeld-Bijlage.pdf", warning: "Het document staat ongewijzigd in de mailmap: x"},
+			want: gin.H{"archived": true, "linked": true, "renamed": false, "moved": false, "archiveName": "Voorbeeld-Bijlage.pdf", "archiveWarning": "Het document staat ongewijzigd in de mailmap: x"},
 		},
 		{
 			name: "move failed after rename",
@@ -399,7 +399,7 @@ func newFakeEBoekhouden(t *testing.T) *fakeEBoekhouden {
 		folders: folders,
 		files: map[int][]eboekhouden.ArchiveFile{
 			100: {
-				{ID: 501, ParentID: 100, Soort: "F", Naam: "Kachelbrandje.pdf", Datum: "2026-10-24T15:43:35.67", Size: 228310},
+				{ID: 501, ParentID: 100, Soort: "F", Naam: "Voorbeeld-Bijlage.pdf", Datum: "2026-10-24T15:43:35.67", Size: 228310},
 				{ID: 502, ParentID: 100, Soort: "F", Naam: "bon.JPG", Datum: "2026-10-23T09:00:00", Size: 90000},
 			},
 			202: {
@@ -764,7 +764,7 @@ func TestSubmitFullMailDocumentLinkFails(t *testing.T) {
 	if resp["mutNr"] != 4711.0 || resp["archived"] != true || resp["linked"] != false || resp["renamed"] != false || resp["moved"] != false {
 		t.Errorf("response = %v", resp)
 	}
-	if resp["archiveName"] != "Kachelbrandje.pdf" {
+	if resp["archiveName"] != "Voorbeeld-Bijlage.pdf" {
 		t.Errorf("archiveName = %v, want the unchanged name", resp["archiveName"])
 	}
 	if w, _ := resp["archiveWarning"].(string); !strings.Contains(w, "het document is er niet aan gekoppeld") {
@@ -774,7 +774,7 @@ func TestSubmitFullMailDocumentLinkFails(t *testing.T) {
 	if got := fake.writes(); !reflect.DeepEqual(got, wantWrites) {
 		t.Errorf("writes = %v, want %v (no rename, no move)", got, wantWrites)
 	}
-	if len(fake.files[100]) != 2 || fake.files[100][0].Naam != "Kachelbrandje.pdf" {
+	if len(fake.files[100]) != 2 || fake.files[100][0].Naam != "Voorbeeld-Bijlage.pdf" {
 		t.Errorf("mail folder = %v, want the file untouched", fake.files[100])
 	}
 }
@@ -787,7 +787,7 @@ func TestSubmitFullMailDocumentRenameFails(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status %d: %v", status, resp)
 	}
-	if resp["linked"] != true || resp["renamed"] != false || resp["moved"] != false || resp["archiveName"] != "Kachelbrandje.pdf" {
+	if resp["linked"] != true || resp["renamed"] != false || resp["moved"] != false || resp["archiveName"] != "Voorbeeld-Bijlage.pdf" {
 		t.Errorf("response = %v", resp)
 	}
 	if w, _ := resp["archiveWarning"].(string); !strings.HasPrefix(w, "Het document staat ongewijzigd in de mailmap: ") {

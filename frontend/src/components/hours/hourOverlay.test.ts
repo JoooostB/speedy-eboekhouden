@@ -10,7 +10,7 @@ import type { HourOverviewEntry } from "../../api/types";
 const entry = (overrides: Partial<HourOverviewEntry> = {}): HourOverviewEntry => ({
   id: 1,
   datum: "2026-04-01T00:00:00",
-  medewerker: "Joost Buskermolen",
+  medewerker: "Voorbeeld Medewerker",
   project: "PUP",
   activiteit: "Consultancy",
   opmerkingen: "",
@@ -39,13 +39,13 @@ describe("strictMatchKey", () => {
   it("produces identical keys for identical inputs regardless of case/whitespace", () => {
     const a = strictMatchKey({
       date: "2026-04-01",
-      employeeName: "Joost Buskermolen",
+      employeeName: "Voorbeeld Medewerker",
       projectLabel: "PUP",
       activityLabel: "Consultancy",
     });
     const b = strictMatchKey({
       date: "2026-04-01",
-      employeeName: "  joost buskermolen  ",
+      employeeName: "  voorbeeld medewerker  ",
       projectLabel: "pup",
       activityLabel: "consultancy",
     });
@@ -55,7 +55,7 @@ describe("strictMatchKey", () => {
   it("differs when any field differs", () => {
     const base = {
       date: "2026-04-01",
-      employeeName: "Joost",
+      employeeName: "Voorbeeld",
       projectLabel: "PUP",
       activityLabel: "Consultancy",
     };
@@ -100,7 +100,7 @@ describe("buildHourOverlay", () => {
       overlay.strictKeys.has(
         strictMatchKey({
           date: "2026-04-01",
-          employeeName: "Joost Buskermolen",
+          employeeName: "Voorbeeld Medewerker",
           projectLabel: "PUP",
           activityLabel: "Consultancy",
         }),
@@ -117,7 +117,7 @@ describe("buildHourOverlay", () => {
     ]);
     const onboardingKey = strictMatchKey({
       date: "2026-04-01",
-      employeeName: "Joost Buskermolen",
+      employeeName: "Voorbeeld Medewerker",
       projectLabel: "PUP",
       activityLabel: "Onboarding",
     });

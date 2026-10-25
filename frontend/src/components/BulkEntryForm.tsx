@@ -50,7 +50,7 @@ export function BulkEntryForm() {
   const [visibleRange, setVisibleRange] = useState<{ from: string; to: string } | null>(null);
 
   // State for the duplicate-confirmation dialog: a list of conflicts to
-  // surface ("Joost · 2026-04-01 · PUP · Consultancy") plus a resolved
+  // surface ("Voorbeeld · 2026-04-01 · PUP · Consultancy") plus a resolved
   // submit handler that runs after the user clicks Toch indienen.
   const [duplicateConflicts, setDuplicateConflicts] = useState<string[] | null>(null);
 

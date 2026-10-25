@@ -24,8 +24,8 @@ func userKeys(userID string) []string {
 		inboxClassifyKey(userID),
 		invoiceAnalysisCacheKey(userID, []byte("%PDF-1.4 x"), accounts),
 		invoiceSubmittedMarkerKey(userID, invoicePDFContentHash([]byte("%PDF-1.4 x"))),
-		documentAnalysisKey(userID, 90461397),
-		documentAnalyzingKey(userID, 90461397),
+		documentAnalysisKey(userID, 12340002),
+		documentAnalyzingKey(userID, 12340002),
 		documentIgnoredKey(userID),
 	}
 }

@@ -22,7 +22,7 @@ import (
 
 // The document inbox exposes the files that land in the administration's
 // "Mail & herken" folder (the mail folder). The folder is always found through
-// menhFolderId from the folder header, never by name: Joost's is called
+// menhFolderId from the folder header, never by name: one user's is called
 // "Inbox", other users' can have any name and any path.
 //
 // Redis keys, all per user:
