@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"time"
@@ -452,10 +451,9 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 	bankLine.Datum = c.PostForm("datum")
 	bankLine.GrootboekId = parseInt(c.PostForm("grootboekId"))
 
-	const maxFileSize = 10 << 20
-	pdfBytes, err := io.ReadAll(io.LimitReader(file, maxFileSize+1))
-	if err != nil || len(pdfBytes) > maxFileSize {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Het bestand is te groot. Speedy leest bestanden tot 10 MB."})
+	pdfBytes, err := readUploadedFile(file)
+	if err != nil {
+		writeUploadReadError(c, err)
 		return
 	}
 

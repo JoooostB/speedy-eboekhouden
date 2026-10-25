@@ -57,6 +57,34 @@ const importGridFetchLimit = 2000
 // matching the security page's claim.
 const maxInvoiceFileSize = 10 << 20
 
+// errFileTooLarge is readUploadedFile's answer for a file above the limit.
+var errFileTooLarge = errors.New("uploaded file too large")
+
+// readUploadedFile reads an uploaded document of at most maxInvoiceFileSize
+// bytes. A file above the limit is errFileTooLarge; a read error (a broken
+// or aborted upload) comes back as itself, so writeUploadReadError can tell
+// the user which of the two happened.
+func readUploadedFile(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxInvoiceFileSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxInvoiceFileSize {
+		return nil, errFileTooLarge
+	}
+	return data, nil
+}
+
+// writeUploadReadError answers a readUploadedFile error: 413 for a file
+// above the limit, 400 for a file that could not be read.
+func writeUploadReadError(c *gin.Context, err error) {
+	if errors.Is(err, errFileTooLarge) {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Het bestand is te groot. Speedy leest bestanden tot 10 MB."})
+		return
+	}
+	c.JSON(http.StatusBadRequest, gin.H{"error": "Het bestand kon niet worden gelezen. Probeer het opnieuw."})
+}
+
 // invoicePDFContentHash returns a stable hex-encoded SHA-256 of the raw
 // PDF bytes. Used as the canonical key for invoice-level caching so a
 // re-upload of the exact same file produces identical analysis results
@@ -179,13 +207,9 @@ func (h *InvoiceHandler) Analyze(c *gin.Context) {
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(io.LimitReader(file, maxInvoiceFileSize+1))
+	data, err := readUploadedFile(file)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read file"})
-		return
-	}
-	if len(data) > maxInvoiceFileSize {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Het bestand is te groot. Speedy leest bestanden tot 10 MB."})
+		writeUploadReadError(c, err)
 		return
 	}
 
