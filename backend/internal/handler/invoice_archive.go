@@ -309,7 +309,20 @@ type archiveOutcome struct {
 	// warning is Dutch text for the client when the archive step failed while
 	// the booking itself succeeded, like paymentWarning.
 	warning string
+	// sessionExpired reports that e-boekhouden ended the session during
+	// the archive step. The booking stands, so the caller answers with the
+	// warning and clears the stored token (clearExpiredEBoekhoudenToken). It
+	// is not part of the response.
+	sessionExpired bool
 }
+
+// The archive warnings for a session that expired after the booking. The
+// booking stands; the user reconnects and finishes the document by hand.
+const (
+	warnMailLinkSessionExpired   = "De boeking is gelukt, maar je sessie bij e-Boekhouden is verlopen voordat Speedy het document eraan kon koppelen. Het staat nog in de mailmap. Koppel e-Boekhouden opnieuw en koppel het document daarna zelf aan de boeking."
+	warnMailMoveSessionExpired   = "Het document is geboekt en gekoppeld, maar je sessie bij e-Boekhouden is verlopen voordat Speedy het kon verplaatsen. Het staat nog in de mailmap. Koppel e-Boekhouden opnieuw en ruim het daarna op met Alles opruimen."
+	warnUploadLinkSessionExpired = "De boeking is gelukt en het bestand staat in je archief, maar je sessie bij e-Boekhouden is verlopen voordat Speedy het eraan kon koppelen. Koppel e-Boekhouden opnieuw en koppel het bestand daarna zelf aan de boeking."
+)
 
 // addTo writes the outcome into a submit response: archived, linked, renamed
 // and moved are always present; archiveName, targetFolderId,
@@ -435,12 +448,17 @@ func uploadAndResolveArchiveFile(client *eboekhouden.Client, data []byte, folder
 	return 0, ""
 }
 
-// linkArchiveFile links an archive file to a mutation and reports whether
-// e-boekhouden accepted the link. Nothing is linked without a file or a
-// mutation number.
-func linkArchiveFile(client *eboekhouden.Client, fileID, mutNr int) bool {
+// errNothingToLink is linkArchiveFile's answer when there is no file or no
+// mutation number: nothing was linked, and nothing went wrong either.
+var errNothingToLink = errors.New("no archive file or mutation to link")
+
+// linkArchiveFile links an archive file to a mutation. nil means e-boekhouden
+// accepted the link; errNothingToLink means there was no file or mutation
+// number; anything else is e-boekhouden's error, possibly
+// eboekhouden.ErrSessionExpired.
+func linkArchiveFile(client *eboekhouden.Client, fileID, mutNr int) error {
 	if fileID <= 0 || mutNr <= 0 {
-		return false
+		return errNothingToLink
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"koppelId":   mutNr,
@@ -449,17 +467,19 @@ func linkArchiveFile(client *eboekhouden.Client, fileID, mutNr int) bool {
 	})
 	if _, err := client.LinkFileToMutation(payload); err != nil {
 		log.Printf("File link error for file %d, mutNr %d: %s", fileID, mutNr, errClass(err))
-		return false
+		return err
 	}
-	return true
+	return nil
 }
 
 // completeArchive runs after the mutation is booked and the file link was
-// attempted. For an upload it only records the link result. For a
+// attempted (linkErr is linkArchiveFile's result). For an upload it records
+// the link result and warns when an uploaded file could not be linked. For a
 // mail-folder document it renames the file by the convention and moves it out
 // of the mail folder, provided the link succeeded: a file that could not be
 // linked stays where it is, so the user can still find it. Every failure in
-// this phase becomes a warning; the booking itself stands.
+// this phase becomes a warning; the booking itself stands. An expired
+// e-boekhouden session sets sessionExpired so the caller clears the token.
 //
 // What the user ends up with per failure: link failed, or no target folder:
 // the file is unchanged in the mail folder. Rename failed: same. Move failed:
@@ -468,13 +488,25 @@ func linkArchiveFile(client *eboekhouden.Client, fileID, mutNr int) bool {
 // Only when the file really left the mail folder is its Redis state dropped
 // (forgetDocument); otherwise the analysis stays so that cleanup names it
 // properly.
-func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhouden.Client, userID string, src archiveSource, arch archiveOutcome, linked bool, datum time.Time, name string) archiveOutcome {
-	arch.linked = linked
+func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhouden.Client, userID string, src archiveSource, arch archiveOutcome, linkErr error, datum time.Time, name string) archiveOutcome {
+	arch.linked = linkErr == nil
+	arch.sessionExpired = errors.Is(linkErr, eboekhouden.ErrSessionExpired)
 	if !src.fromMailFolder() {
+		switch {
+		case arch.linked || arch.fileID <= 0:
+		case arch.sessionExpired:
+			arch.warning = warnUploadLinkSessionExpired
+		default:
+			arch.warning = "De boeking is gelukt en het bestand staat in je archief, maar het is er niet aan gekoppeld. Koppel het zelf aan de boeking in e-Boekhouden."
+		}
 		return arch
 	}
-	if !linked {
-		arch.warning = "De boeking is gelukt, maar het document is er niet aan gekoppeld. Het staat nog in de mailmap. Koppel het zelf in e-Boekhouden."
+	if !arch.linked {
+		if arch.sessionExpired {
+			arch.warning = warnMailLinkSessionExpired
+		} else {
+			arch.warning = "De boeking is gelukt, maar het document is er niet aan gekoppeld. Het staat nog in de mailmap. Koppel het zelf in e-Boekhouden."
+		}
 		return arch
 	}
 
@@ -483,6 +515,11 @@ func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhoude
 		id, err := h.findOrCreateArchiveFolder(client, datum)
 		if err != nil {
 			log.Printf("Submit: archive folder lookup failed for file %d: %s", src.fileID, errClass(err))
+			if errors.Is(err, eboekhouden.ErrSessionExpired) {
+				arch.sessionExpired = true
+				arch.warning = warnMailMoveSessionExpired
+				return arch
+			}
 			arch.warning = "Het document is geboekt en gekoppeld, maar Speedy kon de maandmap onder Facturen niet vinden of aanmaken. Het staat nog in de mailmap. Ruim het later op met Alles opruimen."
 			return arch
 		}
@@ -491,6 +528,11 @@ func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhoude
 		// breadcrumb and the descendant check depend on it.
 		if folders, err = listArchiveFolders(client); err != nil {
 			log.Printf("Submit: folder listing failed for file %d: %s", src.fileID, errClass(err))
+			if errors.Is(err, eboekhouden.ErrSessionExpired) {
+				arch.sessionExpired = true
+				arch.warning = warnMailMoveSessionExpired
+				return arch
+			}
 			folders = nil
 		}
 	}
@@ -507,6 +549,12 @@ func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhoude
 	if err != nil {
 		// Error class only: upstream rename/move messages may echo the file name.
 		log.Printf("Submit: archiving file %d failed: %s", src.fileID, errClass(err))
+		if errors.Is(err, eboekhouden.ErrSessionExpired) {
+			// Renamed or not, the file is still in the mail folder.
+			arch.sessionExpired = true
+			arch.warning = warnMailMoveSessionExpired
+			return arch
+		}
 		arch.warning = archiveErrorMessage(err)
 		return arch
 	}

@@ -478,6 +478,11 @@ func submittedMarkerJSON(m *invoiceSubmittedMarker) gin.H {
 	}
 }
 
+// warnPaymentSessionExpired is SubmitFull's paymentWarning when the
+// e-boekhouden session expired after the invoice was booked but before its
+// payment was: the invoice stands, the bank line is still open.
+const warnPaymentSessionExpired = "De factuur is geboekt, maar de betaling niet, want je sessie bij e-Boekhouden is verlopen. De afschriftregel staat dus nog open. Koppel e-Boekhouden opnieuw en boek de betaling daarna vanuit Afschriften."
+
 // SubmitFull handles POST /api/v1/invoices/submit-full
 // This is the complete chain: archive file → mutation → file link → (for a
 // mail-folder document) rename and move. See invoice_archive.go for the
@@ -661,6 +666,9 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		if bookingRefused(err) {
 			discardStagedUpload(client, src, arch)
 		}
+		if HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "De factuur is niet geboekt: " + err.Error()})
 		return
 	}
@@ -700,6 +708,9 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	// in the inbox, leading to duplicate bookings on retry.
 	var paymentMutNr int
 	var paymentWarning string
+	// paymentSessionExpired: e-boekhouden ended the session after the invoice
+	// was booked. The invoice stands; the token is cleared below.
+	paymentSessionExpired := false
 	if req.ImportId > 0 {
 		bankAccountId := 0
 		// Capture the bank line's own omschrijving so we can use it on the
@@ -720,9 +731,14 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 					break
 				}
 			}
+		} else if errors.Is(err, eboekhouden.ErrSessionExpired) {
+			paymentSessionExpired = true
 		}
 
-		if bankAccountId > 0 {
+		if paymentSessionExpired {
+			log.Printf("SubmitFull: session expired before the payment for invoice mutNr=%d", mutResult.MutNr)
+			paymentWarning = warnPaymentSessionExpired
+		} else if bankAccountId > 0 {
 			// Prefer the bank line's own description; fall back to a
 			// synthetic "Betaling …" if for some reason it's empty.
 			paymentOmschrijving := bankLineOmschrijving
@@ -750,7 +766,12 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 			payResp, err := client.CreateMutatie(paymentPayload)
 			if err != nil {
 				log.Printf("SubmitFull payment mutation error for invoice mutNr=%d: %s", mutResult.MutNr, errClass(err))
-				paymentWarning = "De factuur is geboekt, maar de betaling niet, dus de afschriftregel staat nog open. Reden: " + err.Error()
+				if errors.Is(err, eboekhouden.ErrSessionExpired) {
+					paymentSessionExpired = true
+					paymentWarning = warnPaymentSessionExpired
+				} else {
+					paymentWarning = "De factuur is geboekt, maar de betaling niet, dus de afschriftregel staat nog open. Reden: " + err.Error()
+				}
 			} else {
 				var payResult struct {
 					MutNr int `json:"mutNr"`
@@ -773,8 +794,14 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 
 	// Step 4: Link the archive file to the invoice mutation, then (for a
 	// mail-folder document) rename it and move it out of the mail folder.
-	linked := linkArchiveFile(client, archiefFileId, mutResult.MutNr)
-	arch = h.completeArchive(ctx, client, sess.UserID, src, arch, linked, datum, archiveName)
+	linkErr := linkArchiveFile(client, archiefFileId, mutResult.MutNr)
+	arch = h.completeArchive(ctx, client, sess.UserID, src, arch, linkErr, datum, archiveName)
+
+	// The invoice is booked, so the answer stays a success with warnings; a
+	// session that expired on the way is still cleared like everywhere else.
+	if paymentSessionExpired || arch.sessionExpired {
+		clearExpiredEBoekhoudenToken(c, sess, h.sessions, h.db)
+	}
 
 	// Invalidate inbox classification cache so "Vernieuwen" fetches fresh data
 	if h.redis != nil {
@@ -1069,6 +1096,9 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		if bookingRefused(err) {
 			discardStagedUpload(client, src, arch)
 		}
+		if HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err) {
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Het bonnetje is niet geboekt: " + err.Error()})
 		return
 	}
@@ -1092,8 +1122,12 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 
 	// Step 3: Link the archive file to the mutation, then (for a mail-folder
 	// document) rename it and move it out of the mail folder.
-	linked := linkArchiveFile(client, archiefFileId, mutResult.MutNr)
-	arch = h.completeArchive(ctx, client, sess.UserID, src, arch, linked, datum, archiveName)
+	linkErr := linkArchiveFile(client, archiefFileId, mutResult.MutNr)
+	arch = h.completeArchive(ctx, client, sess.UserID, src, arch, linkErr, datum, archiveName)
+	if arch.sessionExpired {
+		// The receipt is booked: answer with the warning, clear the token.
+		clearExpiredEBoekhoudenToken(c, sess, h.sessions, h.db)
+	}
 
 	// Invalidate inbox cache so the bank line disappears from the inbox view.
 	if h.redis != nil {

@@ -379,6 +379,14 @@ type fakeEBoekhouden struct {
 
 	mutatieBody   string // "" books with mutNr
 	mutatieHangup bool   // drops the connection instead of answering
+
+	// expireAt is a "METHOD path" call from which on the session counts as
+	// expired: that call and every later one answer 401. expireOnMutatie
+	// does the same from the n-th POST /v1/api/mutatie (1-based) on.
+	expireAt        string
+	expireOnMutatie int
+	mutaties        int
+	expired         bool
 }
 
 type fakeCall struct {
@@ -421,6 +429,19 @@ func (f *fakeEBoekhouden) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeCall{r.Method, r.URL.Path, string(body)})
+	if f.expireAt != "" && r.Method+" "+r.URL.Path == f.expireAt {
+		f.expired = true
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/api/mutatie" {
+		f.mutaties++
+		if f.expireOnMutatie > 0 && f.mutaties >= f.expireOnMutatie {
+			f.expired = true
+		}
+	}
+	if f.expired {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	write := func(v any) {
 		b, _ := json.Marshal(v)
@@ -549,6 +570,12 @@ func (f *fakeEBoekhouden) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		write(map[string]any{})
+	case r.Method == http.MethodGet && path == "/v1/api/import/gridtable":
+		// One unprocessed bank line (77) on bank account 1300, by column
+		// position like the real grid (ParseImportGrid).
+		write(map[string]any{"rowCount": 1, "data": [][]any{
+			{77, "2026-10-13", "NL00VOOR0000000000", "2026-10-13", -121.0, "VOORBEELD LEVERANCIER", "", 1300, "", false, ""},
+		}})
 	case r.Method == http.MethodGet && path == "/v1/api/grootboekrekening/selectlist/actieveGBR":
 		write([]map[string]any{
 			{"id": 1300, "code": "1300", "omschrijving": "Bank", "rekeningCategorie": "BANK"},

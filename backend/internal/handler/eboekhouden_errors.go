@@ -31,6 +31,22 @@ func HandleEBoekhoudenSessionExpired(
 	if !errors.Is(err, eboekhouden.ErrSessionExpired) {
 		return false
 	}
+	clearExpiredEBoekhoudenToken(c, sess, sessions, db)
+	c.JSON(http.StatusPreconditionFailed, gin.H{
+		"error":   "eboekhouden_session_expired",
+		"message": "Je sessie bij e-Boekhouden is verlopen. Koppel e-Boekhouden opnieuw om verder te gaan.",
+	})
+	return true
+}
+
+// clearExpiredEBoekhoudenToken clears the e-boekhouden token from the Redis
+// session and from PostgreSQL and drops the client from the request context,
+// without writing a response. HandleEBoekhoudenSessionExpired uses it before
+// its 412; a handler that runs into an expired session after it already did
+// something worth reporting (a booking that stands) calls it directly and
+// answers with its own success-with-warning response. The next bookkeeping
+// call then gets the 412 and the reconnect prompt.
+func clearExpiredEBoekhoudenToken(c *gin.Context, sess *session.SessionData, sessions *session.Store, db *database.DB) {
 	if sess != nil {
 		sess.EBoekhoudenToken = ""
 		sess.MFAPending = false
@@ -44,9 +60,4 @@ func HandleEBoekhoudenSessionExpired(
 	// Drop the e-boekhouden client from the request context as well so any
 	// downstream middleware sees the disconnected state.
 	c.Set(session.ClientContextKey, nil)
-	c.JSON(http.StatusPreconditionFailed, gin.H{
-		"error":   "eboekhouden_session_expired",
-		"message": "Je sessie bij e-Boekhouden is verlopen. Koppel e-Boekhouden opnieuw om verder te gaan.",
-	})
-	return true
 }
