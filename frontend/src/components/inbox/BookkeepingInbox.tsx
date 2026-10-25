@@ -180,9 +180,12 @@ export function BookkeepingInbox() {
   const docsKnown = docState.loaded || docState.error !== null;
   const docCount = pendingDocumentCount(docState.documents);
   // The mail folder (and its subfolders) is never an archive target: a
-  // file archived there would still be in the inbox. Memoised so the review
-  // dialog's suggestion effect does not re-run on every render.
-  const excludeFolderIds = useMemo(() => (docState.folder ? [docState.folder.id] : []), [docState.folder]);
+  // file archived there would still be in the inbox. Memoised on the id, not
+  // the folder object: every documents reload builds a new object, and a new
+  // array would re-run the review dialog's suggestion effect and refill a
+  // folder the user just cleared.
+  const mailFolderId = docState.folder?.id;
+  const excludeFolderIds = useMemo(() => (mailFolderId ? [mailFolderId] : []), [mailFolderId]);
   // Number of mail-folder documents being downloaded for a review; 0 when
   // none. Drives the small status line and blocks a second open meanwhile.
   const [openingDocuments, setOpeningDocuments] = useState(0);
