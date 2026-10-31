@@ -80,6 +80,7 @@ func (e *documentAnalysisEntry) invoice() *claude.InvoiceData {
 		return nil
 	}
 	claude.NormalizeDocumentType(r.Invoice)
+	claude.NormalizeRegels(r.Invoice)
 	return r.Invoice
 }
 

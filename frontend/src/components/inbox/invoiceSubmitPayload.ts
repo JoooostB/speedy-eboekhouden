@@ -3,6 +3,7 @@ import type {
   InvoiceSubmitFullRequest,
   InvoiceSubmitReceiptRequest,
   ReceiptExtraLine,
+  RegelPayload,
 } from "../../api/types";
 import { parseAmount } from "./reviewAmounts";
 
@@ -57,7 +58,19 @@ export interface SubmitInput {
   /** The upload inlined as base64. Upload source only; the dialog reads the
    *  file only when a folder was picked. */
   pdfBase64?: string;
+  /** Legacy receipt split (lines after the main line); the dialog no
+   *  longer fills it and sends `regels` instead. */
   extraLines: ReceiptExtraLine[];
+  /** The lines of a split booking (regels.ts). Sent only with two or more
+   *  lines; the amounts above are then the totals they add up to. A split
+   *  receipt never sends extraLines. */
+  regels?: RegelPayload[];
+}
+
+/** The `regels` field of a payload: only a real split is sent, so a
+ *  single-line booking keeps the body it has always had. */
+function regelsField(i: Pick<SubmitInput, "regels">): { regels?: RegelPayload[] } {
+  return i.regels && i.regels.length >= 2 ? { regels: i.regels } : {};
 }
 
 export function isArchiveSource(source: Pick<AnalyzedInvoice, "archiveFileId">): boolean {
@@ -109,6 +122,7 @@ export function buildFullSubmitPayload(i: SubmitInput): InvoiceSubmitFullRequest
       archiveFileId: i.source.archiveFileId,
       ...(i.folderId ? { targetFolderId: i.folderId } : {}),
       ...(i.source.invoice.documentType === "creditnota" ? { documentType: "creditnota" as const } : {}),
+      ...regelsField(i),
     };
   }
   return {
@@ -119,6 +133,7 @@ export function buildFullSubmitPayload(i: SubmitInput): InvoiceSubmitFullRequest
     ...(i.importId ? { importId: i.importId } : {}),
     ...(i.pdfBase64 ? { pdfBase64: i.pdfBase64 } : {}),
     ...(i.folderId ? { folderId: i.folderId } : {}),
+    ...regelsField(i),
   };
 }
 
@@ -135,7 +150,8 @@ export function buildReceiptSubmitPayload(i: SubmitInput): InvoiceSubmitReceiptR
     btwCode: i.btwCode,
     tegenRekeningId: i.tegenRekeningId,
   };
-  const extra = i.extraLines.length > 0 ? { extraLines: i.extraLines } : {};
+  const regels = regelsField(i);
+  const extra = i.extraLines.length > 0 && !regels.regels ? { extraLines: i.extraLines } : {};
   if (isArchiveSource(i.source)) {
     return {
       ...base,
@@ -143,6 +159,7 @@ export function buildReceiptSubmitPayload(i: SubmitInput): InvoiceSubmitReceiptR
       ...extra,
       archiveFileId: i.source.archiveFileId,
       ...(i.folderId ? { targetFolderId: i.folderId } : {}),
+      ...regels,
     };
   }
   return {
@@ -153,5 +170,6 @@ export function buildReceiptSubmitPayload(i: SubmitInput): InvoiceSubmitReceiptR
     ...extra,
     ...(i.pdfBase64 ? { pdfBase64: i.pdfBase64 } : {}),
     ...(i.folderId ? { folderId: i.folderId } : {}),
+    ...regels,
   };
 }

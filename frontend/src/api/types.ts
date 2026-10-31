@@ -800,3 +800,74 @@ export const MUTATIE_SOORT_CODES: Record<MutatieSoort, number> = {
   GeldUitgegeven: 6,
   Memoriaal: 7,
 };
+
+// Split bookings (gesplitste boekingen): several regels in one mutation.
+// Appended as one block; the request interfaces above are extended through
+// declaration merging so this block stays self-contained.
+
+/** One line of a split booking as POST /invoices/submit-full and
+ *  /submit-receipt take it: its own tegenrekening (by internal id from the
+ *  review dialog, or by grootboekcode for the bank-line split), BTW code and
+ *  gross amount. The backend splits the BTW per line and requires the lines
+ *  to add up to the booking's total. */
+export interface RegelPayload {
+  omschrijving?: string;
+  tegenRekeningId?: number;
+  grootboekcode?: string;
+  btwCode: string;
+  bedragIncl: number;
+}
+
+export interface InvoiceSubmitFullRequest {
+  /** Split booking: 2 to 10 lines that add up to bedragIncl. When present
+   *  tegenRekeningId, btwCode and btwBedrag describe the total only. */
+  regels?: RegelPayload[];
+}
+
+export interface InvoiceSubmitReceiptRequest {
+  /** Split booking: 2 to 10 lines that add up to the bank line's amount.
+   *  Never together with extraLines. */
+  regels?: RegelPayload[];
+}
+
+// Split proposal (prompt version 3): Claude proposes booking lines when a
+// split is the right choice for tax purposes. Appended as one block.
+
+/** One proposed booking line of a document. Amounts are gross; btwCode and
+ *  grootboekcode are suggestions, grootboekcode from the administration's
+ *  own accounts (the main suggestion when none fits). */
+export interface InvoiceRegel {
+  omschrijving: string;
+  bedragIncl: number;
+  btwPercentage: number;
+  btwCode: string;
+  grootboekcode: string;
+  soort: "product" | "verzending" | "fooi" | "korting" | "overig";
+}
+
+export type SplitsReden = "wkr" | "btw_tarieven" | "fooi" | "verzending_apart" | "representatie" | "overig";
+
+/** Why Claude proposes the split: an enum token and one Dutch sentence. */
+export interface SplitsAdvies {
+  reden: SplitsReden;
+  toelichting: string;
+}
+
+export interface InvoiceData {
+  /** Proposed split, only when it is tax-relevant and it adds up (the
+   *  backend drops anything else). Absent on analyses cached before prompt
+   *  version 3 and on plain single-line documents. */
+  regels?: InvoiceRegel[];
+  splitsAdvies?: SplitsAdvies;
+}
+
+// Bank-line split (P2): a process-batch item may carry regels. Appended
+// as one block; InboxProcessItem is extended through declaration merging.
+
+export interface InboxProcessItem {
+  /** Split the line over several tegenrekeningen, each by grootboekcode
+   *  (RegelPayload with `grootboekcode`). Soort 5/6 only; the lines must
+   *  add up to the bank line's amount, which the backend reads from the
+   *  grid itself. */
+  regels?: RegelPayload[];
+}
