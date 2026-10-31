@@ -33,9 +33,13 @@ import type {
   AnalyzedInvoice,
   MailDocument,
   MatchedBankLine,
+  PaymentGroup,
 } from "../../api/types";
 import { InboxRow } from "./InboxRow";
 import { BatchApproveBar } from "./BatchApproveBar";
+import { PaymentGroupRow } from "./PaymentGroupRow";
+import { PaymentGroupDialog } from "./PaymentGroupDialog";
+import { type GroupInvoice, ambiguousLineIds, buildRenderList, snackbarMessage, sumLines } from "./paymentGroups";
 import { InvoiceReviewDialog } from "./InvoiceReviewDialog";
 import { AiStatusAlert, type AiStatus } from "./AiStatusAlert";
 import { DocumentList } from "./DocumentList";
@@ -134,7 +138,10 @@ function getFirstName(name: string | undefined): string {
  * - Greeting + subtitle with both counts
  * - Action buttons; summary bar with colored category badges (Afschriften)
  * - Tabs "Afschriften {n}" / "Documenten {n}", state in ?lijst=
- * - Afschriften: filter tabs, InboxRow list with checkboxes, BatchApproveBar
+ * - Afschriften: filter tabs, InboxRow list with checkboxes, BatchApproveBar;
+ *   lines that together pay one sales invoice are shown as one
+ *   PaymentGroupRow instead of loose rows (buildRenderList) and booked
+ *   through PaymentGroupDialog
  * - Documenten: DocumentList
  *
  * Accessibility:
@@ -157,6 +164,10 @@ export function BookkeepingInbox() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [items, setItems] = useState<InboxClassification[]>([]);
+  const [groups, setGroups] = useState<PaymentGroup[]>([]);
+  // The payment-group dialog: the group from the classify response (null
+  // when the user composes one by hand) and the lines to start with.
+  const [groupDialog, setGroupDialog] = useState<{ group: PaymentGroup | null; lines: InboxClassification[] } | null>(null);
   const [summary, setSummary] = useState<Record<InboxCategory, number>>({ auto: 0, review: 0, invoice: 0, manual: 0 });
   const [loading, setLoading] = useState(true);
   const [classifying, setClassifying] = useState(false);
@@ -341,6 +352,7 @@ export function BookkeepingInbox() {
       // Try AI classification (force=true skips Redis cache)
       const res = await api.classifyInbox(force);
       setItems(res.classifications);
+      setGroups(res.paymentGroups ?? []);
       setSummary(res.summary);
       track("Inbox Classify", { total: String(res.totalCount) });
     } catch (classifyErr: any) {
@@ -374,6 +386,7 @@ export function BookkeepingInbox() {
           indicator: (row.mutBedrag ?? row.bedrag ?? 0) < 0 ? "Factuur uploaden" : "Handmatig verwerken",
         }));
         setItems(manualItems);
+        setGroups([]);
         setSummary({ auto: 0, review: 0, invoice: 0, manual: manualItems.length });
       } catch (err2: any) {
         if (err2?.status === 412) {
@@ -413,6 +426,13 @@ export function BookkeepingInbox() {
     [filteredItems, processedIds],
   );
 
+  // The list as rendered: loose lines and payment groups (a group stands
+  // where its first member would be). Members of an ambiguous group have no
+  // invoice yet and are kept out of every batch selection.
+  const renderList = useMemo(() => buildRenderList(activeItems, groups), [activeItems, groups]);
+  const unselectable = useMemo(() => ambiguousLineIds(groups), [groups]);
+  const selectableItems = useMemo(() => activeItems.filter((i) => !unselectable.has(i.id)), [activeItems, unselectable]);
+
   // Toggle individual selection
   const toggleItem = useCallback((id: number) => {
     setSelected((prev) => {
@@ -423,10 +443,19 @@ export function BookkeepingInbox() {
     });
   }, []);
 
+  // Selects or deselects every line of a payment group at once.
+  const toggleGroup = useCallback((ids: number[], select: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => (select ? next.add(id) : next.delete(id)));
+      return next;
+    });
+  }, []);
+
   // Select/deselect all visible active items
   const toggleAll = useCallback(() => {
     setSelected((prev) => {
-      const activeIds = activeItems.map((i) => i.id);
+      const activeIds = selectableItems.map((i) => i.id);
       const allSelected = activeIds.every((id) => prev.has(id));
       if (allSelected) {
         const next = new Set(prev);
@@ -438,7 +467,7 @@ export function BookkeepingInbox() {
         return next;
       }
     });
-  }, [activeItems]);
+  }, [selectableItems]);
 
   // Handle batch processing results
   const handleBatchProcessed = useCallback((results: Map<number, InboxProcessResult>) => {
@@ -472,6 +501,40 @@ export function BookkeepingInbox() {
     }
   }, [items]);
 
+  // A payment group was booked (fully or partly). The booked lines leave
+  // the list like any batch result; the snackbar names the invoice once
+  // every line is booked, and the inbox is classified again because the
+  // open post changed (other groups and matches may change with it).
+  const handleGroupBooked = useCallback(
+    (results: Map<number, InboxProcessResult>, invoice: GroupInvoice, bookedLines: InboxClassification[]) => {
+      const newProcessed = new Set<number>();
+      let failed = 0;
+      results.forEach((result, id) => {
+        if (result.status === "ok") newProcessed.add(id);
+        else failed++;
+      });
+      setProcessedIds((prev) => new Set([...prev, ...newProcessed]));
+      setSelected((prev) => {
+        const next = new Set(prev);
+        newProcessed.forEach((id) => next.delete(id));
+        return next;
+      });
+      setSummary((prev) => {
+        const next = { ...prev };
+        newProcessed.forEach((id) => {
+          const item = items.find((i) => i.id === id);
+          if (item) next[item.category] = Math.max(0, next[item.category] - 1);
+        });
+        return next;
+      });
+      if (failed === 0 && bookedLines.length > 0) {
+        setSnackbar({ message: snackbarMessage(bookedLines.length, invoice, sumLines(bookedLines)), severity: "success" });
+        void loadInbox(true);
+      }
+    },
+    [items, loadInbox],
+  );
+
   // Handle single item processed
   const handleSingleProcessed = useCallback((id: number) => {
     setProcessedIds((prev) => new Set([...prev, id]));
@@ -496,13 +559,14 @@ export function BookkeepingInbox() {
 
   // Selected items for the batch bar
   const selectedItems = useMemo(
-    () => items.filter((i) => selected.has(i.id) && !processedIds.has(i.id)),
-    [items, selected, processedIds],
+    () => items.filter((i) => selected.has(i.id) && !processedIds.has(i.id) && !unselectable.has(i.id)),
+    [items, selected, processedIds, unselectable],
   );
+  const unprocessedItems = useMemo(() => items.filter((i) => !processedIds.has(i.id)), [items, processedIds]);
 
-  const totalActive = items.filter((i) => !processedIds.has(i.id)).length;
-  const allVisibleSelected = activeItems.length > 0 && activeItems.every((i) => selected.has(i.id));
-  const someVisibleSelected = activeItems.some((i) => selected.has(i.id));
+  const totalActive = unprocessedItems.length;
+  const allVisibleSelected = selectableItems.length > 0 && selectableItems.every((i) => selected.has(i.id));
+  const someVisibleSelected = selectableItems.some((i) => selected.has(i.id));
 
   // Active list. ?lijst=documenten|afschriften wins; without it Afschriften
   // is the default, except that once both lists are known and there are no
@@ -926,23 +990,37 @@ export function BookkeepingInbox() {
               aria-label="Afschriftregels"
               sx={{ m: 0, p: 0 }}
             >
-              {activeItems.map((item) => (
-                <InboxRow
-                  key={item.id}
-                  item={item}
-                  checked={selected.has(item.id)}
-                  onToggle={toggleItem}
-                  ledgerAccounts={ledgerAccounts}
-                  vatCodes={vatCodes}
-                  onProcessed={handleSingleProcessed}
-                  onInvoiceUpload={(file, _bankLineId) => {
-                    // Use the same review dialog flow as "Facturen uploaden"
-                    handleInvoiceFiles([file]);
-                  }}
-                  onOpenDocument={(fileId) => void handleOpenDocument(fileId, item)}
-                  processed={processedIds.has(item.id)}
-                />
-              ))}
+              {renderList.map((entry) =>
+                entry.kind === "group" ? (
+                  <PaymentGroupRow
+                    key={entry.group.id}
+                    group={entry.group}
+                    lines={entry.lines}
+                    checked={entry.lines.every((l) => selected.has(l.id))}
+                    onToggle={toggleGroup}
+                    ledgerAccounts={ledgerAccounts}
+                    onOpen={(group, lines) => setGroupDialog({ group, lines })}
+                    defaultExpanded={!isXs}
+                  />
+                ) : (
+                  <InboxRow
+                    key={entry.item.id}
+                    item={entry.item}
+                    checked={selected.has(entry.item.id)}
+                    onToggle={toggleItem}
+                    ledgerAccounts={ledgerAccounts}
+                    vatCodes={vatCodes}
+                    onProcessed={handleSingleProcessed}
+                    onInvoiceUpload={(file, _bankLineId) => {
+                      // Use the same review dialog flow as "Facturen uploaden"
+                      handleInvoiceFiles([file]);
+                    }}
+                    onOpenDocument={(fileId) => void handleOpenDocument(fileId, entry.item)}
+                    onLinkToInvoice={(item) => setGroupDialog({ group: null, lines: [item] })}
+                    processed={processedIds.has(entry.item.id)}
+                  />
+                ),
+              )}
             </Box>
           </Paper>
         </>
@@ -1018,6 +1096,21 @@ export function BookkeepingInbox() {
           onClear={clearSelection}
           ledgerAccounts={ledgerAccounts ?? []}
           vatCodes={vatCodes ?? []}
+          onLinkToInvoice={(lines) => setGroupDialog({ group: null, lines })}
+        />
+      )}
+
+      {/* Payment-group dialog: books several incoming lines on one sales
+          invoice, from a recognised group or composed by hand. */}
+      {groupDialog && (
+        <PaymentGroupDialog
+          open={true}
+          onClose={() => setGroupDialog(null)}
+          group={groupDialog.group}
+          initialLines={groupDialog.lines}
+          allLines={unprocessedItems}
+          ledgerAccounts={ledgerAccounts ?? []}
+          onBooked={handleGroupBooked}
         />
       )}
 

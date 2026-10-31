@@ -87,6 +87,22 @@ The automated tests cover the handler against a fake e-boekhouden; what e-boekho
 - [ ] Without an API key: every line is "Handmatig" and the alert "Geen boekingsvoorstellen zonder API-sleutel" offers "Instellen"
 - [ ] With no bank lines and no documents left the inbox shows "Inbox zero!"
 
+### 6a. Payments in parts (debiteuren, WKA)
+
+Needs a sales invoice in e-Boekhouden that a customer paid in parts, for example € 12.000 excl + € 2.520 btw = € 14.520 received as € 10.800 on the bank account and € 1.200 + € 2.520 on the G-rekening, with the invoice number in the descriptions.
+
+- [ ] The three lines are not loose rows but one row with the chip "Betaling in delen", "{relatie} · factuur {nr}" and "3 betalingen · € 14.520,00 van € 14.520,00 · factuur volledig betaald"; the sub-rows show date, amount, own account ("1022 G-rekening") and description. The hover text of the chip explains the group
+- [ ] "Koppelen (3)" opens "Betaling in delen koppelen" with the invoice block (Relatie, Factuur, Factuurdatum, Factuurbedrag, Al betaald, Nog open) and the summary "Samen € 14.520,00 van € 14.520,00 open. Na koppelen is de factuur volledig betaald."; "3 betalingen koppelen" books three mutations in e-Boekhouden (Boekhouden → Overzichten → Mutaties: three factuurbetalingen on the invoice), the snackbar says "3 betalingen gekoppeld aan factuur {nr}. De factuur is volledig betaald." and the post is gone from Openstaande posten
+- [ ] Untick one line in the dialog: the summary turns into "… Na koppelen blijft € 3.720,00 open." and the button reads "2 betalingen koppelen"; after booking the post remains with `teOntvangen` € 3.720,00, and the next classify shows the remaining line as "Betaalt open factuur" (single match) or as "Deelbetaling"
+- [ ] Add a line that pays too much ("Betaling toevoegen"): the summary reads "Samen …, dat is … meer dan er openstaat. Haal een betaling weg of kies een andere factuur." and the primary button is disabled
+- [ ] Compose by hand: tick two incoming lines, "Koppelen aan één factuur" in the batch bar, pick the invoice in "Openstaande verkoopfactuur"; with an outgoing line in the selection the button is disabled with "Alleen ontvangsten kun je samen op één verkoopfactuur koppelen."
+- [ ] From a single row: expand an incoming line, "Hoort bij een openstaande factuur" opens the dialog with that line
+- [ ] Two open invoices of the same customer with the same amount and no invoice number in the descriptions: chip "Kies factuur", no checkbox, "Kiezen" opens "Kies de factuur" with a radio per invoice ("Past precies" / "Past deels"), nothing preselected, the button disabled with "Kies eerst een factuur."
+- [ ] Overpayment guard: book part of the invoice in e-Boekhouden by hand, then "Koppelen (3)" in Speedy without refreshing: every line answers "De factuur is in e-Boekhouden veranderd: er staat nu € … open. Controleer de betalingen en probeer het opnieuw." and nothing is booked (no new mutations in e-Boekhouden)
+- [ ] Partial failure: with one of the three lines already processed in e-Boekhouden, the dialog stays open, the lines show "Geboekt" / "Niet geboekt: {reden}", the alert reads "2 van de 3 betalingen zijn geboekt. 1 niet: … De geboekte betalingen blijven staan." and the button reads "Opnieuw proberen (1)"
+- [ ] On a phone the group row is collapsed by default and the dialog is full screen
+- [ ] Logs: only line ids, mutNrs, statuses and error classes; no company names, amounts or descriptions
+
 ## 7. Uploading invoices and receipts
 
 - [ ] "Facturen uploaden" accepts PDF, JPG and PNG, several at once; an expanded "Factuur" row has a drop zone too

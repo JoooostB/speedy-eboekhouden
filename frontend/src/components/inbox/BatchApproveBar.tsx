@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Box, Button, Typography, LinearProgress, Chip } from "@mui/material";
+import { Box, Button, Typography, LinearProgress, Chip, Tooltip } from "@mui/material";
 import type { InboxClassification, InboxProcessItem, InboxProcessResult, LedgerAccount, VATCode } from "../../api/types";
 import { api } from "../../api/client";
 import { track } from "../../analytics";
 import { BookingConfirmDialog } from "./BookingConfirmDialog";
 import { toInboxProcessItem } from "./inboxBooking";
+import { allIncoming } from "./paymentGroups";
 
 interface Props {
   selected: InboxClassification[];
@@ -12,7 +13,12 @@ interface Props {
   onClear: () => void;
   ledgerAccounts: LedgerAccount[];
   vatCodes: VATCode[];
+  /** Opens the payment-group dialog with the selection: several incoming
+   *  lines that together pay one sales invoice. */
+  onLinkToInvoice?: (selected: InboxClassification[]) => void;
 }
+
+const LINK_DISABLED_TOOLTIP = "Alleen ontvangsten kun je samen op één verkoopfactuur koppelen.";
 
 /**
  * BatchApproveBar — sticky bottom bar that appears when inbox items
@@ -25,7 +31,7 @@ interface Props {
  * - Button is disabled during processing to prevent double-submit.
  * - Focus is managed: after completion, results are announced via live region.
  */
-export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts, vatCodes }: Props) {
+export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts, vatCodes, onLinkToInvoice }: Props) {
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<{ ok: number; error: number } | null>(null);
@@ -177,7 +183,7 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
           )}
         </Box>
 
-        <Box sx={{ display: "flex", gap: 1.5 }}>
+        <Box sx={{ display: "flex", gap: 1.5, flexWrap: "wrap" }}>
           <Button
             variant="text"
             size="small"
@@ -186,6 +192,28 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
           >
             Deselecteren
           </Button>
+          {onLinkToInvoice && (
+            allIncoming(selected) ? (
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => onLinkToInvoice(selected)}
+                disabled={processing}
+                sx={{ fontWeight: 600 }}
+              >
+                Koppelen aan één factuur
+              </Button>
+            ) : (
+              <Tooltip title={LINK_DISABLED_TOOLTIP} arrow>
+                {/* A disabled button fires no events, so the tooltip hangs on the span. */}
+                <Box component="span" sx={{ display: "inline-flex" }} tabIndex={0} aria-label={LINK_DISABLED_TOOLTIP}>
+                  <Button variant="outlined" size="small" disabled sx={{ fontWeight: 600, pointerEvents: "none" }}>
+                    Koppelen aan één factuur
+                  </Button>
+                </Box>
+              </Tooltip>
+            )
+          )}
           <Button
             variant="contained"
             size="small"

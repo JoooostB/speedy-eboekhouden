@@ -655,11 +655,52 @@ export interface InboxClassification {
   openPostMatch?: boolean;
   /** The analysed mail-folder document whose payment this line is. */
   documentMatch?: InboxDocumentMatch;
+  /** Id of the payment group this line is in: together with the other
+   *  lines of the group it pays one sales invoice (see PaymentGroup). */
+  paymentGroupId?: string;
 }
 
 export interface InboxDocumentMatch {
   fileId: number;
   title: string;
+}
+
+/** How a payment group relates to the invoice: the lines sum to the
+ *  outstanding amount (complete), to part of it (partial), or they fit
+ *  several open posts and the user picks one (ambiguous). */
+export type PaymentGroupState = "complete" | "partial" | "ambiguous";
+
+/** The open sales invoice a group pays, as the open-post grid has it. */
+export interface PaymentGroupPost {
+  relatieId: number;
+  relatieNaam: string;
+  factuurnummer: string;
+  factuurdatum: string;
+  sBedrag: number;
+  sBetaald: number;
+  teOntvangen: number;
+}
+
+/** One of the posts an ambiguous group may pay, with the group lines that
+ *  fit it. */
+export interface PaymentGroupCandidate extends PaymentGroupPost {
+  lineIds: number[];
+}
+
+/** Several incoming bank lines that together pay one sales invoice (a
+ *  customer under a G-rekening arrangement pays in parts). For a complete
+ *  or partial group the post fields name the invoice; for an ambiguous
+ *  group they are empty and candidates lists the options. */
+export interface PaymentGroup extends PaymentGroupPost {
+  id: string;
+  state: PaymentGroupState;
+  category: InboxCategory;
+  lineIds: number[];
+  /** Sum of the lines. */
+  total: number;
+  candidates: PaymentGroupCandidate[];
+  /** "factuurnummer" when every line names the invoice, else "naam". */
+  evidence: "factuurnummer" | "naam";
 }
 
 export interface LearnedClassification {
@@ -678,6 +719,8 @@ export interface InboxClassifyResponse {
   classifications: InboxClassification[];
   totalCount: number;
   summary: Record<InboxCategory, number>;
+  /** Groups of lines paying one sales invoice; absent on an empty inbox. */
+  paymentGroups?: PaymentGroup[];
 }
 
 export interface InboxSummary {

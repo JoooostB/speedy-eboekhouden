@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useLayoutEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import {
   Box,
   Checkbox,
@@ -28,6 +28,7 @@ import { VATCodePicker } from "../shared/VATCodePicker";
 import { BookingConfirmDialog } from "./BookingConfirmDialog";
 import { documentMatchIndicator, koppelenLabel, toInboxProcessItem } from "./inboxBooking";
 import { INVOICE_FILE_ACCEPT, isAcceptedInvoiceFile } from "./mailDocumentReview";
+import { TruncatedText } from "./TruncatedText";
 
 /**
  * Category config: color, label, and whether inline editing is shown.
@@ -70,61 +71,10 @@ interface Props {
   onOpenDocument?: (fileId: number) => void;
   /** Whether this row has already been processed (show success state). */
   processed?: boolean;
-}
-
-/**
- * Renders text truncated with an ellipsis, and wraps it in a tooltip
- * exposing the full string when (and only when) it actually overflows.
- * ResizeObserver keeps the overflow flag correct across viewport changes.
- */
-function TruncatedText({
-  text,
-  variant,
-  color,
-  sx,
-}: {
-  text: string;
-  variant: "body2" | "caption";
-  color?: string;
-  sx?: object;
-}) {
-  const ref = useRef<HTMLElement>(null);
-  const [overflowing, setOverflowing] = useState(false);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const check = () => setOverflowing(el.scrollWidth > el.clientWidth);
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [text]);
-
-  const node = (
-    <Typography
-      ref={ref}
-      variant={variant}
-      color={color}
-      sx={{
-        display: "block",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        ...sx,
-      }}
-    >
-      {text}
-    </Typography>
-  );
-
-  if (!overflowing) return node;
-
-  return (
-    <Tooltip title={text} arrow enterDelay={300} enterNextDelay={100}>
-      {node}
-    </Tooltip>
-  );
+  /** Called when the user says an incoming line pays an open sales invoice,
+   *  possibly together with other lines; the parent opens the group
+   *  dialog with this line. Only offered on incoming lines. */
+  onLinkToInvoice?: (item: InboxClassification) => void;
 }
 
 /**
@@ -161,6 +111,7 @@ export function InboxRow({
   onInvoiceUpload,
   onOpenDocument,
   processed = false,
+  onLinkToInvoice,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -594,6 +545,22 @@ export function InboxRow({
                   aria-hidden="true"
                   tabIndex={-1}
                 />
+              </Box>
+            )}
+
+            {/* An incoming line may pay an open sales invoice in parts:
+                hand it to the group dialog. */}
+            {item.bedrag > 0 && onLinkToInvoice && (
+              <Box sx={{ mb: 2 }}>
+                <Button
+                  variant="text"
+                  size="small"
+                  onClick={() => onLinkToInvoice(item)}
+                  disabled={processing || processed}
+                  sx={{ fontWeight: 600, px: 0 }}
+                >
+                  Hoort bij een openstaande factuur
+                </Button>
               </Box>
             )}
 

@@ -17,7 +17,9 @@ import (
 // This file holds the parts of the bank-line inbox that do not come from
 // Claude: the factuurbetaling payload, the open-post matcher, the mail-folder
 // document annotation and the overlay that puts both on top of the cached
-// classification. Everything except the two fetch helpers is pure.
+// classification. Everything except the two fetch helpers is pure. The
+// payment groups (several lines paying one sales invoice) are in
+// inbox_groups.go.
 
 // Soort codes of the two payment mutation types. A factuurbetaling settles an
 // open invoice through relatieId + factuur on its line: e-boekhouden looks the
@@ -168,6 +170,7 @@ type bankLine struct {
 	Datum        string
 	Bedrag       float64
 	Omschrijving string
+	GrootboekId  int // own bank ledger account (internal id)
 }
 
 // bankLinesFromRows reads import-grid rows as produced by ParseImportGrid.
@@ -176,11 +179,13 @@ func bankLinesFromRows(rows []map[string]any) []bankLine {
 	for _, row := range rows {
 		id, _ := toInt(row["id"])
 		bedrag, _ := toFloat(row["mutBedrag"])
+		grootboekId, _ := toInt(row["grootboekId"])
 		lines = append(lines, bankLine{
 			ID:           id,
 			Datum:        toString(row["mutDatum"]),
 			Bedrag:       bedrag,
 			Omschrijving: toString(row["mutOmschrijving"]),
+			GrootboekId:  grootboekId,
 		})
 	}
 	return lines
@@ -191,13 +196,14 @@ func bankLinesFromRows(rows []map[string]any) []bankLine {
 func bankLinesFromClassified(rows []inboxClassifiedRow) []bankLine {
 	lines := make([]bankLine, 0, len(rows))
 	for _, row := range rows {
-		lines = append(lines, bankLine{ID: row.ID, Datum: row.Datum, Bedrag: row.Bedrag, Omschrijving: row.Omschrijving})
+		lines = append(lines, bankLine{ID: row.ID, Datum: row.Datum, Bedrag: row.Bedrag, Omschrijving: row.Omschrijving, GrootboekId: row.GrootboekId})
 	}
 	return lines
 }
 
 // gridRowsFromBankLines renders lines in the import-grid row shape that
-// rankBankLineMatches reads (id, mutDatum, mutBedrag, mutOmschrijving).
+// rankBankLineMatches reads (id, mutDatum, mutBedrag, mutOmschrijving,
+// grootboekId).
 func gridRowsFromBankLines(lines []bankLine) []map[string]any {
 	rows := make([]map[string]any, 0, len(lines))
 	for _, l := range lines {
@@ -206,6 +212,7 @@ func gridRowsFromBankLines(lines []bankLine) []map[string]any {
 			"mutDatum":        l.Datum,
 			"mutBedrag":       l.Bedrag,
 			"mutOmschrijving": l.Omschrijving,
+			"grootboekId":     float64(l.GrootboekId),
 		})
 	}
 	return rows

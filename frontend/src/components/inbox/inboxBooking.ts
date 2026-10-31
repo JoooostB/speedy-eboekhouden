@@ -81,6 +81,15 @@ export function koppelenLabel(item: InboxClassification): string {
   return `Koppel betaling${factuur}${van}`;
 }
 
+/** Accessible name of the "Koppelen (n)" button on a payment-group row:
+ *  "Koppel 3 betalingen aan factuur VF-2026-0017 van Voorbeeld Bouw". */
+export function koppelenGroupLabel(count: number, factuurnummer: string, relatieNaam: string): string {
+  const betalingen = count === 1 ? "1 betaling" : `${count} betalingen`;
+  const factuur = factuurnummer ? ` aan factuur ${factuurnummer}` : " aan openstaande factuur";
+  const van = relatieNaam ? ` van ${relatieNaam}` : "";
+  return `Koppel ${betalingen}${factuur}${van}`;
+}
+
 /** Row indicator for a bank line that pays an analysed mail-folder document. */
 export function documentMatchIndicator(title: string): string {
   return `Factuur ${title} staat in je mailmap`;
