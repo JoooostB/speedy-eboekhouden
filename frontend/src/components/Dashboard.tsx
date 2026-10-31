@@ -150,7 +150,7 @@ export function Dashboard() {
           <Stepper activeStep={setupStep} orientation="vertical" sx={{ mt: 2 }}>
             <Step completed={eboekhoudenConnected}>
               <StepLabel>
-                <Typography fontWeight={600}>Verbind met e-Boekhouden</Typography>
+                <Typography sx={{ fontWeight: 600 }}>Verbind met e-Boekhouden</Typography>
               </StepLabel>
               <StepContent>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -172,7 +172,7 @@ export function Dashboard() {
               <StepLabel
                 optional={<Typography variant="caption" color="text.secondary">Optioneel</Typography>}
               >
-                <Typography fontWeight={600}>Stel een AI-sleutel in</Typography>
+                <Typography sx={{ fontWeight: 600 }}>Stel een AI-sleutel in</Typography>
               </StepLabel>
               <StepContent>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -364,14 +364,14 @@ export function Dashboard() {
                   <line x1="12" y1="9" x2="12" y2="13" />
                   <line x1="12" y1="17" x2="12.01" y2="17" />
                 </Box>
-                <Typography variant="subtitle1" component="h2" fontWeight={600} gutterBottom>
+                <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 600 }} gutterBottom>
                   Vervallen facturen
                 </Typography>
                 {loading ? (
                   <Skeleton width="60%" aria-busy="true" />
                 ) : inboxSummary && inboxSummary.overdueCount > 0 ? (
                   <>
-                    <Typography variant="h5" component="p" fontWeight={700} color="warning.dark">
+                    <Typography variant="h5" component="p" sx={{ fontWeight: 700 }} color="warning.dark">
                       {inboxSummary.overdueCount}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
@@ -419,7 +419,7 @@ export function Dashboard() {
                   <circle cx="12" cy="12" r="10" />
                   <polyline points="12 6 12 12 16 14" />
                 </Box>
-                <Typography variant="subtitle1" component="h2" fontWeight={600} gutterBottom>
+                <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 600 }} gutterBottom>
                   Urenregistratie
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
@@ -449,7 +449,7 @@ export function Dashboard() {
           }}
         >
           <Box>
-            <Typography variant="body2" fontWeight={600}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
               AI-functies zijn nog niet actief
             </Typography>
             <Typography variant="body2" color="text.secondary">

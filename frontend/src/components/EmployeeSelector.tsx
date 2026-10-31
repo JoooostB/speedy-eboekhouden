@@ -27,9 +27,9 @@ export function EmployeeSelector({
       value={selected}
       onChange={(_, value) => onChange(value)}
       loading={loading}
-      renderTags={(value, getTagProps) =>
+      renderValue={(value, getItemProps) =>
         value.map((option, index) => {
-          const { key, ...rest } = getTagProps({ index });
+          const { key, ...rest } = getItemProps({ index });
           return (
             <Chip key={key} label={option.naam} size="small" {...rest} />
           );
@@ -40,14 +40,17 @@ export function EmployeeSelector({
           {...params}
           label="Medewerkers"
           placeholder="Kies medewerkers"
-          InputProps={{
-            ...params.InputProps,
-            endAdornment: (
-              <>
-                {loading && <CircularProgress size={20} />}
-                {params.InputProps.endAdornment}
-              </>
-            ),
+          slotProps={{
+            ...params.slotProps,
+            input: {
+              ...params.slotProps.input,
+              endAdornment: (
+                <>
+                  {loading && <CircularProgress size={20} />}
+                  {params.slotProps.input.endAdornment}
+                </>
+              ),
+            },
           }}
         />
       )}

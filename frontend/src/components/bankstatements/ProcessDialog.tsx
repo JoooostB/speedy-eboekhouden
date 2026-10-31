@@ -190,7 +190,7 @@ export function ProcessDialog({ row, onClose, onProcessed }: Props) {
             role="status"
             aria-live="polite"
           >
-            <Typography variant="body2" fontWeight={600} gutterBottom>
+            <Typography variant="body2" sx={{ fontWeight: 600 }} gutterBottom>
               Mogelijke {matchingItems.length === 1 ? "match" : "matches"} gevonden:
             </Typography>
             {matchingItems.map((item, idx) => (

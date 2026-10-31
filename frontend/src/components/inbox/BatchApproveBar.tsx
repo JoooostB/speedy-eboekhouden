@@ -148,7 +148,7 @@ export function BatchApproveBar({ selected, onProcessed, onClear, ledgerAccounts
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
           {/* Selection count — announced to screen readers on change */}
-          <Typography variant="body2" fontWeight={600} role="status">
+          <Typography variant="body2" sx={{ fontWeight: 600 }} role="status">
             {selected.length} geselecteerd
           </Typography>
 

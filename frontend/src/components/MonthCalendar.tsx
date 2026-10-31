@@ -163,7 +163,7 @@ export function MonthCalendar({
         }}
       >
         {DAYS.map((d) => (
-          <Typography key={d} variant="caption" fontWeight="bold">
+          <Typography key={d} variant="caption" sx={{ fontWeight: "bold" }}>
             {d}
           </Typography>
         ))}

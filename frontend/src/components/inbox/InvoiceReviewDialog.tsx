@@ -698,14 +698,13 @@ export function InvoiceReviewDialog({
   return (
     <Dialog
       open={open}
+      /* No onClose while submitting: Escape and backdrop clicks do nothing. */
       onClose={submitting ? undefined : handleClose}
       fullWidth
       maxWidth="xl"
       /* Mail-folder documents are reviewed full screen on phones. */
       fullScreen={isXs && hasMailDocuments}
       aria-labelledby="invoice-review-title"
-      /* Prevent closing during submission */
-      disableEscapeKeyDown={submitting}
     >
       <DialogTitle id="invoice-review-title" sx={{ pb: 1 }}>
         <Typography variant="h6" component="span">
@@ -1257,7 +1256,7 @@ export function InvoiceReviewDialog({
                         GEEN. The user's explicit override wins. */}
                     {inv.source.invoice.isReverseCharge && isReverseChargeCode(inv.btwCode) && (
                       <Alert severity="warning" sx={{ mt: 2 }}>
-                        <Typography variant="body2" fontWeight={600} gutterBottom>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }} gutterBottom>
                           Verlegde BTW (reverse charge)
                         </Typography>
                         <Typography variant="body2">
@@ -1313,7 +1312,7 @@ export function InvoiceReviewDialog({
                           ))}
                           {otherTips.length > 0 && (
                             <Alert severity="info" sx={{ mt: 2 }} icon={false}>
-                              <Typography variant="body2" fontWeight={600} gutterBottom>
+                              <Typography variant="body2" sx={{ fontWeight: 600 }} gutterBottom>
                                 Belastingadvies
                               </Typography>
                               {otherTips.map((tip, i) => (
@@ -1389,7 +1388,7 @@ export function InvoiceReviewDialog({
                           )
                         }
                       >
-                        <Typography variant="body2" fontWeight={600}>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
                           {inv.importId ? "Gekoppeld aan afschriftregel:" : "Gevonden afschriftregel:"}
                           {inv.bankLine.currencyConverted && (
                             <Typography

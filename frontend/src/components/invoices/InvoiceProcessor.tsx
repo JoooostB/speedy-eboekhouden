@@ -194,7 +194,7 @@ export function InvoiceProcessor() {
 
   return (
     <Box>
-      <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+      <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
         Facturen verwerken
       </Typography>
 

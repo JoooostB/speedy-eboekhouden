@@ -93,7 +93,7 @@ export function BankStatementList() {
   return (
     <Box>
       <Box sx={{ display: "flex", alignItems: "center", mb: 3 }}>
-        <Typography variant="h4" component="h1" fontWeight={600} sx={{ flexGrow: 1 }}>
+        <Typography variant="h4" component="h1" sx={{ fontWeight: 600, flexGrow: 1 }}>
           Afschriften
         </Typography>
         <Chip label={`${totalCount} onverwerkt`} color="primary" sx={{ mr: 1 }} />

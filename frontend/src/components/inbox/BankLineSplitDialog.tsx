@@ -105,7 +105,7 @@ export function BankLineSplitDialog({
       maxWidth="md"
       aria-labelledby="bank-line-split-title"
       aria-describedby="bank-line-split-summary"
-      TransitionProps={{ onExited }}
+      slotProps={{ transition: { onExited } }}
     >
       <DialogTitle id="bank-line-split-title">Afschriftregel splitsen</DialogTitle>
       <DialogContent>

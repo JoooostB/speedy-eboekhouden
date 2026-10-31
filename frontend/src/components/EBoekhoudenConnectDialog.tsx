@@ -231,7 +231,7 @@ export function EBoekhoudenConnectDialog({ open, onClose }: Props) {
                 onChange={(e) => setMfaCode(e.target.value)}
                 inputRef={mfaRef}
                 autoComplete="one-time-code"
-                inputProps={{ inputMode: "numeric" }}
+                slotProps={{ htmlInput: { inputMode: "numeric" } }}
               />
             </>
           )}
