@@ -87,7 +87,7 @@ export function OpenItemsPage() {
   if (hasSoap === false) {
     return (
       <Box>
-        <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+        <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
           Openstaande posten
         </Typography>
         <Alert
@@ -108,7 +108,7 @@ export function OpenItemsPage() {
   if (hasSoap === null) {
     return (
       <Box>
-        <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+        <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
           Openstaande posten
         </Typography>
         <Box sx={{ display: "flex", justifyContent: "center", py: 6 }} role="status" aria-live="polite">
@@ -120,7 +120,7 @@ export function OpenItemsPage() {
 
   return (
     <Box>
-      <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+      <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
         Openstaande posten
       </Typography>
 

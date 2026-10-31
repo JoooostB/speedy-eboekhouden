@@ -1018,14 +1018,16 @@ export function BookkeepingInbox() {
                 indeterminate={someVisibleSelected && !allVisibleSelected}
                 onChange={toggleAll}
                 size="small"
-                inputProps={{
-                  "aria-label": allVisibleSelected
-                    ? "Deselecteer alle zichtbare regels"
-                    : "Selecteer alle zichtbare regels",
+                slotProps={{
+                  input: {
+                    "aria-label": allVisibleSelected
+                      ? "Deselecteer alle zichtbare regels"
+                      : "Selecteer alle zichtbare regels",
+                  },
                 }}
                 sx={{ p: 0.5 }}
               />
-              <Typography variant="caption" color="text.secondary" fontWeight={500}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
                 {filter === "all" ? "Alle regels" : FILTER_TABS.find((t) => t.value === filter)?.label}
                 {` (${activeItems.length})`}
               </Typography>

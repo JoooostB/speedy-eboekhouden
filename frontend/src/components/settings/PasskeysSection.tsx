@@ -195,7 +195,7 @@ export function PasskeysSection() {
                       autoFocus
                       placeholder="Bijvoorbeeld MacBook iCloud"
                       sx={{ flex: "1 1 200px" }}
-                      inputProps={{ maxLength: 64, "aria-label": "Naam van de passkey" }}
+                      slotProps={{ htmlInput: { maxLength: 64, "aria-label": "Naam van de passkey" } }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") saveEdit(pk.id);
                         if (e.key === "Escape") cancelEdit();
@@ -211,7 +211,7 @@ export function PasskeysSection() {
                 ) : (
                   <>
                     <Box sx={{ flex: "1 1 200px", minWidth: 0 }}>
-                      <Typography variant="body2" fontWeight={600} sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {pk.friendlyName || "Zonder naam"}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">

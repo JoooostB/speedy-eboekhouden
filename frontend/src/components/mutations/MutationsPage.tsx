@@ -92,7 +92,7 @@ export function MutationsPage() {
   if (hasSoap === false) {
     return (
       <Box>
-        <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+        <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
           Mutaties
         </Typography>
         <Alert
@@ -112,7 +112,7 @@ export function MutationsPage() {
   if (hasSoap === null) {
     return (
       <Box>
-        <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+        <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
           Mutaties
         </Typography>
         <Box sx={{ display: "flex", justifyContent: "center", py: 6 }} role="status" aria-live="polite">
@@ -124,13 +124,13 @@ export function MutationsPage() {
 
   return (
     <Box>
-      <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+      <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
         Mutaties
       </Typography>
 
       {/* Date range filter */}
       <Paper sx={{ p: 2, mb: 3 }}>
-        <Grid container spacing={2} alignItems="flex-end">
+        <Grid container spacing={2} sx={{ alignItems: "flex-end" }}>
           <Grid size={{ xs: 12, sm: 4 }}>
             <TextField
               fullWidth

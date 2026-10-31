@@ -366,7 +366,7 @@ export function PaymentGroupDialog({ open, onClose, group, initialLines, allLine
                   checked={included.has(l.id)}
                   onChange={() => toggle(l.id)}
                   disabled={processing || booked}
-                  inputProps={{ "aria-label": includeLabel(l, account) }}
+                  slotProps={{ input: { "aria-label": includeLabel(l, account) } }}
                   sx={{ p: 0.5 }}
                 />
                 <Typography variant="body2" color="text.secondary">

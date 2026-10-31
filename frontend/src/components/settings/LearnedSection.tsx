@@ -196,7 +196,7 @@ export function LearnedSection() {
             placeholder="WISSEN"
             autoFocus
             disabled={busy}
-            inputProps={{ "aria-label": "Bevestiging typen" }}
+            slotProps={{ htmlInput: { "aria-label": "Bevestiging typen" } }}
           />
         </DialogContent>
         <DialogActions>

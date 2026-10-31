@@ -267,7 +267,7 @@ export function SettingsPage() {
 
   return (
     <Box>
-      <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+      <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
         Instellingen
       </Typography>
 
@@ -553,7 +553,7 @@ export function SettingsPage() {
                 Verwijderen
               </Button>
             )}
-            <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
               Maximaal 2 MB, als JPEG, PNG of WebP.
             </Typography>
           </Box>

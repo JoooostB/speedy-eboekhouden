@@ -283,8 +283,10 @@ export function InboxRow({
           onChange={() => onToggle(item.id)}
           onClick={(e) => e.stopPropagation()}
           disabled={processed}
-          inputProps={{
-            "aria-label": `Selecteer ${item.omschrijving}, ${formattedAmount}`,
+          slotProps={{
+            input: {
+              "aria-label": `Selecteer ${item.omschrijving}, ${formattedAmount}`,
+            },
           }}
           size="small"
           sx={{ p: 0.5 }}

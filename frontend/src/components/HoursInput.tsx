@@ -16,7 +16,7 @@ export function HoursInput({ value, onChange }: Props) {
         type="number"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        inputProps={{ min: 0.25, max: 24, step: 0.25 }}
+        slotProps={{ htmlInput: { min: 0.25, max: 24, step: 0.25 } }}
         sx={{ width: 120 }}
       />
       <ToggleButtonGroup

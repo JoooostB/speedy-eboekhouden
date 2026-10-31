@@ -86,7 +86,7 @@ export function PaymentGroupRow({ group, lines, checked, onToggle, ledgerAccount
           <Checkbox
             checked={checked}
             onChange={() => onToggle(lines.map((l) => l.id), !checked)}
-            inputProps={{ "aria-label": `Selecteer de ${lines.length} betalingen van factuur ${group.factuurnummer}` }}
+            slotProps={{ input: { "aria-label": `Selecteer de ${lines.length} betalingen van factuur ${group.factuurnummer}` } }}
             size="small"
             sx={{ p: 0.5 }}
           />

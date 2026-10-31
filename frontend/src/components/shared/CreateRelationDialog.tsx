@@ -344,7 +344,6 @@ export function CreateRelationDialog({
       fullWidth
       maxWidth="md"
       aria-labelledby="create-relation-dialog-title"
-      disableEscapeKeyDown={submitting}
     >
       <DialogTitle id="create-relation-dialog-title" sx={{ pb: 1 }}>
         <Typography variant="h6" component="span">
@@ -461,7 +460,7 @@ export function CreateRelationDialog({
                         sx={{ cursor: "pointer" }}
                       >
                         <TableCell>
-                          <Typography variant="body2" fontWeight={600}>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
                             {r.bedrijf}
                           </Typography>
                           <Typography variant="caption" color="text.secondary">

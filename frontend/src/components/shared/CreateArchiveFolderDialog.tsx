@@ -110,7 +110,7 @@ export function CreateArchiveFolderDialog({
             size="small"
             fullWidth
             disabled={submitting}
-            inputProps={{ maxLength: 100 }}
+            slotProps={{ htmlInput: { maxLength: 100 } }}
           />
           <Autocomplete
             options={parentOptions}

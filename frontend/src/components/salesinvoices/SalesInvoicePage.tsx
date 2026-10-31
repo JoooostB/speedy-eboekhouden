@@ -182,7 +182,7 @@ export function SalesInvoicePage() {
   if (hasRest === false) {
     return (
       <Box>
-        <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+        <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
           Verkoopfactuur aanmaken
         </Typography>
         <Alert
@@ -202,7 +202,7 @@ export function SalesInvoicePage() {
   if (hasRest === null) {
     return (
       <Box>
-        <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+        <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
           Verkoopfactuur aanmaken
         </Typography>
         <Box sx={{ display: "flex", justifyContent: "center", py: 6 }} role="status" aria-live="polite">
@@ -214,7 +214,7 @@ export function SalesInvoicePage() {
 
   return (
     <Box>
-      <Typography variant="h4" component="h1" gutterBottom fontWeight={600}>
+      <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
         Verkoopfactuur aanmaken
       </Typography>
 
@@ -390,7 +390,7 @@ export function SalesInvoicePage() {
 
         <Divider sx={{ my: 2 }} />
         <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 2, alignItems: "center" }}>
-          <Typography variant="body1" fontWeight={600}>
+          <Typography variant="body1" sx={{ fontWeight: 600 }}>
             Totaal excl. BTW: {formatCurrency(total)}
           </Typography>
         </Box>

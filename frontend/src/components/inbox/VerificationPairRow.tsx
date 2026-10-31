@@ -68,7 +68,7 @@ export function VerificationPairRow({ pair, lines, checked, onToggle, ledgerAcco
         <Checkbox
           checked={checked}
           onChange={() => onToggle(lines.map((l) => l.id), !checked)}
-          inputProps={{ "aria-label": `Selecteer de ${lines.length} regels van deze ${kindLabel.toLowerCase()}` }}
+          slotProps={{ input: { "aria-label": `Selecteer de ${lines.length} regels van deze ${kindLabel.toLowerCase()}` } }}
           size="small"
           sx={{ p: 0.5 }}
         />

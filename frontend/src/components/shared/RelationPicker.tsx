@@ -110,7 +110,7 @@ export function RelationPicker({
                     <line x1="12" y1="5" x2="12" y2="19" />
                     <line x1="5" y1="12" x2="19" y2="12" />
                   </Box>
-                  <Typography variant="body2" fontWeight={600} color="primary">
+                  <Typography variant="body2" sx={{ fontWeight: 600 }} color="primary">
                     Nieuwe relatie aanmaken
                   </Typography>
                 </Box>
@@ -133,8 +133,9 @@ export function RelationPicker({
             label={label}
             size="small"
             slotProps={{
+              ...params.slotProps,
               input: {
-                ...params.InputProps,
+                ...params.slotProps.input,
                 endAdornment: (
                   <>
                     {!value && !disabled && (
@@ -159,7 +160,7 @@ export function RelationPicker({
                         </IconButton>
                       </Tooltip>
                     )}
-                    {params.InputProps.endAdornment}
+                    {params.slotProps.input.endAdornment}
                   </>
                 ),
               },
