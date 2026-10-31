@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import {
   Box,
   Button,
@@ -467,13 +467,31 @@ export function InvoiceReviewDialog({
     [vatRate],
   );
 
+  // "Ongedaan maken" and "Niet splitsen" unmount themselves with the split
+  // block; focus then goes to the restored "Bedrag incl. BTW" field of that
+  // card instead of falling back to the dialog.
+  const singleAmountInputs = useRef(new Map<number, HTMLInputElement>());
+  const pendingSingleFocus = useRef<number | null>(null);
+  // Cards are keyed by index: the list is fixed for the life of the dialog
+  // (never reordered or removed). The pending index is cleared on the first
+  // change after it was set, applied or not, so it never fires late.
+  useLayoutEffect(() => {
+    const index = pendingSingleFocus.current;
+    if (index === null) return;
+    pendingSingleFocus.current = null;
+    if (invoices[index]?.regels !== null) return;
+    singleAmountInputs.current.get(index)?.focus();
+  }, [invoices]);
+
   /** "Ongedaan maken" on a proposed split: back to one line with the
    *  values the analysis gave, before any edit to the lines. */
   const undoSplitProposal = useCallback((index: number) => {
     setInvoices((prev) => {
+      const inv = prev[index];
+      if (!inv?.original) return prev;
+      pendingSingleFocus.current = index;
       const next = [...prev];
-      const inv = next[index];
-      if (inv.original) next[index] = undoProposal(inv, inv.original);
+      next[index] = undoProposal(inv, inv.original);
       return next;
     });
   }, []);
@@ -1042,6 +1060,10 @@ export function InvoiceReviewDialog({
                         size="small"
                         fullWidth
                         disabled={submitting}
+                        inputRef={(el: HTMLInputElement | null) => {
+                          if (el) singleAmountInputs.current.set(index, el);
+                          else singleAmountInputs.current.delete(index);
+                        }}
                         slotProps={{
                           htmlInput: { inputMode: "decimal" },
                           input: {
@@ -1098,7 +1120,14 @@ export function InvoiceReviewDialog({
                             undone in the note below; a split the user made
                             or edited keeps line 1 through "Niet splitsen". */}
                         {(!inv.proposal || inv.proposalEdited) && (
-                          <Button size="small" onClick={() => setRegels(index, null)} disabled={submitting}>
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              pendingSingleFocus.current = index;
+                              setRegels(index, null);
+                            }}
+                            disabled={submitting}
+                          >
                             Niet splitsen
                           </Button>
                         )}

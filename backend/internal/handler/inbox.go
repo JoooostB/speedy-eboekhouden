@@ -562,10 +562,27 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 	// An expired session answers 412 here, before anything is booked; a grid
 	// that cannot be read refuses the soort 3/4 items instead of booking
 	// blind (see factuurbetalingGuard).
-	refusals, err := factuurbetalingGuard(client, req.Items)
+	// A factuurbetaling with regels is refused outright, before the guard
+	// would judge it against the open post.
+	guarded := make([]inboxBatchItem, 0, len(req.Items))
+	splitRefused := make(map[int]bool)
+	for _, item := range req.Items {
+		if len(item.Regels) > 0 && isFactuurbetaling(item.Soort) {
+			splitRefused[item.ID] = true
+			continue
+		}
+		guarded = append(guarded, item)
+	}
+	refusals, err := factuurbetalingGuard(client, guarded)
 	if err != nil {
 		h.writeEBError(c, sess, err)
 		return
+	}
+	if refusals == nil && len(splitRefused) > 0 {
+		refusals = make(map[int]string, len(splitRefused))
+	}
+	for id := range splitRefused {
+		refusals[id] = errFactuurbetalingSplit.Error()
 	}
 
 	// Look up ledger accounts to resolve grootboekcode → internal ID
@@ -583,6 +600,8 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		omschrijving string
 		rekening     string
 		datum        string
+		// bedrag is the grid's signed amount: the total a split must add up to.
+		bedrag float64
 	}
 	// Verification payments (card and IBAN checks) are recognised again on
 	// the same grid so they are never learned; a client flag is not trusted.
@@ -593,10 +612,12 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 			verifications = detectVerificationPayments(bankLinesFromRows(rows))
 			for _, row := range rows {
 				id, _ := toInt(row["id"])
+				bedrag, _ := toFloat(row["mutBedrag"])
 				bankLineMetaByID[id] = bankLineMeta{
 					omschrijving: toString(row["mutOmschrijving"]),
 					rekening:     toString(row["rekening"]),
 					datum:        toString(row["mutDatum"]),
+					bedrag:       bedrag,
 				}
 			}
 		}
@@ -655,10 +676,25 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		// an open invoice and has its own shape; it is refused here when the
 		// relation or invoice number is missing instead of being sent to
 		// e-boekhouden, which would reject it silently.
-		payload, err := buildBatchMutatiePayload(item, mutDatum, tegenRekeningId)
-		if err != nil {
-			results = append(results, result{ID: item.ID, Status: "error", Error: err.Error()})
-			continue
+		var payload map[string]any
+		if len(item.Regels) > 0 {
+			// A split line: the lines are resolved by grootboekcode through
+			// the same account list and must add up to the grid's amount
+			// (the client never sets the total); the single-line body is
+			// left untouched for every other item.
+			lines, splitErr := h.splitBatchItem(item, ledgerAccounts, bankLineMetaByID[item.ID].bedrag)
+			if splitErr != nil {
+				results = append(results, result{ID: item.ID, Status: "error", Error: splitErr.Error()})
+				continue
+			}
+			payload = buildBatchSplitPayload(item, mutDatum, lines)
+		} else {
+			built, err := buildBatchMutatiePayload(item, mutDatum, tegenRekeningId)
+			if err != nil {
+				results = append(results, result{ID: item.ID, Status: "error", Error: err.Error()})
+				continue
+			}
+			payload = built
 		}
 		mutPayload, _ := json.Marshal(payload)
 
@@ -696,8 +732,9 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		// pathologically long mutOmschrijving. A factuurbetaling is tied to
 		// one invoice, not a recurring pattern, so it is not learned; nor is
 		// a verification payment, whose signal would match the merchant's
-		// real charges (the signal ignores the amount).
-		if _, verification := verifications[item.ID]; sess != nil && !verification && !isFactuurbetaling(item.Soort) {
+		// real charges (the signal ignores the amount); nor a split line,
+		// which has no single ledger to learn.
+		if _, verification := verifications[item.ID]; sess != nil && !verification && !isFactuurbetaling(item.Soort) && len(item.Regels) == 0 {
 			if meta, ok := bankLineMetaByID[item.ID]; ok {
 				signal := database.BuildClassificationSignal(meta.omschrijving, meta.rekening)
 				if signal != "" {
@@ -718,6 +755,33 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
+// errSplitLineUnknown is the per-item error when the bank line of a split
+// item is not in the import grid, so its amount cannot be checked.
+var errSplitLineUnknown = errors.New("De afschriftregel is niet gevonden in e-Boekhouden. Vernieuw de inbox en probeer het opnieuw.")
+
+// splitBatchItem validates the regels of a split bank line: never on a
+// factuurbetaling, each grootboekcode resolved against the active accounts,
+// and the lines adding up to the grid's amount within a cent.
+func (h *InboxHandler) splitBatchItem(item inboxBatchItem, ledgerAccounts []map[string]any, gridBedrag float64) ([]regel, error) {
+	if isFactuurbetaling(item.Soort) {
+		return nil, errFactuurbetalingSplit
+	}
+	if gridBedrag == 0 {
+		return nil, errSplitLineUnknown
+	}
+	resolve := func(code string) (int, bool) {
+		for _, acc := range ledgerAccounts {
+			if c, _ := acc["code"].(string); c == code {
+				if id, ok := acc["id"].(float64); ok && id > 0 {
+					return int(id), true
+				}
+			}
+		}
+		return 0, false
+	}
+	return normalizeRegels(item.Regels, abs(gridBedrag), item.Soort, resolve)
 }
 
 // upsertLearned writes one learned classification. A variable so tests can

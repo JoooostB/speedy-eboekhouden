@@ -30,6 +30,9 @@ interface Props {
   vatRate: (code: string) => number;
   onChange: (regels: RegelEdit[]) => void;
   disabled?: boolean;
+  /** The line whose amount field takes focus when the editor mounts (the
+   *  empty line 2 of a fresh split, in a dialog). */
+  initialFocusKey?: string;
 }
 
 /** How long after the last change the live region speaks, so a screen
@@ -58,7 +61,17 @@ type PendingFocus = { key: string; target: "delete" | "omschrijving" };
  * viewport: five columns from 720px, otherwise two rows per line, and one
  * column on a phone.
  */
-export function RegelsEditor({ regels, totalCents, totalSource, ledgerAccounts, vatCodes, vatRate, onChange, disabled }: Props) {
+export function RegelsEditor({
+  regels,
+  totalCents,
+  totalSource,
+  ledgerAccounts,
+  vatCodes,
+  vatRate,
+  onChange,
+  disabled,
+  initialFocusKey,
+}: Props) {
   const rest = remainderCents(regels, totalCents);
   const blocker = validateRegels(regels, totalCents);
   const status = rest !== 0 ? remainderStatus(rest) : (blocker ?? remainderStatus(0));
@@ -73,7 +86,16 @@ export function RegelsEditor({ regels, totalCents, totalSource, ledgerAccounts, 
 
   const deleteButtons = useRef(new Map<string, HTMLButtonElement>());
   const omschrijvingInputs = useRef(new Map<string, HTMLInputElement>());
+  const amountInputs = useRef(new Map<string, HTMLInputElement>());
   const pendingFocus = useRef<PendingFocus | null>(null);
+  // Once, on mount: the caller's line takes focus (after the dialog's own
+  // focus handling, hence the timeout).
+  useEffect(() => {
+    if (!initialFocusKey) return;
+    const t = setTimeout(() => amountInputs.current.get(initialFocusKey)?.focus(), 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Before paint, so focus does not visibly jump. A pending entry whose row
   // is gone (the parent collapsed the editor) is dropped, never applied to a
   // later change; a delete button that became disabled (two lines left)
@@ -155,6 +177,10 @@ export function RegelsEditor({ regels, totalCents, totalSource, ledgerAccounts, 
               size="small"
               fullWidth
               disabled={disabled}
+              inputRef={(el: HTMLInputElement | null) => {
+                if (el) amountInputs.current.set(regel.key, el);
+                else amountInputs.current.delete(regel.key);
+              }}
               slotProps={{
                 htmlInput: { inputMode: "decimal" },
                 input: {

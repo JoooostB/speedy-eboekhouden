@@ -26,6 +26,8 @@ import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { RelationPicker } from "../shared/RelationPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
 import { BookingConfirmDialog } from "./BookingConfirmDialog";
+import { BankLineSplitDialog } from "./BankLineSplitDialog";
+import { formatMoney } from "../../hooks/mailDocumentsModel";
 import {
   VERIFICATION_CHIP_LABELS,
   VERIFICATION_CHIP_SX,
@@ -126,6 +128,8 @@ export function InboxRow({
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [splitOpen, setSplitOpen] = useState(false);
+  const headerRef = useRef<HTMLDivElement>(null);
 
   // Editable fields (pre-filled from AI classification)
   const [soort, setSoort] = useState<MutatieSoort>(item.soort);
@@ -166,6 +170,11 @@ export function InboxRow({
   const verification = item.verification;
   const canExpand = item.category !== "auto" && !isOpenPost;
   const indicatorText = documentMatch ? documentMatchIndicator(documentMatch.title) : item.indicator;
+  // "Splitsen…": a Geld uitgegeven / Geld ontvangen line can be booked over
+  // several tegenrekeningen. Never a factuurbetaling, an open-post row or a
+  // line of a payment group (those settle one invoice).
+  const canSplit =
+    !processed && !isOpenPost && !item.paymentGroupId && (soort === "GeldUitgegeven" || soort === "GeldOntvangen");
 
   const handleExpand = () => {
     if (canExpand) setExpanded((prev) => !prev);
@@ -250,9 +259,12 @@ export function InboxRow({
         "&:last-child": { borderBottom: 0 },
       }}
     >
-      {/* Collapsed row header */}
+      {/* Collapsed row header; focusable by script only, so the split
+          dialog can hand focus back after the row was marked processed. */}
       <Box
         id={headerId}
+        ref={headerRef}
+        tabIndex={-1}
         sx={{
           display: "flex",
           alignItems: "center",
@@ -666,7 +678,17 @@ export function InboxRow({
               </Box>
             )}
 
-            <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+            <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1.5, flexWrap: "wrap" }}>
+              {canSplit && (
+                <Button
+                  size="small"
+                  onClick={() => setSplitOpen(true)}
+                  disabled={processing}
+                  aria-label={`Splitsen: afschriftregel van ${formatMoney(Math.abs(item.bedrag))} over meerdere regels`}
+                >
+                  Splitsen…
+                </Button>
+              )}
               <Button
                 variant="contained"
                 size="small"
@@ -695,6 +717,21 @@ export function InboxRow({
         processing={processing}
         error={error}
       />
+      {/* Mounted on demand so each opening starts from the row's current
+          ledger and BTW code. */}
+      {splitOpen && (
+        <BankLineSplitDialog
+          open
+          onClose={() => setSplitOpen(false)}
+          onExited={() => headerRef.current?.focus()}
+          item={previewItem}
+          relatieId={relatie?.id}
+          soortLabel={SOORT_OPTIONS.find((o) => o.value === soort)?.label ?? soort}
+          ledgerAccounts={ledgerAccounts}
+          vatCodes={vatCodes}
+          onProcessed={onProcessed}
+        />
+      )}
     </Box>
   );
 }

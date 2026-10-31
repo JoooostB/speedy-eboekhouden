@@ -860,3 +860,14 @@ export interface InvoiceData {
   regels?: InvoiceRegel[];
   splitsAdvies?: SplitsAdvies;
 }
+
+// Bank-line split (P2): a process-batch item may carry regels. Appended
+// as one block; InboxProcessItem is extended through declaration merging.
+
+export interface InboxProcessItem {
+  /** Split the line over several tegenrekeningen, each by grootboekcode
+   *  (RegelPayload with `grootboekcode`). Soort 5/6 only; the lines must
+   *  add up to the bank line's amount, which the backend reads from the
+   *  grid itself. */
+  regels?: RegelPayload[];
+}

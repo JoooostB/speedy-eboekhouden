@@ -52,6 +52,33 @@ type inboxBatchItem struct {
 	Bedrag        float64 `json:"bedrag"`
 	RelatieId     int     `json:"relatieId,omitempty"`
 	Factuurnummer string  `json:"factuurnummer,omitempty"`
+	// Regels splits the line over several tegenrekeningen (regels.go), each
+	// by grootboekcode. Only for soort 5/6; the lines must add up to the
+	// bank line's own amount, never to Bedrag. Not learned.
+	Regels []regelInput `json:"regels,omitempty"`
+}
+
+// errFactuurbetalingSplit refuses regels on a soort 3/4 item: a payment
+// settles one open invoice and has no tegenrekening to split over.
+var errFactuurbetalingSplit = errors.New("Een factuurbetaling kan niet gesplitst worden.")
+
+// buildBatchSplitPayload is the POST /v1/api/mutatie body of a split bank
+// line (soort 5/6): the "Incl btw" shape the e-boekhouden UI sends, inEx
+// "IN" with the gross bedrag per regel (mutatieRegelMaps, with the lines'
+// own omschrijving), importId at the top level like the single-line body.
+// Relation and invoice number never travel on a split line.
+func buildBatchSplitPayload(item inboxBatchItem, mutDatum string, regels []regel) map[string]any {
+	return map[string]any{
+		"mutatie": map[string]any{
+			"rekening":     item.GrootboekId,
+			"datum":        mutDatum,
+			"soort":        item.Soort,
+			"inEx":         "IN",
+			"omschrijving": item.Omschrijving,
+		},
+		"mutatieRegels": mutatieRegelMaps(regels, true),
+		"importId":      item.ID,
+	}
 }
 
 // errFactuurbetalingIncomplete is the per-item error for a soort 3/4 item
