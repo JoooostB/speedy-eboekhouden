@@ -38,6 +38,10 @@ import type {
 import { InboxRow } from "./InboxRow";
 import { BatchApproveBar } from "./BatchApproveBar";
 import { PaymentGroupRow } from "./PaymentGroupRow";
+import { VerificationPairRow } from "./VerificationPairRow";
+import { BookingConfirmDialog } from "./BookingConfirmDialog";
+import { toInboxProcessItem } from "./inboxBooking";
+import { PAIR_REQUEST_FAILED, buildVerificationPairs, failedPairLines, pairButtonLabel, pairResultAlert, withPairPartners } from "./verificationPairs";
 import { PaymentGroupDialog } from "./PaymentGroupDialog";
 import { type GroupInvoice, ambiguousLineIds, buildRenderList, snackbarMessage, sumLines } from "./paymentGroups";
 import { InvoiceReviewDialog } from "./InvoiceReviewDialog";
@@ -168,6 +172,12 @@ export function BookkeepingInbox() {
   // The payment-group dialog: the group from the classify response (null
   // when the user composes one by hand) and the lines to start with.
   const [groupDialog, setGroupDialog] = useState<{ group: PaymentGroup | null; lines: InboxClassification[] } | null>(null);
+  // The confirm dialog of a verification pair (card check + refund). It
+  // lives here, not in the row: after a partial failure the booked leg
+  // leaves the list and the row unmounts, while the dialog stays open with
+  // the failed leg and "Opnieuw proberen (1)".
+  const [pairDialog, setPairDialog] = useState<{ lines: InboxClassification[]; retry: boolean; error: string | null } | null>(null);
+  const [pairProcessing, setPairProcessing] = useState(false);
   const [summary, setSummary] = useState<Record<InboxCategory, number>>({ auto: 0, review: 0, invoice: 0, manual: 0 });
   const [loading, setLoading] = useState(true);
   const [classifying, setClassifying] = useState(false);
@@ -420,16 +430,24 @@ export function BookkeepingInbox() {
     [items, filter],
   );
 
-  // Items that aren't processed yet and are in the current filter
-  const activeItems = useMemo(
-    () => filteredItems.filter((i) => !processedIds.has(i.id)),
-    [filteredItems, processedIds],
+  // Verification pairs (a card check and its refund) are built from every
+  // unprocessed line, before the category filter, and never from a line
+  // that renders with a payment group. A pair shows whole when either leg
+  // matches the filter, so activeItems carries the other leg too.
+  const allPairs = useMemo(
+    () => buildVerificationPairs(items.filter((i) => !processedIds.has(i.id)), groups),
+    [items, processedIds, groups],
+  );
+  const { items: activeItems, pairs } = useMemo(
+    () => withPairPartners(filteredItems.filter((i) => !processedIds.has(i.id)), allPairs),
+    [filteredItems, processedIds, allPairs],
   );
 
-  // The list as rendered: loose lines and payment groups (a group stands
-  // where its first member would be). Members of an ambiguous group have no
-  // invoice yet and are kept out of every batch selection.
-  const renderList = useMemo(() => buildRenderList(activeItems, groups), [activeItems, groups]);
+  // The list as rendered: loose lines, payment groups and verification
+  // pairs (a group or pair stands where its first member would be). Members
+  // of an ambiguous group have no invoice yet and are kept out of every
+  // batch selection.
+  const renderList = useMemo(() => buildRenderList(activeItems, groups, pairs), [activeItems, groups, pairs]);
   const unselectable = useMemo(() => ambiguousLineIds(groups), [groups]);
   const selectableItems = useMemo(() => activeItems.filter((i) => !unselectable.has(i.id)), [activeItems, unselectable]);
 
@@ -478,7 +496,11 @@ export function BookkeepingInbox() {
       else errorCount++;
     });
     setProcessedIds((prev) => new Set([...prev, ...newProcessed]));
-    setSelected(new Set());
+    setSelected((prev) => {
+      const next = new Set(prev);
+      newProcessed.forEach((id) => next.delete(id));
+      return next;
+    });
 
     // Update summary counts
     setSummary((prev) => {
@@ -533,6 +555,34 @@ export function BookkeepingInbox() {
       }
     },
     [items, loadInbox],
+  );
+
+  // Books the lines of a verification pair (both legs, or the failed leg on
+  // a retry). The results flow through handleBatchProcessed like any batch;
+  // the dialog closes when every leg is booked and stays open otherwise.
+  const handlePairConfirm = useCallback(
+    async (edited: InboxClassification[]) => {
+      const kind = edited[0]?.verification?.kind ?? "card_check";
+      setPairProcessing(true);
+      try {
+        const res = await api.processInboxBatch(edited.map((item) => toInboxProcessItem(item)));
+        const results = new Map<number, InboxProcessResult>();
+        res.results.forEach((r, idx) => results.set(edited[idx].id, r));
+        handleBatchProcessed(results);
+        const failed = failedPairLines(edited, results);
+        track("inbox_verification_booked", { kind, count: edited.length - failed.length, failed: failed.length });
+        if (failed.length === 0) {
+          setPairDialog(null);
+        } else {
+          setPairDialog({ lines: failed, retry: true, error: pairResultAlert(edited, results) });
+        }
+      } catch {
+        setPairDialog((prev) => (prev ? { ...prev, retry: true, error: PAIR_REQUEST_FAILED } : prev));
+      } finally {
+        setPairProcessing(false);
+      }
+    },
+    [handleBatchProcessed],
   );
 
   // Handle single item processed
@@ -991,7 +1041,18 @@ export function BookkeepingInbox() {
               sx={{ m: 0, p: 0 }}
             >
               {renderList.map((entry) =>
-                entry.kind === "group" ? (
+                entry.kind === "verificationPair" ? (
+                  <VerificationPairRow
+                    key={entry.pair.id}
+                    pair={entry.pair}
+                    lines={entry.lines}
+                    checked={entry.lines.every((l) => selected.has(l.id))}
+                    onToggle={toggleGroup}
+                    ledgerAccounts={ledgerAccounts}
+                    onOpen={(_pair, lines) => setPairDialog({ lines, retry: false, error: null })}
+                    defaultExpanded={!isXs}
+                  />
+                ) : entry.kind === "group" ? (
                   <PaymentGroupRow
                     key={entry.group.id}
                     group={entry.group}
@@ -1111,6 +1172,22 @@ export function BookkeepingInbox() {
           allLines={unprocessedItems}
           ledgerAccounts={ledgerAccounts ?? []}
           onBooked={handleGroupBooked}
+        />
+      )}
+
+      {/* Verification-pair dialog: both legs of a card check on Bijzondere
+          baten; after a partial failure only the failed leg, as a retry. */}
+      {pairDialog && (
+        <BookingConfirmDialog
+          open={true}
+          onClose={() => !pairProcessing && setPairDialog(null)}
+          items={pairDialog.lines}
+          ledgerAccounts={ledgerAccounts ?? []}
+          vatCodes={vatCodes ?? []}
+          onConfirm={handlePairConfirm}
+          processing={pairProcessing}
+          error={pairDialog.error}
+          confirmLabel={pairDialog.retry ? pairButtonLabel(pairDialog.lines.length, true) : undefined}
         />
       )}
 

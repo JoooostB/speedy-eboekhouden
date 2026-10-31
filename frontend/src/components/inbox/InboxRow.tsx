@@ -26,7 +26,16 @@ import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { RelationPicker } from "../shared/RelationPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
 import { BookingConfirmDialog } from "./BookingConfirmDialog";
-import { documentMatchIndicator, koppelenLabel, toInboxProcessItem } from "./inboxBooking";
+import {
+  VERIFICATION_CHIP_LABELS,
+  VERIFICATION_CHIP_SX,
+  VERIFICATION_CHIP_TOOLTIPS,
+  amountAriaLabel,
+  boekenVerificationLabel,
+  documentMatchIndicator,
+  koppelenLabel,
+  toInboxProcessItem,
+} from "./inboxBooking";
 import { INVOICE_FILE_ACCEPT, isAcceptedInvoiceFile } from "./mailDocumentReview";
 import { TruncatedText } from "./TruncatedText";
 
@@ -124,7 +133,7 @@ export function InboxRow({
     ledgerAccounts.find((a) => a.code === item.grootboekcode) || null,
   );
   const [relatie, setRelatie] = useState<Relation | null>(null);
-  const [btwCode, setBtwCode] = useState(item.btwCode);
+  const [btwCode, setBtwCode] = useState(item.verification ? "GEEN" : item.btwCode);
   const [omschrijving, setOmschrijving] = useState(item.aiOmschrijving || item.omschrijving);
 
   // Invoice upload state
@@ -150,6 +159,11 @@ export function InboxRow({
   // open invoice and confirmed through the dialog.
   const isOpenPost = !!item.openPostMatch;
   const documentMatch = item.documentMatch;
+  // A verification payment (card or IBAN check) is booked on Bijzondere
+  // baten straight from the header, like an open-post row; without a
+  // ledger account the backend made it "review" and the row expands so the
+  // user picks one (BTW stays GEEN).
+  const verification = item.verification;
   const canExpand = item.category !== "auto" && !isOpenPost;
   const indicatorText = documentMatch ? documentMatchIndicator(documentMatch.title) : item.indicator;
 
@@ -171,6 +185,7 @@ export function InboxRow({
       if (res.results[0]?.status === "ok") {
         onProcessed(item.id);
         track("Inbox Process Single", { category: item.category });
+        if (verification) track("inbox_verification_booked", { kind: verification.kind, count: 1, failed: 0 });
         setConfirmOpen(false);
       } else {
         setError(res.results[0]?.error || "Verwerking mislukt");
@@ -276,9 +291,12 @@ export function InboxRow({
           {formattedDate}
         </Typography>
 
-        {/* Amount — color paired with +/- prefix, never color alone */}
+        {/* Amount — color paired with +/- prefix, never color alone; read
+            out as "Afgeschreven/Bijgeschreven € 1,00" so the direction is
+            words, not a glyph. */}
         <Typography
           variant="body2"
+          aria-label={amountAriaLabel(item.bedrag)}
           sx={{
             minWidth: 80,
             textAlign: "right",
@@ -289,7 +307,9 @@ export function InboxRow({
             flexShrink: 0,
           }}
         >
-          {formattedAmount}
+          <Box component="span" aria-hidden="true">
+            {formattedAmount}
+          </Box>
         </Typography>
 
         {/* Description + indicator */}
@@ -345,6 +365,15 @@ export function InboxRow({
                 cursor: "help",
               }}
             />
+          </Tooltip>
+        )}
+
+        {/* "Kaartcontrole" / "Rekeningcontrole" — a verification payment,
+            booked on Bijzondere baten. A button described by its tooltip, so
+            the explanation reaches keyboard and screen-reader users too. */}
+        {verification && !isOpenPost && !processed && (
+          <Tooltip title={VERIFICATION_CHIP_TOOLTIPS[verification.kind]} arrow enterDelay={300} describeChild>
+            <Chip component="button" type="button" label={VERIFICATION_CHIP_LABELS[verification.kind]} size="small" sx={VERIFICATION_CHIP_SX} />
           </Tooltip>
         )}
 
@@ -429,6 +458,24 @@ export function InboxRow({
             sx={{ flexShrink: 0, fontWeight: 600, minHeight: 32 }}
           >
             Koppelen
+          </Button>
+        )}
+
+        {/* "Boeken" — a verification payment with a ledger account is
+            confirmed straight from the header, one click like Koppelen. */}
+        {verification && !isOpenPost && !processed && !!item.grootboekcode && (
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              setConfirmOpen(true);
+            }}
+            disabled={processing}
+            aria-label={boekenVerificationLabel(item, ledgerAccounts)}
+            sx={{ flexShrink: 0, fontWeight: 600, minHeight: 32 }}
+          >
+            Boeken
           </Button>
         )}
 

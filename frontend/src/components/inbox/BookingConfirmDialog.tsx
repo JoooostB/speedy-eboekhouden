@@ -17,7 +17,7 @@ import type { InboxClassification, LedgerAccount, OpenPostGridItem, VATCode } fr
 import { api } from "../../api/client";
 import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
-import { bookingBlocker, findRefundCandidate, isFactuurbetalingSoort } from "./inboxBooking";
+import { VERIFICATION_NO_INVOICE, bookingBlocker, findRefundCandidate, isFactuurbetalingSoort, isVerification } from "./inboxBooking";
 
 interface Props {
   open: boolean;
@@ -31,6 +31,8 @@ interface Props {
   /** When set, shown as an error alert at the top of the dialog so the
    *  user sees the failure without having to close the dialog first. */
   error?: string | null;
+  /** Label of the primary button; "Bevestigen" by default. */
+  confirmLabel?: string;
 }
 
 const SOORT_LABELS: Record<string, string> = {
@@ -82,6 +84,7 @@ export function BookingConfirmDialog({
   onConfirm,
   processing,
   error,
+  confirmLabel = "Bevestigen",
 }: Props) {
   const [refundMatches, setRefundMatches] = useState<Map<number, OpenPostGridItem>>(new Map());
   const [matchingRefunds, setMatchingRefunds] = useState(false);
@@ -106,27 +109,43 @@ export function BookingConfirmDialog({
     return map;
   }, [ledgerAccounts]);
 
-  // Reset local edits whenever the dialog opens with a (possibly different)
-  // set of items. Pre-fill from the items' current values.
+  // Reset local edits when the dialog opens, pre-filled from the items'
+  // current values. While it stays open and the items change (a partial
+  // failure drops the booked lines), the edits of the lines still present
+  // are kept so a hand-picked ledger survives the retry.
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (!open) return;
-    const next = new Map<number, { ledger: LedgerAccount | null; btwCode: string; omschrijving: string }>();
-    items.forEach((item) => {
-      next.set(item.id, {
-        ledger: ledgerLookup.get(item.grootboekcode) || null,
-        btwCode: item.btwCode || "GEEN",
-        omschrijving: item.aiOmschrijving || item.omschrijving,
+    if (!open) {
+      wasOpen.current = false;
+      return;
+    }
+    const reopened = !wasOpen.current;
+    wasOpen.current = true;
+    setEdits((prev) => {
+      const next = new Map<number, { ledger: LedgerAccount | null; btwCode: string; omschrijving: string }>();
+      items.forEach((item) => {
+        const kept = reopened ? undefined : prev.get(item.id);
+        next.set(
+          item.id,
+          kept ?? {
+            ledger: ledgerLookup.get(item.grootboekcode) || null,
+            btwCode: item.btwCode || "GEEN",
+            omschrijving: item.aiOmschrijving || item.omschrijving,
+          },
+        );
       });
+      return next;
     });
-    setEdits(next);
   }, [open, items, ledgerLookup]);
 
   // Positive amounts on a non-invoice booking type may actually be refunds
   // of an earlier supplier invoice. Try to match them against open crediteuren.
+  // A verification payment (the refund of a card check, an IBAN check) is
+  // never one, so it is left out of the lookup.
   const potentialRefundIds = useMemo(
     () =>
       items
-        .filter((i) => i.bedrag > 0 && i.soort !== "FactuurbetalingOntvangen" && i.soort !== "FactuurOntvangen")
+        .filter((i) => i.bedrag > 0 && i.soort !== "FactuurbetalingOntvangen" && i.soort !== "FactuurOntvangen" && !isVerification(i))
         .map((i) => i.id),
     [items],
   );
@@ -282,6 +301,11 @@ export function BookingConfirmDialog({
                       ↳ Mogelijke terugbetaling: factuur {refund.mutFactuur} · {refund.bedrijf}
                     </Typography>
                   )}
+                  {isVerification(item) && (
+                    <Typography variant="caption" color="text.secondary" sx={{ flexBasis: "100%" }}>
+                      {VERIFICATION_NO_INVOICE}
+                    </Typography>
+                  )}
                 </Box>
 
                 <Divider sx={{ mb: 1.5 }} />
@@ -382,7 +406,7 @@ export function BookingConfirmDialog({
           {processing ? (
             <CircularProgress size={18} color="inherit" aria-label="Wordt verwerkt" />
           ) : (
-            "Bevestigen"
+            confirmLabel
           )}
         </Button>
       </DialogActions>

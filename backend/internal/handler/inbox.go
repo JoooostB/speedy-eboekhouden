@@ -40,6 +40,10 @@ type inboxClassifiedRow struct {
 	// shows a small "eerder geboekt" badge so the user knows where the
 	// suggestion came from.
 	Learned bool `json:"learned"`
+	// Verification is set when the line is a card or IBAN check (see
+	// inbox_verification.go). It only depends on the grid, so it is cached
+	// with the base.
+	Verification *inboxVerification `json:"verification,omitempty"`
 	// The fields below are set by the overlays (see applyInboxOverlays) and
 	// are never cached. RelatieID, RelatieNaam and Factuurnummer identify the
 	// open post this line pays; OpenPostMatch says the suggestion came from
@@ -217,6 +221,22 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 	openMatches, groups = openPostOverlays(client, bankLinesFromRows(rows))
 	groupedAuto := groupedAutoLines(groups)
 
+	// Card and IBAN checks are decided locally and booked on Bijzondere
+	// baten. The ledger account is only looked up when there is a hit; best
+	// effort, without it the rows are "review" and the user picks one.
+	verifications := detectVerificationPayments(bankLinesFromRows(rows))
+	var bijzondereBaten ledgerAccount
+	if len(verifications) > 0 {
+		if raw, err := client.GetActiveLedgerAccounts(); err == nil {
+			var accs []map[string]any
+			if json.Unmarshal(raw, &accs) == nil {
+				bijzondereBaten, _ = findBijzondereBaten(accs)
+			}
+		} else {
+			log.Printf("Inbox: ledger accounts fetch failed: %s", errClass(err))
+		}
+	}
+
 	// Pre-fetch learned mappings for this user. Lines whose normalized
 	// signal matches a confirmed mapping are auto-classified locally and
 	// never reach Claude — saves API tokens and gives the user instant
@@ -231,7 +251,9 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 	// overlay. A line that matches an open post on the amount alone, or that
 	// is in a partial or ambiguous group, still goes to Claude: that overlay
 	// is only a "review" suggestion, and the row needs its own
-	// classification when the user turns it down.
+	// classification when the user turns it down. A verification payment is
+	// decided before the learned lookup: a learned booking for the same
+	// merchant must not override it, and it is never sent to Claude.
 	var lines []claude.BatchLine
 	learnedHits := make(map[int]*database.LearnedClassification)
 	for _, row := range rows {
@@ -240,6 +262,9 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 		omschrijving := toString(row["mutOmschrijving"])
 		tegenrekening := toString(row["rekening"])
 
+		if _, ok := verifications[id]; ok {
+			continue
+		}
 		signal := database.BuildClassificationSignal(omschrijving, tegenrekening)
 		if hit, ok := learned[signal]; ok && hit.ConfirmedAt != nil {
 			learnedHits[id] = hit
@@ -298,7 +323,9 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 			Confidence:   0,
 		}
 
-		if hit, ok := learnedHits[id]; ok {
+		if hit, ok := verifications[id]; ok {
+			cr = withVerification(cr, hit, bijzondereBaten)
+		} else if hit, ok := learnedHits[id]; ok {
 			// Confirmed learned mapping wins outright — high confidence,
 			// "auto" category, and the indicator tells the user why.
 			cr.Category = "auto"
@@ -557,9 +584,13 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		rekening     string
 		datum        string
 	}
+	// Verification payments (card and IBAN checks) are recognised again on
+	// the same grid so they are never learned; a client flag is not trusted.
 	bankLineMetaByID := make(map[int]bankLineMeta)
+	var verifications map[int]verificationHit
 	if gridRaw, gridErr := client.GetImportGrid(0, importGridFetchLimit); gridErr == nil {
 		if rows, _, parseErr := eboekhouden.ParseImportGrid(gridRaw); parseErr == nil {
+			verifications = detectVerificationPayments(bankLinesFromRows(rows))
 			for _, row := range rows {
 				id, _ := toInt(row["id"])
 				bankLineMetaByID[id] = bankLineMeta{
@@ -663,13 +694,15 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 		// block the main flow. The sample description is truncated to keep
 		// the table from growing unbounded if e-boekhouden ever returns a
 		// pathologically long mutOmschrijving. A factuurbetaling is tied to
-		// one invoice, not a recurring pattern, so it is not learned.
-		if sess != nil && bankLineMetaByID != nil && !isFactuurbetaling(item.Soort) {
+		// one invoice, not a recurring pattern, so it is not learned; nor is
+		// a verification payment, whose signal would match the merchant's
+		// real charges (the signal ignores the amount).
+		if _, verification := verifications[item.ID]; sess != nil && !verification && !isFactuurbetaling(item.Soort) {
 			if meta, ok := bankLineMetaByID[item.ID]; ok {
 				signal := database.BuildClassificationSignal(meta.omschrijving, meta.rekening)
 				if signal != "" {
 					sample := truncate(meta.omschrijving, 200)
-					if upsertErr := h.db.UpsertLearned(c.Request.Context(), sess.UserID, signal,
+					if upsertErr := upsertLearned(h, c.Request.Context(), sess.UserID, signal,
 						item.Grootboekcode, item.BTWCode, soortName[item.Soort], sample); upsertErr != nil {
 						// The signal is built from the bank description and IBAN; log the user only.
 						log.Printf("UpsertLearned error for user %s: %v", sess.UserID, upsertErr)
@@ -680,11 +713,20 @@ func (h *InboxHandler) BatchProcess(c *gin.Context) {
 	}
 
 	// Invalidate classification cache
-	if sess != nil {
+	if sess != nil && h.redis != nil {
 		h.redis.Del(c.Request.Context(), inboxClassifyKey(sess.UserID))
 	}
 
 	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
+// upsertLearned writes one learned classification. A variable so tests can
+// observe what BatchProcess learns without a database.
+var upsertLearned = func(h *InboxHandler, ctx context.Context, userID, signal, grootboekcode, btwCode, soort, sample string) error {
+	if h.db == nil {
+		return nil
+	}
+	return h.db.UpsertLearned(ctx, userID, signal, grootboekcode, btwCode, soort, sample)
 }
 
 func (h *InboxHandler) getAPIKey(c *gin.Context, userID string) (string, error) {

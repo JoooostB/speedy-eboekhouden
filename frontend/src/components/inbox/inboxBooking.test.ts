@@ -1,8 +1,13 @@
 import { describe, it, expect } from "vitest";
 import type { InboxClassification, LedgerAccount, OpenPostGridItem } from "../../api/types";
 import {
+  VERIFICATION_CHIP_LABELS,
+  amountAriaLabel,
+  boekenVerificationLabel,
   bookingBlocker,
   documentMatchIndicator,
+  isVerification,
+  ledgerLabel,
   findRefundCandidate,
   hasOpenInvoiceReference,
   isFactuurbetalingSoort,
@@ -192,5 +197,37 @@ describe("labels", () => {
 
   it("describes a document match", () => {
     expect(documentMatchIndicator("Acme · 1 okt 2026 · € 21,78")).toBe("Factuur Acme · 1 okt 2026 · € 21,78 staat in je mailmap");
+  });
+});
+
+describe("verification payments", () => {
+  it("recognises a row with a verification field", () => {
+    expect(isVerification(row())).toBe(false);
+    expect(isVerification(row({ verification: { kind: "card_check", pairLineId: 43 } }))).toBe(true);
+    expect(isVerification(row({ verification: { kind: "iban_check" } }))).toBe(true);
+  });
+
+  it("reads the amount out with its direction in words", () => {
+    expect(amountAriaLabel(-1)).toBe("Afgeschreven € 1,00");
+    expect(amountAriaLabel(0.01)).toBe("Bijgeschreven € 0,01");
+  });
+
+  it("names the chip, the account as it is really called, and the Boeken button", () => {
+    const accounts = [
+      { id: 1, code: "9300", omschrijving: "Overige opbrengsten", rekeningCategorie: "VW" },
+      { id: 2, code: "9310", omschrijving: "Bijzondere baten", rekeningCategorie: "VW" },
+    ];
+    expect(VERIFICATION_CHIP_LABELS.card_check).toBe("Kaartcontrole");
+    expect(VERIFICATION_CHIP_LABELS.iban_check).toBe("Rekeningcontrole");
+    expect(ledgerLabel("9300", accounts)).toBe("9300 Overige opbrengsten");
+    expect(ledgerLabel("9999", accounts)).toBe("9999");
+    expect(ledgerLabel("", accounts)).toBe("");
+    expect(boekenVerificationLabel(row({ bedrag: -1, grootboekcode: "9310" }), accounts)).toBe("Boek controlebetaling van € 1,00 op 9310 Bijzondere baten");
+    expect(boekenVerificationLabel(row({ bedrag: 0.01, grootboekcode: "" }), accounts)).toBe("Boek controlebetaling van € 0,01");
+  });
+
+  it("books a verification row as an ordinary Geld-mutatie with the positive amount", () => {
+    const item = toInboxProcessItem(row({ bedrag: -1, grootboekcode: "9300", btwCode: "GEEN", soort: "GeldUitgegeven", verification: { kind: "card_check" } }));
+    expect(item).toEqual({ id: 42, grootboekId: 5, soort: 6, grootboekcode: "9300", btwCode: "GEEN", omschrijving: "Software Acme", bedrag: 1 });
   });
 });

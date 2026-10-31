@@ -551,7 +551,7 @@ func TestInboxClassifiedRowJSONOmitsOverlayFieldsWhenUnset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"relatieId", "relatieNaam", "factuurnummer", "openPostMatch", "documentMatch"} {
+	for _, key := range []string{"relatieId", "relatieNaam", "factuurnummer", "openPostMatch", "documentMatch", "verification", "paymentGroupId"} {
 		if json.Valid(b) && containsJSONKey(b, key) {
 			t.Errorf("unset %s is present in %s", key, b)
 		}

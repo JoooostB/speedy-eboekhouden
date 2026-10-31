@@ -10,6 +10,7 @@ import type {
 } from "../../api/types";
 import { formatMoney, parseDate } from "../../hooks/mailDocumentsModel";
 import { toInboxProcessItem } from "./inboxBooking";
+import type { VerificationPair } from "./verificationPairs";
 
 /**
  * Pure rules of a payment group: several incoming bank lines that together
@@ -313,29 +314,44 @@ export function openPostOptionLabel(p: OpenPostGridItem): string {
 
 export type InboxRenderEntry =
   | { kind: "line"; item: InboxClassification }
-  | { kind: "group"; group: PaymentGroup; lines: InboxClassification[] };
+  | { kind: "group"; group: PaymentGroup; lines: InboxClassification[] }
+  | { kind: "verificationPair"; pair: VerificationPair; lines: InboxClassification[] };
 
 /**
- * Turns the visible lines and the groups into one render list: a group
- * takes the place of its first member and holds all its members that are
- * still visible; members never appear as loose lines. A group none of whose
- * members is visible is left out.
+ * Turns the visible lines, the groups and the verification pairs into one
+ * render list: a group (or pair) takes the place of its first member and
+ * holds all its members that are still visible; members never appear as
+ * loose lines. A group none of whose members is visible is left out. A line
+ * that is in a group and in a pair renders with the group.
  */
-export function buildRenderList(items: ReadonlyArray<InboxClassification>, groups: ReadonlyArray<PaymentGroup>): InboxRenderEntry[] {
+export function buildRenderList(
+  items: ReadonlyArray<InboxClassification>,
+  groups: ReadonlyArray<PaymentGroup>,
+  pairs: ReadonlyArray<VerificationPair> = [],
+): InboxRenderEntry[] {
   const groupById = new Map(groups.map((g) => [g.id, g]));
   const memberOf = new Map<number, PaymentGroup>();
   for (const g of groups) for (const id of g.lineIds) memberOf.set(id, g);
+  const pairOf = new Map<number, VerificationPair>();
+  for (const p of pairs) for (const l of p.lines) pairOf.set(l.id, p);
   const placed = new Set<string>();
   const out: InboxRenderEntry[] = [];
   for (const item of items) {
     const g = (item.paymentGroupId && groupById.get(item.paymentGroupId)) || memberOf.get(item.id);
-    if (!g) {
-      out.push({ kind: "line", item });
+    if (g) {
+      if (placed.has(g.id)) continue;
+      placed.add(g.id);
+      out.push({ kind: "group", group: g, lines: items.filter((i) => g.lineIds.includes(i.id)) });
       continue;
     }
-    if (placed.has(g.id)) continue;
-    placed.add(g.id);
-    out.push({ kind: "group", group: g, lines: items.filter((i) => g.lineIds.includes(i.id)) });
+    const p = pairOf.get(item.id);
+    if (p) {
+      if (placed.has(p.id)) continue;
+      placed.add(p.id);
+      out.push({ kind: "verificationPair", pair: p, lines: items.filter((i) => p.lines.some((l) => l.id === i.id)) });
+      continue;
+    }
+    out.push({ kind: "line", item });
   }
   return out;
 }
