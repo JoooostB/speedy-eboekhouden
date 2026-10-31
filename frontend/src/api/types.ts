@@ -658,6 +658,17 @@ export interface InboxClassification {
   /** Id of the payment group this line is in: together with the other
    *  lines of the group it pays one sales invoice (see PaymentGroup). */
   paymentGroupId?: string;
+  /** Set when the line is a verification payment: a card check (with the
+   *  refund or charge it belongs to in pairLineId, when that is still in
+   *  the inbox) or a cent-size IBAN check. Booked on Bijzondere baten. */
+  verification?: InboxVerification;
+}
+
+export type InboxVerificationKind = "card_check" | "iban_check";
+
+export interface InboxVerification {
+  kind: InboxVerificationKind;
+  pairLineId?: number;
 }
 
 export interface InboxDocumentMatch {

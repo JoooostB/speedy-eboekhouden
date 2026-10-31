@@ -103,6 +103,20 @@ Needs a sales invoice in e-Boekhouden that a customer paid in parts, for example
 - [ ] On a phone the group row is collapsed by default and the dialog is full screen
 - [ ] Logs: only line ids, mutNrs, statuses and error classes; no company names, amounts or descriptions
 
+### 6b. Verification payments (Bijzondere baten)
+
+Needs a card check in the bank statement: a web shop charged −€ 1,00 on the betaalpas and refunded +€ 1,00 under the same reference (`eCom, Betaalpas … P1234567890 …`), plus optionally a €0,01 IBAN check and a real card subscription of the same merchant.
+
+- [ ] The −€ 1,00 and +€ 1,00 are not loose rows but one row with the chip "Kaartcontrole", the description, "−€ 1,00 en +€ 1,00 heffen elkaar op · boeken op 9300 Bijzondere baten" (the account's real name) and "€ 0,00"; the sub-rows show date, amount and description. The chip's hover text ("Een webwinkel schrijft een klein bedrag af …") is reachable with Tab (focus ring, read out as the chip's description). On a phone the "Boeken (2)" button wraps under the description. The pair also shows under the "Auto" filter tab with both legs
+- [ ] "Boeken (2)" opens "2 boekingen bevestigen" with both lines on tegenrekening "9300 - Bijzondere baten", BTW "GEEN" and the line "Controlebetaling: geen factuur nodig."; no "Mogelijke terugbetaling" hint for the +€ 1,00; "Bevestigen" books two mutations (Geld uitgegeven and Geld ontvangen on 9300), the snackbar says "2 regels geboekt" and both lines disappear
+- [ ] A single leg (only the −€ 1,00 or only the +€ 1,00 in the inbox) is a loose row with the chip "Kaartcontrole", the caption "Controlebetaling zonder terugboeking in de inbox · boeken op 9300 Bijzondere baten", category "Auto" and a "Boeken" button in the header; "Boeken" → "Bevestigen" books it
+- [ ] A €0,01 line shows "Rekeningcontrole" with "Controlebetaling · boeken op 9300 Bijzondere baten"; a €0,50 line shows the same chip but category "Controleren"; the −€ 43,38 subscription of the same merchant has no chip and is classified by Claude or the learned memory
+- [ ] Without an account named "Bijzondere baten" and without code 9300 the row is "Controleren" with "Controlebetaling. Geen rekening Bijzondere baten gevonden: kies zelf een grootboekrekening.", expands with the grootboek picker and BTW "GEEN", and has no header button
+- [ ] Batch: ticking the pair row selects both lines ("2 geselecteerd"); "Selecteer alle zichtbare regels" includes them; "Goedkeuren" books them with the rest; after a batch with one failed row the other rows stay selected only if they were not booked
+- [ ] Partial failure (book one leg in e-Boekhouden by hand first): the dialog stays open with the failed leg only, the alert reads "1 van de 2 controlebetalingen geboekt, 1 mislukt: …", a tegenrekening picked by hand is still there, and the primary button reads "Opnieuw proberen (1)"; the booked leg has left the list and the other leg is a loose "Kaartcontrole" row
+- [ ] After booking, Instellingen → Geleerde boekingen shows no new entry for the merchant (a learned "merchant → 9300" would swallow its real charges). Delete any such entry made before this feature
+- [ ] Logs: only line ids, mutNrs, statuses and error classes; no merchant names, amounts or descriptions
+
 ## 7. Uploading invoices and receipts
 
 - [ ] "Facturen uploaden" accepts PDF, JPG and PNG, several at once; an expanded "Factuur" row has a drop zone too

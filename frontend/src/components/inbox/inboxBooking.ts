@@ -1,11 +1,13 @@
 import type {
   InboxClassification,
   InboxProcessItem,
+  InboxVerificationKind,
   LedgerAccount,
   MutatieSoort,
   OpenPostGridItem,
 } from "../../api/types";
 import { MUTATIE_SOORT_CODES } from "../../api/types";
+import { formatMoney } from "../../hooks/mailDocumentsModel";
 
 /**
  * Pure rules for turning an inbox row into a booking. Shared by InboxRow,
@@ -93,4 +95,66 @@ export function koppelenGroupLabel(count: number, factuurnummer: string, relatie
 /** Row indicator for a bank line that pays an analysed mail-folder document. */
 export function documentMatchIndicator(title: string): string {
   return `Factuur ${title} staat in je mailmap`;
+}
+
+// Verification payments (card and IBAN checks), booked on Bijzondere baten.
+
+/** True when the backend recognised the line as a card or IBAN check. */
+export function isVerification(item: Pick<InboxClassification, "verification">): boolean {
+  return !!item.verification;
+}
+
+export const VERIFICATION_CHIP_LABELS: Record<InboxVerificationKind, string> = {
+  card_check: "Kaartcontrole",
+  iban_check: "Rekeningcontrole",
+};
+
+export const VERIFICATION_CHIP_TOOLTIPS: Record<InboxVerificationKind, string> = {
+  card_check:
+    "Een webwinkel schrijft een klein bedrag af om je betaalpas te controleren en stort het terug. Speedy boekt beide op Bijzondere baten.",
+  iban_check: "Een kleine overboeking die controleert of dit rekeningnummer van jou is. Speedy boekt het op Bijzondere baten.",
+};
+
+/** The slate chip of a verification payment: neither a cost nor revenue, so
+ *  a colour no other chip in the list uses. #334155 on the tinted background
+ *  over white is about 8:1. Text label always, never colour alone. Rendered
+ *  as a button so the tooltip reaches keyboard and screen-reader users. */
+export const VERIFICATION_CHIP_SX = {
+  fontWeight: 600,
+  fontSize: "0.6875rem",
+  height: 22,
+  flexShrink: 0,
+  bgcolor: "rgba(100, 116, 139, 0.14)",
+  color: "#334155",
+  cursor: "help",
+  border: 0,
+  "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 },
+} as const;
+
+/** The info line in the confirm dialog: a verification payment needs no invoice. */
+export const VERIFICATION_NO_INVOICE = "Controlebetaling: geen factuur nodig.";
+
+/** "9300 Bijzondere baten" for a ledger code, as the account is really
+ *  called (the 9300 fallback may carry another name); the bare code when the
+ *  account list does not know it. */
+export function ledgerLabel(code: string, accounts: ReadonlyArray<Pick<LedgerAccount, "code" | "omschrijving">>): string {
+  if (!code) return "";
+  const acc = accounts.find((a) => a.code === code);
+  return acc ? `${acc.code} ${acc.omschrijving}`.trim() : code;
+}
+
+/** "Afgeschreven € 1,00" / "Bijgeschreven € 1,00": the amount read out with
+ *  the direction in words, so the sign never depends on colour or a glyph. */
+export function amountAriaLabel(bedrag: number): string {
+  const direction = bedrag < 0 ? "Afgeschreven" : "Bijgeschreven";
+  return `${direction} ${formatMoney(Math.abs(bedrag))}`;
+}
+
+/** Accessible name of the "Boeken" button on a verification row. */
+export function boekenVerificationLabel(
+  item: Pick<InboxClassification, "bedrag" | "grootboekcode">,
+  accounts: ReadonlyArray<Pick<LedgerAccount, "code" | "omschrijving">>,
+): string {
+  const label = ledgerLabel(item.grootboekcode, accounts);
+  return `Boek controlebetaling van ${formatMoney(Math.abs(item.bedrag))}${label ? ` op ${label}` : ""}`;
 }
