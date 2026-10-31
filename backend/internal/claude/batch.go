@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
+	anthropic "github.com/anthropics/anthropic-sdk-go/v2"
+	"github.com/anthropics/anthropic-sdk-go/v2/option"
 )
 
 // batchClassifyMaxTokens caps Claude's response budget for a single batch
@@ -136,9 +136,8 @@ func (s *Service) ClassifyBatch(ctx context.Context, apiKey, entityType string, 
 	userMsg := fmt.Sprintf("Classify these %d bank statement lines.\n\n<bank_data>\n%s\n</bank_data>\n\nReturn only the JSON array.", len(lines), string(linesJSON))
 
 	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:       anthropic.ModelClaudeHaiku4_5,
-		MaxTokens:   batchClassifyMaxTokens,
-		Temperature: anthropic.Float(0), // deterministic batch classification
+		Model:     anthropic.ModelClaudeHaiku4_5,
+		MaxTokens: batchClassifyMaxTokens,
 		System: []anthropic.TextBlockParam{
 			{Text: systemPrompt},
 		},

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
+	anthropic "github.com/anthropics/anthropic-sdk-go/v2"
+	"github.com/anthropics/anthropic-sdk-go/v2/option"
 	"github.com/gin-gonic/gin"
 	"github.com/joooostb/speedy-eboekhouden/internal/crypto"
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
