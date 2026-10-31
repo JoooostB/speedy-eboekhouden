@@ -4,7 +4,6 @@ go 1.26.0
 
 require (
 	github.com/anthropics/anthropic-sdk-go/v2 v2.4.0
-	github.com/anthropics/anthropic-sdk-go/v2 v2.4.0
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.13
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.6
 	github.com/gin-gonic/gin v1.12.0
@@ -29,7 +28,6 @@ require (
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

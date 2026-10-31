@@ -8,8 +8,8 @@ import (
 	"log"
 	"strings"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
+	anthropic "github.com/anthropics/anthropic-sdk-go/v2"
+	"github.com/anthropics/anthropic-sdk-go/v2/option"
 )
 
 // readInvoiceMaxTokens is the upper bound for the Sonnet response when
@@ -283,12 +283,9 @@ func (s *Service) ReadInvoice(ctx context.Context, apiKey string, mediaType stri
 	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.ModelClaudeSonnet4_5,
 		MaxTokens: readInvoiceMaxTokens,
-		// Temperature 0: invoice extraction is a deterministic data-extraction
-		// task. We want the same PDF to produce the same JSON every time so a
-		// re-upload doesn't oscillate between btwCode=GEEN, BU_EU_INK, etc.
-		// Combined with the upload-key-based cache in the inbox match flow,
-		// the user gets stable suggestions across retries.
-		Temperature: anthropic.Float(0),
+		// No temperature: API version 2026-10-21 (SDK v2) dropped sampling
+		// parameters. Stable suggestions across re-uploads come from the
+		// analysis cache keyed on the file hash (invoice:analyze).
 		System: []anthropic.TextBlockParam{
 			{Text: prompt},
 		},
@@ -347,9 +344,8 @@ func (s *Service) ClassifyTransaction(ctx context.Context, apiKey string, req Cl
 	)
 
 	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:       anthropic.ModelClaudeHaiku4_5,
-		MaxTokens:   classifyTransactionMaxTokens,
-		Temperature: anthropic.Float(0), // deterministic single-line classification
+		Model:     anthropic.ModelClaudeHaiku4_5,
+		MaxTokens: classifyTransactionMaxTokens,
 		System: []anthropic.TextBlockParam{
 			{Text: classifySystemPrompt},
 		},
