@@ -17,8 +17,9 @@ import (
 // tips and a long redenering have been observed near 1.5k tokens, so 4k
 // gives ~2.5x headroom for unusual cases (multiple line items, long
 // supplier descriptions). 2048 — the previous value — was tight and
-// occasionally truncated for verbose vendors.
-const readInvoiceMaxTokens = 4096
+// occasionally truncated for verbose vendors. Prompt version 3 added the
+// proposed regels (up to 8 objects) and the splitsadvies, hence 6144.
+const readInvoiceMaxTokens = 6144
 
 // classifyTransactionMaxTokens covers the single-line classification
 // response (a few short JSON fields). 1024 is comfortably above the
@@ -138,7 +139,15 @@ Fields to extract:
   * type "gemengd_gebruik": if the purchase could be mixed personal/business use (phone, laptop, car, internet), advise about zakelijk percentage. Tip: "Bij gemengd gebruik (zakelijk/privé) mag alleen het zakelijke deel worden afgetrokken."
   * type "representatie": if it's a restaurant, catering, or entertainment expense, advise about the 80% rule. Tip: "Representatiekosten (eten, drinken, entertainment): slechts 80% is aftrekbaar. De overige 20% is niet aftrekbaar."
   * type "geen_btw": if BTW should NOT be deductible (e.g., private use component, representation), mention it.
-  If none of the above apply, return an empty array [].`
+  If none of the above apply, return an empty array [].
+- regels: array of proposed booking lines, ONLY when splitting the document is the right choice for Dutch tax purposes. Return an empty array [] in every other case (a plain invoice with one BTW rate, one kind of cost, no tip). Propose a split when ANY of these apply:
+  (a) The document carries more than one BTW rate (a restaurant bill with 21% drinks, 9% food and a 0% tip; a shop mixing 9% and 21% items). One regel per rate.
+  (b) A staff gift or other WKR item (werkkostenregeling: a birthday present, a Christmas package, a gift for an employee) is billed together with a cost that does not fall under the WKR or the eindheffing, such as shipping or handling. The gift goes to the WKR / personeelskosten ledger, the shipping to its own ledger (verzendkosten or algemene kosten).
+  (c) A tip (fooi): always its own regel with btwCode "GEEN" and btwPercentage 0, because there is no BTW on a tip.
+  (d) On a restaurant or catering bill, representation (food and drink) next to items that are not representation, when that changes the ledger.
+  Each regel is an object {"omschrijving": short Dutch label (max 60 chars), "bedragIncl": gross amount of the line in the document's currency, "btwPercentage": 0, 9 or 21, "btwCode": same codes as above, "grootboekcode": a code from the list below, "soort": one of "product", "verzending", "fooi", "korting", "overig"}.
+  Rules: combine similar items into one regel; at most 8 regels; the regels MUST add up to bedragInclBtw exactly; a discount (korting) is a positive amount subtracted by the other lines, never a negative regel; grootboekcode per regel ONLY from the list below, and when no suitable account exists use the same grootboekcode as the main suggestion.
+- splitsAdvies: null when regels is empty. Otherwise an object {"reden": one of "wkr", "btw_tarieven", "fooi", "verzending_apart", "representatie", "overig", "toelichting": one short Dutch sentence (max 120 chars) that tells the user why the split is the right choice, e.g. "Het cadeau valt onder de WKR, de verzendkosten niet."}.`
 
 // LedgerAccountInfo holds the code + description for prompt building.
 type LedgerAccountInfo struct {
@@ -319,6 +328,9 @@ func (s *Service) ReadInvoice(ctx context.Context, apiKey string, mediaType stri
 	}
 
 	NormalizeDocumentType(&invoice)
+	// The proposed lines and the advice are the user's document data: never
+	// logged, only validated.
+	NormalizeRegels(&invoice)
 	return &invoice, nil
 }
 

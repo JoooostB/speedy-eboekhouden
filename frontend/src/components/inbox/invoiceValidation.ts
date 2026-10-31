@@ -29,6 +29,9 @@ export interface InvoiceValidationInput {
   /** False when an amount does not read as an amount (parseAmount) or the
    *  total is not above zero; such a row would book a wrong amount. */
   amountsValid?: boolean;
+  /** For a split booking: why its lines cannot be booked yet (validateRegels
+   *  in regels.ts), null when they add up. Undefined for a single line. */
+  splitBlocker?: string | null;
 }
 
 export const AMOUNT_BLOCKER = "Bedrag ontbreekt of klopt niet";
@@ -36,6 +39,7 @@ export const AMOUNT_BLOCKER = "Bedrag ontbreekt of klopt niet";
 export function invoiceBlocker(inv: InvoiceValidationInput): string | null {
   if (inv.isCreditnota) return CREDITNOTA_NOT_BOOKABLE;
   if (inv.amountsValid === false) return AMOUNT_BLOCKER;
+  if (inv.splitBlocker) return inv.splitBlocker;
   if (!inv.hasLedgerAccount) return "Geen tegenrekening";
   if (inv.isReceipt && !inv.hasImportId) return "Geen afschriftregel gekoppeld";
   if (!inv.isReceipt && !inv.hasRelation) return "Geen relatie";

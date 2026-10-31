@@ -55,7 +55,7 @@ The automated tests cover the handler against a fake e-boekhouden; what e-boekho
 
 - [ ] The chip "Gekoppeld" and the menu item "Verbinding met e-Boekhouden verbreken" open the confirmation; Instellingen → "Verbinding met e-Boekhouden" has the button "Verbinding verbreken"
 - [ ] The dialog "Verbinding met e-Boekhouden verbreken?" opens with focus on "Annuleren" and lists what happens: afmelden bij e-Boekhouden, token verwijderd, analyses, suggesties, duplicaatmarkeringen en negeerlijst verwijderd, geleerde boekingen blijven, opnieuw verbinden kan altijd
-- [ ] Before confirming, fill Redis: open the inbox with an API key and at least one unprocessed bank line (`inbox:classify:<userId>`), analyse a document (`doc:analysis:*` and `invoice:analyze:v2:*`) and book an invoice (`invoice:submitted:*`)
+- [ ] Before confirming, fill Redis: open the inbox with an API key and at least one unprocessed bank line (`inbox:classify:<userId>`), analyse a document (`doc:analysis:*` and `invoice:analyze:v3:*`) and book an invoice (`invoice:submitted:*`)
 - [ ] Click "Verbinding verbreken". `POST /api/v1/eboekhouden/disconnect` answers `{"status":"ok","ebLoggedOut":…,"purgedKeys":n}` with `n` > 0 (devtools). Note the value of `ebLoggedOut`: ______
 - [ ] Snackbar: "Verbinding verbroken en afgemeld bij e-Boekhouden" when `ebLoggedOut` is true, otherwise "Verbinding in Speedy verbroken. e-Boekhouden laat de sessie zelf verlopen."
 - [ ] The chip reads "Niet gekoppeld", the inbox shows the connect prompt, `GET /api/v1/documents` answers 412
@@ -128,6 +128,22 @@ Needs a card check in the bank statement: a web shop charged −€ 1,00 on the 
 - [ ] "Boeken" books the invoice; the dialog shows "1 van 1 facturen geboekt" and "Sluiten"; after closing, both lists reload
 - [ ] With an "Archiefmap" picked, the file is in that folder in e-boekhouden, named `JJJJ-MM-DD_Leverancier_Factuurnummer.pdf` and linked to the mutation. Without a folder and without R2 (the local stack) nothing is archived
 - [ ] Upload the same PDF again: the dialog warns "Mogelijk dubbele factuur"
+
+### 7a. Split bookings (gesplitste boekingen)
+
+- [ ] Upload an invoice of a gift with shipping (e.g. € 39,75: € 35,80 products and € 3,95 shipping, both 9 %). Click "Splitsen over meerdere regels": the amount fields are replaced by "Regels" with the invoice as "Regel 1" (tegenrekening and BTW code kept, the full € 39,75), an empty "Regel 2" with the same BTW code and "Totaal incl. BTW" € 39,75. The status reads "Verdeeld" (regel 2 counts as 0), the empty amount of regel 2 is marked red, and "Boeken" skips the row with "Regel 2: vul een bedrag in"
+- [ ] Change regel 1 to "35,80" (status "Nog te verdelen: € 3,95"), fill regel 2 with "3,95" on another ledger (e.g. verzendkosten): the status turns "Verdeeld", the BTW under the amounts reads "BTW € 2,96" and "BTW € 0,33". "Regel toevoegen" pre-fills a third line with the remainder; "Regel 3 verwijderen" removes it again
+- [ ] Type "40,00" in regel 1: the status reads "€ 4,20 te veel" and "Boeken" skips the row ("€ 4,20 te veel" in the hint, "1 met regels die nog niet kloppen")
+- [ ] Pick another relation with a default ledger: regel 1 follows it (unless you picked regel 1's ledger by hand). "Niet splitsen" brings the single fields back with regel 1's tegenrekening and BTW code and the total unchanged
+- [ ] Book it. In e-Boekhouden the FactuurOntvangen has 2 regels on two ledgers with BTW 2,96 and 0,33 (3,29 in total, one cent above the invoice's 3,28: e-boekhouden rounds per regel); the payment is still one line and the bank line is processed. Check in devtools that the request carried `regels` (2 items, `tegenRekeningId` each) and no `extraLines`: ______
+- [ ] Restaurant receipt against its bank line (e.g. € 121,00 on the statement): "Bonnetje", then "Splitsen over meerdere regels". The note reads "De regels moeten optellen tot het bedrag op het afschrift: € 121,00." and there is no total field. Three lines: drinks 21 % (HOOG_INK_21), food 9 %, tip "GEEN" on the same ledger; "Boeken" only once the status reads "Verdeeld". e-Boekhouden shows one Geld uitgegeven with 3 regels, each with its own BTW, and the bank line is processed
+- [ ] A receipt € 5,00 below its bank line still shows "Splits in fooi"; clicking it opens the editor with the receipt as regel 1 and "Fooi" € 5,00 without BTW as regel 2, status "Verdeeld"
+- [ ] A creditnota offers no "Splitsen over meerdere regels"
+- [ ] Proposed split: upload the gift + shipping invoice of the fictitious "Voorbeeld Cadeauwinkel" (a staff gift at 9 % plus shipping). The dialog opens already split, with the info alert "Speedy stelt voor deze factuur te splitsen: Het cadeau valt onder de WKR, de verzendkosten niet." (or a similar sentence), the gift on the WKR / personeelsgeschenken ledger, the shipping on verzendkosten or algemene kosten, status "Verdeeld". Nothing is booked until you click "Boeken"
+- [ ] While the proposal is untouched the only way back is "Ongedaan maken" in that note (no "Niet splitsen"): it returns to one line with the values of the analysis (ledger, BTW code, amounts). Change any line: the note disappears and "Niet splitsen" appears, which keeps regel 1. Pick another relation with a default ledger while split: the lines keep their ledgers; after "Niet splitsen" the default applies again
+- [ ] A restaurant receipt with 21 % drinks, 9 % food and a tip opens split into three lines (reason "btw_tarieven" or "fooi"), the tip "GEEN" without BTW. A plain invoice with one BTW rate (a subscription) opens as one line, without an alert
+- [ ] Check in devtools that the analyze response of the gift invoice carries `regels` (2 items) and `splitsAdvies`, and that the subscription's response has neither; the Redis key is `invoice:analyze:v3:…`
+- [ ] Through the API: regels that add up to € 2,00 less than the total answer 400 "De regels tellen op tot € 37,75, het totaal is € 39,75." and nothing is staged or booked; a regel without `tegenRekeningId` answers "Regel 2: kies een grootboekrekening."
 
 ## 8. Settings (Instellingen)
 
@@ -226,7 +242,7 @@ End-to-end with a real administration. The Go and vitest suites cover the status
 - [ ] A document analysed in another session comes from the cache: no Claude call, same title
 - [ ] A non-EUR invoice (e.g. CHF): the title shows "CHF 32,80"; in the review dialog the linked bank line carries "(geschatte koers, controleer het bedrag)"; the booking uses the bank line's real EUR amount
 - [ ] In "Afschriften" the paying bank line shows the chip "Document gevonden" and the indicator "Factuur {titel} staat in je mailmap"; expanding the row shows "Factuur koppelen en boeken". Both tabs point at the same pair (the assignment is global)
-- [ ] Redis: `docker compose exec redis redis-cli --scan --pattern 'doc:*'` lists `doc:analysis:v2:<user>:<file>` with a TTL of about 30 days (`TTL <key>`) and no leftover `doc:analyzing:*`. Each analysis also writes `invoice:analyze:v2:<user>:<hash>:<accounts>` (7 days)
+- [ ] Redis: `docker compose exec redis redis-cli --scan --pattern 'doc:*'` lists `doc:analysis:v3:<user>:<file>` with a TTL of about 30 days (`TTL <key>`) and no leftover `doc:analyzing:*`. Each analysis also writes `invoice:analyze:v3:<user>:<hash>:<accounts>` (7 days)
 
 ### 14c. Booking a matched document (rename and move)
 
@@ -239,6 +255,7 @@ End-to-end with a real administration. The Go and vitest suites cover the status
 - [ ] Live-only, supplier folder: when the supplier already has a folder in the archive, the picker preselects it
 - [ ] Live-only, deleted month folder: delete `Facturen / 2026 / 10 Oktober` in e-Boekhouden, then book a document without picking a folder. Speedy creates a new "10 Oktober" under "2026" and files the document there, never in the deleted folder. Check in devtools that `GET /v1/api/folder/directory` still lists the deleted folder with `isDeleted: true`: ______
 - [ ] Book a receipt (JPG) against its bank line: one "Geld uitgegeven" mutation; the file is renamed `JJJJ-MM-DD_Leverancier_bonnetje.jpg` and moved
+- [ ] Book a mail-folder invoice split over two ledgers (section 7a): the mutation has two regels, and the file is still linked, renamed and moved
 
 ### 14d. Booking without a match, then linking the payment
 

@@ -44,8 +44,9 @@ const invoiceSubmittedMarkerTTL = 90 * 24 * time.Hour
 // written by the version-1 prompt can never yield "overig" or "creditnota",
 // and waiting for the 7-day TTL to roll them out is too slow. The
 // invoice:submitted marker is deliberately NOT versioned: it must keep
-// recognising files booked before a bump.
-const invoicePromptVersion = "2"
+// recognising files booked before a bump. Version 3 added the proposed
+// regels and the splitsAdvies: a version-2 entry can never propose a split.
+const invoicePromptVersion = "3"
 
 // importGridFetchLimit is the page size used whenever a handler needs the
 // whole unprocessed import grid at once (bank-line matching, bank-account
@@ -348,6 +349,7 @@ func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData,
 				// Entries cached before documentType existed have it empty;
 				// derive it from isReceipt so the response shape is stable.
 				claude.NormalizeDocumentType(&cachedInvoice)
+				claude.NormalizeRegels(&cachedInvoice)
 				invoice = &cachedInvoice
 				cacheHit = true
 				log.Printf("Invoice analyze cache HIT for user %s pdfHash=%s", sess.UserID, pdfHash[:16])
@@ -545,6 +547,12 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		// Optional — when absent (legacy clients), no marker is written
 		// but the booking still succeeds.
 		PdfHash string `json:"pdfHash,omitempty"`
+
+		// Regels splits the invoice over several lines, each with its own
+		// tegenrekening, BTW code and gross amount (regels.go). When set,
+		// TegenRekeningId, BTWCode and BTWBedrag are ignored and the lines
+		// must add up to BedragIncl. The soort 4 payment stays one line.
+		Regels []regelInput `json:"regels,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -573,7 +581,17 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een relatie (crediteur)."})
 		return
 	}
-	if req.TegenRekeningId == 0 {
+	// A split booking carries its tegenrekeningen per line; a single-line
+	// booking needs the one on the request.
+	var regels []regel
+	if len(req.Regels) > 0 {
+		lines, err := normalizeRegels(req.Regels, req.BedragIncl, 1, nil)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		regels = lines
+	} else if req.TegenRekeningId == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een grootboekrekening."})
 		return
 	}
@@ -634,7 +652,25 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	archiefFileId := arch.fileID
 
 	// Step 2: Create "Factuur ontvangen" mutation (soort 1)
-	// This books: debit cost account (tegenRekening), credit crediteuren (rekening)
+	// This books: debit cost account (tegenRekening), credit crediteuren (rekening).
+	// A split booking sends one regel per line (mutatieRegelMaps, no per-regel
+	// omschrijving, like the e-boekhouden UI); a single-line booking keeps the
+	// shape it has always had.
+	mutatieRegels := []map[string]any{{
+		"index":           0,
+		"bedrag":          req.BedragExcl,
+		"tegenRekening":   req.TegenRekeningId,
+		"bedragExclusief": req.BedragExcl,
+		"bedragInclusief": req.BedragIncl,
+		"btwCode":         req.BTWCode,
+		"btw":             req.BTWBedrag,
+	}}
+	inEx := req.InEx
+	if len(regels) > 0 {
+		// The UI's "Incl btw" shape: gross bedrag per regel with inEx "IN".
+		mutatieRegels = mutatieRegelMaps(regels, false)
+		inEx = "IN"
+	}
 	invoiceMutPayload, _ := json.Marshal(map[string]any{
 		"mutatie": map[string]any{
 			"rekening":     req.RekeningId, // crediteuren account
@@ -643,18 +679,10 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 			"termijn":      30,
 			"factuur":      req.Factuurnummer,
 			"soort":        1, // FactuurOntvangen
-			"inEx":         req.InEx,
+			"inEx":         inEx,
 			"omschrijving": truncate(req.Omschrijving, 200),
 		},
-		"mutatieRegels": []map[string]any{{
-			"index":           0,
-			"bedrag":          req.BedragExcl,
-			"tegenRekening":   req.TegenRekeningId,
-			"bedragExclusief": req.BedragExcl,
-			"bedragInclusief": req.BedragIncl,
-			"btwCode":         req.BTWCode,
-			"btw":             req.BTWBedrag,
-		}},
+		"mutatieRegels": mutatieRegels,
 	})
 
 	mutResp, err := client.CreateMutatie(invoiceMutPayload)
@@ -902,10 +930,16 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		// BankAccountId is the e-boekhouden internal ID of the bank account
 		// to debit. When ImportId is set we look it up from the bank line.
 		BankAccountId int `json:"bankAccountId,omitempty"`
-		// ExtraLines is optional — used by the dialog when the user
-		// splits a receipt into multiple booking lines (e.g. food vs tip).
-		// Each line is appended to mutatieRegels after the main line.
+		// ExtraLines is the legacy split: lines appended after the main line,
+		// each defaulting to the main line's tegenrekening. Deprecated in
+		// favour of Regels; kept for clients that analysed with an older
+		// version. A request may carry one of the two, not both.
 		ExtraLines []extraLine `json:"extraLines,omitempty"`
+		// Regels splits the receipt over several lines, each with its own
+		// tegenrekening, BTW code and gross amount (regels.go). When set,
+		// TegenRekeningId, BTWCode and BTWBedrag are ignored and the lines
+		// must add up to the bank line's amount (BedragIncl without one).
+		Regels []regelInput `json:"regels,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -923,7 +957,11 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Ongeldig bedrag."})
 		return
 	}
-	if req.TegenRekeningId == 0 {
+	if len(req.Regels) > 0 && len(req.ExtraLines) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Stuur óf regels óf extraLines, niet allebei."})
+		return
+	}
+	if len(req.Regels) == 0 && req.TegenRekeningId == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Kies een grootboekrekening."})
 		return
 	}
@@ -975,6 +1013,10 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	// have a "Geld uitgegeven" mutation booked against an unrelated account
 	// in the same administration (e.g. savings, investment).
 	bankAccountId := 0
+	// total is what a split booking's lines must add up to: the bank line's
+	// amount when the line is known (the booking processes that line), else
+	// the receipt total.
+	total := req.BedragIncl
 	if req.ImportId > 0 {
 		raw, err := client.GetImportGrid(0, importGridFetchLimit)
 		if err == nil {
@@ -983,6 +1025,9 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 				id, _ := toInt(row["id"])
 				if id == req.ImportId {
 					bankAccountId, _ = toInt(row["grootboekId"])
+					if bedrag, ok := toFloat(row["mutBedrag"]); ok && bedrag != 0 {
+						total = abs(bedrag)
+					}
 					break
 				}
 			}
@@ -1012,6 +1057,17 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	if bankAccountId == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Speedy weet niet van welke bankrekening dit bonnetje is betaald. Koppel het aan een afschriftregel die nog openstaat."})
 		return
+	}
+	// A split booking is validated against the total before anything is
+	// staged or booked.
+	var splitRegels []regel
+	if len(req.Regels) > 0 {
+		lines, err := normalizeRegels(req.Regels, total, 6, nil)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		splitRegels = lines
 	}
 
 	// Step 1: Resolve the document and stage the archive file — see SubmitFull
@@ -1074,13 +1130,21 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		}
 		regels = append(regels, regel)
 	}
+	// A split booking replaces the main line and the legacy extra lines
+	// with one regel per line, each on its own tegenrekening.
+	receiptInEx := "EX"
+	if len(splitRegels) > 0 {
+		// The UI's "Incl btw" shape: gross bedrag per regel with inEx "IN".
+		regels = mutatieRegelMaps(splitRegels, true)
+		receiptInEx = "IN"
+	}
 
 	mutPayload, _ := json.Marshal(map[string]any{
 		"mutatie": map[string]any{
 			"rekening":     bankAccountId,
 			"datum":        req.Datum,
 			"soort":        6, // GeldUitgegeven
-			"inEx":         "EX",
+			"inEx":         receiptInEx,
 			"omschrijving": truncate(desc, 200),
 		},
 		"mutatieRegels": regels,

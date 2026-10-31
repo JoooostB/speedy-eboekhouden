@@ -1,6 +1,9 @@
 package claude
 
-import "strings"
+import (
+	"math"
+	"strings"
+)
 
 // Document types Claude assigns to an uploaded file. Everything the
 // bookkeeping flow can book is a factuur, bonnetje or creditnota; "overig"
@@ -52,6 +55,102 @@ type InvoiceData struct {
 	Confidence      float64           `json:"confidence"`
 	Redenering      string            `json:"redenering"`
 	BelastingAdvies []BelastingAdvies `json:"belastingAdvies"`
+	// Regels is Claude's proposed split of the document into booking lines,
+	// only filled when the split is tax-relevant (several BTW rates, a staff
+	// gift next to shipping, a tip, representation next to other items).
+	// Empty for a plain single-line document and for analyses cached before
+	// prompt version 3. NormalizeRegels drops a proposal that does not add
+	// up; SplitsAdvies then goes with it.
+	Regels []InvoiceRegel `json:"regels,omitempty"`
+	// SplitsAdvies says why Claude proposes the split, for the review dialog.
+	SplitsAdvies *SplitsAdvies `json:"splitsAdvies,omitempty"`
+}
+
+// InvoiceRegel is one proposed booking line of a split document. Amounts
+// are gross; the BTW code and ledger code are suggestions in the same id
+// space as the single-line fields.
+type InvoiceRegel struct {
+	Omschrijving  string  `json:"omschrijving"`
+	BedragIncl    float64 `json:"bedragIncl"`
+	BTWPercentage float64 `json:"btwPercentage"`
+	BTWCode       string  `json:"btwCode"`
+	Grootboekcode string  `json:"grootboekcode"`
+	// Soort is product, verzending, fooi, korting or overig.
+	Soort string `json:"soort"`
+}
+
+// SplitsAdvies is the reason for a proposed split.
+type SplitsAdvies struct {
+	// Reden is wkr, btw_tarieven, fooi, verzending_apart, representatie or
+	// overig; an enum token the frontend may track.
+	Reden string `json:"reden"`
+	// Toelichting is one short Dutch sentence for the user.
+	Toelichting string `json:"toelichting"`
+}
+
+// Reasons of a SplitsAdvies.
+const (
+	SplitsRedenWKR         = "wkr"
+	SplitsRedenBTWTarieven = "btw_tarieven"
+	SplitsRedenFooi        = "fooi"
+	SplitsRedenVerzending  = "verzending_apart"
+	SplitsRedenRepresent   = "representatie"
+	SplitsRedenOverig      = "overig"
+)
+
+// maxProposedRegels caps a proposal; the prompt asks for at most this many.
+const maxProposedRegels = 8
+
+// NormalizeRegels keeps a proposed split only when it is usable: two to
+// eight lines, every line with a positive amount, adding up to the
+// document total within a cent. Anything else is dropped together with the
+// advice, so the dialog opens single-line as before. An unknown reden
+// becomes "overig"; a missing advice next to valid lines gets one.
+func NormalizeRegels(d *InvoiceData) {
+	if d == nil {
+		return
+	}
+	drop := func() {
+		d.Regels = nil
+		d.SplitsAdvies = nil
+	}
+	if len(d.Regels) < 2 || len(d.Regels) > maxProposedRegels {
+		drop()
+		return
+	}
+	var sum int64
+	for i := range d.Regels {
+		r := &d.Regels[i]
+		if math.IsNaN(r.BedragIncl) || math.IsInf(r.BedragIncl, 0) || r.BedragIncl <= 0 {
+			drop()
+			return
+		}
+		r.Omschrijving = strings.TrimSpace(r.Omschrijving)
+		r.BTWCode = strings.ToUpper(strings.TrimSpace(r.BTWCode))
+		r.Grootboekcode = strings.TrimSpace(r.Grootboekcode)
+		r.Soort = strings.ToLower(strings.TrimSpace(r.Soort))
+		switch r.Soort {
+		case "product", "verzending", "fooi", "korting", "overig":
+		default:
+			r.Soort = "overig"
+		}
+		sum += int64(math.Round(r.BedragIncl * 100))
+	}
+	total := int64(math.Round(d.BedragInclBTW * 100))
+	if diff := sum - total; diff > 1 || diff < -1 {
+		drop()
+		return
+	}
+	if d.SplitsAdvies == nil {
+		d.SplitsAdvies = &SplitsAdvies{}
+	}
+	switch r := strings.ToLower(strings.TrimSpace(d.SplitsAdvies.Reden)); r {
+	case SplitsRedenWKR, SplitsRedenBTWTarieven, SplitsRedenFooi, SplitsRedenVerzending, SplitsRedenRepresent, SplitsRedenOverig:
+		d.SplitsAdvies.Reden = r
+	default:
+		d.SplitsAdvies.Reden = SplitsRedenOverig
+	}
+	d.SplitsAdvies.Toelichting = strings.TrimSpace(d.SplitsAdvies.Toelichting)
 }
 
 // NormalizeDocumentType makes DocumentType and IsReceipt consistent. The

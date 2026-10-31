@@ -194,3 +194,33 @@ describe("receiptExtraLines", () => {
     expect(out[1]).toMatchObject({ bedragExcl: 1000, btwBedrag: 90 });
   });
 });
+
+describe("regels (split booking)", () => {
+  const regels = [
+    { omschrijving: "Cadeau", tegenRekeningId: 4500, btwCode: "LAAG_INK_9", bedragIncl: 35.8 },
+    { omschrijving: "Verzendkosten", tegenRekeningId: 4700, btwCode: "LAAG_INK_9", bedragIncl: 3.95 },
+  ];
+
+  it("sends regels as the last field of an invoice, for both sources", () => {
+    const upload = buildFullSubmitPayload(input({ bedragIncl: 39.75, bedragExcl: 36.46, btwBedrag: 3.29, regels }));
+    expect(Object.keys(upload).at(-1)).toBe("regels");
+    expect(upload.regels).toEqual(regels);
+    const archive = buildFullSubmitPayload(input({ source: archiveSource, regels }));
+    expect(Object.keys(archive).at(-1)).toBe("regels");
+  });
+
+  it("never sends a single regel, so a single-line booking keeps its body", () => {
+    expect(buildFullSubmitPayload(input({ regels: [regels[0]] }))).not.toHaveProperty("regels");
+    expect(buildFullSubmitPayload(input({ regels: [] }))).not.toHaveProperty("regels");
+    expect(buildFullSubmitPayload(input({}))).not.toHaveProperty("regels");
+  });
+
+  it("sends regels for a receipt and drops the legacy extra lines", () => {
+    const out = buildReceiptSubmitPayload(
+      input({ importId: 77, extraLines: [{ bedragIncl: 5, bedragExcl: 5, btwBedrag: 0, btwCode: "GEEN" }], regels }),
+    );
+    expect(out.regels).toEqual(regels);
+    expect(out).not.toHaveProperty("extraLines");
+    expect(Object.keys(out).at(-1)).toBe("regels");
+  });
+});

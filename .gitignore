@@ -27,3 +27,4 @@ frontend/dist/
 secret.yaml
 *.yaml.local
 *.har
+*.pdf

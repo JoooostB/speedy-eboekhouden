@@ -33,13 +33,18 @@ import {
 } from "../../hooks/useArchiveFolders";
 import { dedupePurchaseVatCodes, isReverseChargeCode } from "./vatCodeFilters";
 import { invoiceBlocker as evaluateInvoiceBlocker } from "./invoiceValidation";
+import { buildFullSubmitPayload, buildReceiptSubmitPayload, isArchiveSource } from "./invoiceSubmitPayload";
+import { RegelsEditor } from "../shared/RegelsEditor";
+import { proposeRegels, undoProposal, type SingleLineValues, type SplitProposal } from "./proposeRegels";
 import {
-  buildFullSubmitPayload,
-  buildReceiptSubmitPayload,
-  isArchiveSource,
-  receiptExtraLines,
-  type ExtraLineEdit,
-} from "./invoiceSubmitPayload";
+  regelsTotals,
+  splitFromSingle,
+  splitWithTip,
+  toCents,
+  toRegelPayload,
+  validateRegels,
+  type RegelEdit,
+} from "./regels";
 import {
   NO_MATCH_ALERT_TEXT,
   archiveFolderHelperText,
@@ -96,11 +101,55 @@ interface InvoiceEdit {
   bankLine: MatchedBankLine | null;
   /** Bonnetje mode: book as "Geld uitgegeven" without a relation. */
   isReceipt: boolean;
-  /** Extra booking lines (tip split, etc.). Empty by default. */
-  extraLines: ExtraLineEdit[];
+  /** The lines of a split booking ("Splitsen over meerdere regels"), or
+   *  null for a single-line booking. In split mode ledgerAccount and
+   *  btwCode mirror line 1, so the relation's default ledger and the
+   *  captions keep working; the amounts come from the lines. */
+  regels: RegelEdit[] | null;
+  /** Claude's split proposal the dialog opened with, until the user undoes
+   *  it or unsplits; null when the card was never proposed split. */
+  proposal: SplitProposal | null;
+  /** True once the user changed the proposed lines: "Ongedaan maken" then
+   *  makes way for "Niet splitsen", so an edit is never thrown away by one
+   *  click, and analytics can tell a booked proposal from an edited one. */
+  proposalEdited: boolean;
+  /** The single-line values of the analysis, kept for "Ongedaan maken". */
+  original: SingleLineValues | null;
   /** Picked archive folder; null means do not upload this PDF to the
    *  digitaal archief. */
   archiveFolder: ArchiveFolderWithPath | null;
+}
+
+/** The amount a split booking's lines must add up to, in cents: the bank
+ *  line for a receipt booked against one (the backend checks the same
+ *  amount), otherwise the total the user typed. */
+function splitTotalCents(inv: Pick<InvoiceEdit, "isReceipt" | "importId" | "bankLine" | "bedragIncl">): number {
+  if (splitTotalFromBankLine(inv)) return toCents(Math.abs(inv.bankLine!.bedrag));
+  return toCents(parseAmount(inv.bedragIncl) ?? 0);
+}
+
+function splitTotalFromBankLine(inv: Pick<InvoiceEdit, "isReceipt" | "importId" | "bankLine">): boolean {
+  return inv.isReceipt && inv.importId !== 0 && inv.bankLine !== null;
+}
+
+/** A single-line booking again, keeping line 1's tegenrekening and BTW
+ *  code; the total stays and its BTW is recomputed for that code. */
+function unsplit(inv: InvoiceEdit, first: RegelEdit | undefined, vatRate: (code: string) => number): InvoiceEdit {
+  const updated: InvoiceEdit = { ...inv, regels: null, proposal: null };
+  if (first && first.ledgerAccount?.id !== inv.ledgerAccount?.id) {
+    // Line 1 as the user left it, also when they cleared its account.
+    updated.ledgerAccount = first.ledgerAccount;
+    updated.ledgerSource = first.ledgerAccount ? "manual" : null;
+  }
+  if (first) updated.btwCode = first.btwCode;
+  const incl = parseAmount(updated.bedragIncl);
+  const rate = vatRate(updated.btwCode);
+  if (incl !== null) {
+    const btw = rate === 0 ? 0 : +((incl * rate) / (100 + rate)).toFixed(2);
+    updated.btwBedrag = formatAmountInput(btw);
+    updated.bedragExcl = formatAmountInput(incl - btw);
+  }
+  return updated;
 }
 
 interface SubmitResult {
@@ -116,27 +165,30 @@ interface SubmitResult {
  *  LedgerAccount type web into a test file. */
 function invoiceBlocker(inv: InvoiceEdit): string | null {
   return evaluateInvoiceBlocker({
-    hasLedgerAccount: inv.ledgerAccount !== null,
+    // A split booking carries its tegenrekeningen per line (splitBlocker).
+    hasLedgerAccount: inv.regels !== null || inv.ledgerAccount !== null,
     hasRelation: inv.relation !== null,
     hasImportId: inv.importId !== 0,
     isReceipt: inv.isReceipt,
     isCreditnota: inv.source.invoice.documentType === "creditnota",
     amountsValid: amountsValid(inv),
+    splitBlocker: splitBlocker(inv),
   });
 }
 
+/** Why the lines of a split booking cannot be booked yet; null for a
+ *  single-line booking or when they add up. */
+function splitBlocker(inv: InvoiceEdit): string | null {
+  return inv.regels === null ? null : validateRegels(inv.regels, splitTotalCents(inv));
+}
+
 /** Whether every amount of a row reads as an amount and the total is above
- *  zero. An extra line left empty is skipped at booking, so only text that
- *  is not an amount blocks. */
+ *  zero. For a receipt split against its bank line the total is the bank
+ *  line's, so only the lines count (splitBlocker). */
 function amountsValid(inv: InvoiceEdit): boolean {
+  if (inv.regels !== null && splitTotalFromBankLine(inv)) return true;
   const incl = parseAmount(inv.bedragIncl);
-  return (
-    incl !== null &&
-    incl > 0 &&
-    parseAmount(inv.bedragExcl) !== null &&
-    parseAmount(inv.btwBedrag) !== null &&
-    inv.extraLines.every((el) => !invalidAmountField(el.bedragIncl))
-  );
+  return incl !== null && incl > 0 && parseAmount(inv.bedragExcl) !== null && parseAmount(inv.btwBedrag) !== null;
 }
 
 interface Props {
@@ -253,6 +305,13 @@ export function InvoiceReviewDialog({
           setInvoices((prev) => {
             const inv = prev[index];
             if (!inv || inv.relation?.id !== relationId) return prev;
+            // In split mode the lines keep their own ledgers; only record
+            // the relation's default for after "Niet splitsen".
+            if (inv.regels) {
+              const next = [...prev];
+              next[index] = { ...inv, relation: { ...inv.relation, grootboekrekeningId: rel.grootboekrekeningId ?? 0 } };
+              return next;
+            }
             const ledger = ledgerAfterRelationChange(
               { account: inv.ledgerAccount, source: inv.ledgerSource },
               rel,
@@ -328,8 +387,13 @@ export function InvoiceReviewDialog({
             updated.relation,
             ledgerAccounts,
           );
-          updated.ledgerAccount = ledger.account;
-          updated.ledgerSource = ledger.source;
+          // In split mode the lines keep their own ledgers (a proposal's or
+          // the user's); the relation's default only applies to the single
+          // line, so it takes effect after "Niet splitsen" or without a split.
+          if (!updated.regels) {
+            updated.ledgerAccount = ledger.account;
+            updated.ledgerSource = ledger.source;
+          }
         }
 
         // Reconcile bedragen depending on which field changed.
@@ -374,51 +438,63 @@ export function InvoiceReviewDialog({
     [vatRate, ledgerAccounts],
   );
 
-  /** Append an extra booking line to the receipt at `index`. Called by the
-   *  "Splits in fooi" hint with a pre-filled GEEN-BTW line for the bank-vs-
-   *  invoice delta. Caller can also pass a blank line for "manual split". */
-  const addExtraLine = useCallback(
-    (index: number, line: ExtraLineEdit) => {
+  /** Replace the lines of the booking at `index`. null, or fewer than two
+   *  lines, is a single-line booking again (unsplit keeps line 1). A
+   *  tegenrekening picked on line 1 is the booking's, so a later relation
+   *  change does not overwrite it. */
+  const setRegels = useCallback(
+    (index: number, regels: RegelEdit[] | null) => {
       setInvoices((prev) => {
         const next = [...prev];
-        next[index] = {
-          ...next[index],
-          extraLines: [...next[index].extraLines, line],
-        };
+        const inv = next[index];
+        if (regels === null || regels.length < 2) {
+          next[index] = unsplit(inv, regels?.[0], vatRate);
+          return next;
+        }
+        const updated: InvoiceEdit = { ...inv, regels, proposalEdited: inv.proposalEdited || inv.proposal !== null };
+        const first = regels[0].ledgerAccount;
+        if (first?.id !== inv.ledgerAccount?.id) {
+          // ledgerAccount mirrors line 1, cleared included, so no caption
+          // or payload refers to an account the user removed.
+          updated.ledgerAccount = first;
+          updated.ledgerSource = first ? "manual" : null;
+        }
+        updated.btwCode = regels[0].btwCode;
+        next[index] = updated;
         return next;
       });
     },
-    [],
+    [vatRate],
   );
 
-  /** Update a single field on one extra line. */
-  const updateExtraLine = useCallback(
-    <K extends keyof ExtraLineEdit>(
-      index: number,
-      lineIdx: number,
-      field: K,
-      value: ExtraLineEdit[K],
-    ) => {
-      setInvoices((prev) => {
-        const next = [...prev];
-        const lines = next[index].extraLines.map((el, i) =>
-          i === lineIdx ? { ...el, [field]: value } : el,
-        );
-        next[index] = { ...next[index], extraLines: lines };
-        return next;
-      });
-    },
-    [],
-  );
-
-  /** Remove an extra line by index. */
-  const removeExtraLine = useCallback((index: number, lineIdx: number) => {
+  /** "Ongedaan maken" on a proposed split: back to one line with the
+   *  values the analysis gave, before any edit to the lines. */
+  const undoSplitProposal = useCallback((index: number) => {
     setInvoices((prev) => {
       const next = [...prev];
-      next[index] = {
-        ...next[index],
-        extraLines: next[index].extraLines.filter((_, i) => i !== lineIdx),
-      };
+      const inv = next[index];
+      if (inv.original) next[index] = undoProposal(inv, inv.original);
+      return next;
+    });
+  }, []);
+
+  /** "Splitsen over meerdere regels": the current values become line 1. */
+  const splitInvoice = useCallback((index: number) => {
+    setInvoices((prev) => {
+      const next = [...prev];
+      const inv = next[index];
+      next[index] = { ...inv, regels: splitFromSingle(inv) };
+      return next;
+    });
+  }, []);
+
+  /** "Splits in fooi": the receipt as line 1, the difference with the bank
+   *  line as a tip without BTW. */
+  const splitTip = useCallback((index: number, tipCents: number) => {
+    setInvoices((prev) => {
+      const next = [...prev];
+      const inv = next[index];
+      next[index] = { ...inv, regels: splitWithTip(inv, tipCents) };
       return next;
     });
   }, []);
@@ -493,23 +569,31 @@ export function InvoiceReviewDialog({
       // it as a warning instead of letting the user assume everything is OK.
       const archiveExpected = !!pdfBase64 && !!folderId;
 
+      // A split booking sends its lines and the totals they add up to (the
+      // BTW is the sum of the per-line BTW); invoiceBlocker refused the row
+      // above unless the lines add up, or, single line, all three parse.
+      const totals = inv.regels
+        ? regelsTotals(inv.regels, splitTotalCents(inv), vatRate)
+        : {
+            bedragExcl: parseAmount(inv.bedragExcl) ?? 0,
+            bedragIncl: parseAmount(inv.bedragIncl) ?? 0,
+            btwBedrag: parseAmount(inv.btwBedrag) ?? 0,
+          };
       const payloadInput = {
         source: inv.source,
         datum: inv.datum,
         leverancier: inv.leverancier,
         factuurnummer: inv.factuurnummer,
         omschrijving: inv.omschrijving,
-        // invoiceBlocker refused the row above unless all three parse.
-        bedragExcl: parseAmount(inv.bedragExcl) ?? 0,
-        bedragIncl: parseAmount(inv.bedragIncl) ?? 0,
-        btwBedrag: parseAmount(inv.btwBedrag) ?? 0,
+        ...totals,
         btwCode: inv.btwCode,
         relatieId: inv.relation?.id ?? 0,
-        tegenRekeningId: inv.ledgerAccount!.id,
+        tegenRekeningId: (inv.regels ? inv.regels[0].ledgerAccount?.id : inv.ledgerAccount?.id) ?? 0,
         importId: inv.importId,
         folderId,
         pdfBase64,
         extraLines: [] as ReceiptExtraLine[],
+        ...(inv.regels ? { regels: toRegelPayload(inv.regels) } : {}),
       };
 
       // The result line: for a mail-folder document what happened to the
@@ -521,15 +605,21 @@ export function InvoiceReviewDialog({
       const confidence = String(Math.round(inv.source.invoice.confidence * 100));
 
       try {
-        // Bonnetje flow — no relation, "Geld uitgegeven" mutation. The
-        // user-added split lines (typically the tip) travel as extraLines
-        // with a BTW split per line (receiptExtraLines). An invoice is a
-        // FactuurOntvangen, plus the payment when a bank line is linked.
+        // Bonnetje flow — no relation, "Geld uitgegeven" mutation. An
+        // invoice is a FactuurOntvangen, plus the payment when a bank line
+        // is linked. Both carry `regels` when the user split the booking.
         const resp: InvoiceSubmitFullResponse | InvoiceSubmitReceiptResponse = inv.isReceipt
-          ? await api.submitReceipt(
-              buildReceiptSubmitPayload({ ...payloadInput, extraLines: receiptExtraLines(inv.extraLines, vatRate) }),
-            )
+          ? await api.submitReceipt(buildReceiptSubmitPayload(payloadInput))
           : await api.submitInvoiceFull(buildFullSubmitPayload(payloadInput));
+        if (inv.regels) {
+          track("booking_split", {
+            path: inv.isReceipt ? "bonnetje" : "factuur",
+            regels: inv.regels.length,
+            proposed: inv.proposal !== null,
+            edited: inv.proposalEdited,
+            reden: inv.proposal?.advies.reden ?? "none",
+          });
+        }
 
         // The booking stands. A payment that failed (the bank line stays
         // open) and a document that could not be archived, linked, renamed
@@ -711,10 +801,7 @@ export function InvoiceReviewDialog({
                 component="fieldset"
                 sx={{
                   border: "1px solid",
-                  borderColor:
-                    (!inv.ledgerAccount || (!inv.isReceipt && !inv.relation) || (inv.isReceipt && !inv.importId))
-                      ? "error.main"
-                      : "divider",
+                  borderColor: invoiceBlocker(inv) !== null ? "error.main" : "divider",
                   borderRadius: 2,
                   p: { xs: 2, sm: 3 },
                   m: 0,
@@ -896,6 +983,7 @@ export function InvoiceReviewDialog({
                       />
                     </Box>
 
+                    {inv.regels === null ? (<>
                     {/* Row 3: Bedragen */}
                     <Box
                       sx={{
@@ -990,6 +1078,93 @@ export function InvoiceReviewDialog({
                         disabled={submitting}
                       />
                     </Box>
+                    {/* A booking on several tegenrekeningen or BTW codes
+                        (a gift plus shipping, a restaurant receipt with
+                        21/9/0): the lines replace the amount fields. */}
+                    {inv.source.invoice.documentType !== "creditnota" && (
+                      <Box sx={{ mt: 1 }}>
+                        <Button size="small" onClick={() => splitInvoice(index)} disabled={submitting}>
+                          Splitsen over meerdere regels
+                        </Button>
+                      </Box>
+                    )}
+                    </>) : (
+                    <Box sx={{ mt: 2 }}>
+                      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 1, mb: 1 }}>
+                        <Typography variant="subtitle2" component="h3">
+                          Regels
+                        </Typography>
+                        {/* One way back at a time: an untouched proposal is
+                            undone in the note below; a split the user made
+                            or edited keeps line 1 through "Niet splitsen". */}
+                        {(!inv.proposal || inv.proposalEdited) && (
+                          <Button size="small" onClick={() => setRegels(index, null)} disabled={submitting}>
+                            Niet splitsen
+                          </Button>
+                        )}
+                      </Box>
+                      {/* Speedy proposed this split; the user books or undoes
+                          it, nothing is booked on its own. A note, not an
+                          alert: several cards may open with one. */}
+                      {inv.proposal && !inv.proposalEdited && (
+                        <Alert
+                          severity="info"
+                          role="note"
+                          sx={{ mb: 2 }}
+                          action={
+                            <Button
+                              color="inherit"
+                              size="small"
+                              onClick={() => undoSplitProposal(index)}
+                              disabled={submitting}
+                              sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
+                              aria-label="Splitsing ongedaan maken"
+                            >
+                              Ongedaan maken
+                            </Button>
+                          }
+                        >
+                          <Typography variant="body2">
+                            Speedy stelt voor {inv.isReceipt ? "dit bonnetje" : "deze factuur"} te splitsen: {inv.proposal.advies.toelichting}
+                          </Typography>
+                        </Alert>
+                      )}
+                      {/* The total the lines add up to: the bank line for a
+                          receipt booked against one, else typed here. */}
+                      {splitTotalFromBankLine(inv) ? null : (
+                        <TextField
+                          label="Totaal incl. BTW"
+                          value={inv.bedragIncl}
+                          error={invalidAmountField(inv.bedragIncl, { required: true })}
+                          helperText={invalidAmountField(inv.bedragIncl, { required: true }) ? AMOUNT_HINT : undefined}
+                          onChange={(e) => updateField(index, "bedragIncl", e.target.value)}
+                          size="small"
+                          disabled={submitting}
+                          sx={{ mb: 1.5, maxWidth: { sm: 240 } }}
+                          slotProps={{
+                            htmlInput: { inputMode: "decimal" },
+                            input: {
+                              startAdornment: (
+                                <Typography variant="body2" color="text.secondary" sx={{ mr: 0.5 }}>
+                                  &euro;
+                                </Typography>
+                              ),
+                            },
+                          }}
+                        />
+                      )}
+                      <RegelsEditor
+                        regels={inv.regels}
+                        totalCents={splitTotalCents(inv)}
+                        totalSource={splitTotalFromBankLine(inv) ? "afschrift" : undefined}
+                        ledgerAccounts={ledgerAccounts}
+                        vatCodes={purchaseVatCodes}
+                        vatRate={vatRate}
+                        onChange={(regels) => setRegels(index, regels)}
+                        disabled={submitting}
+                      />
+                    </Box>
+                    )}
 
                     {/* Row 4b: Archive folder picker. For an upload it is
                         optional — leaving it empty means the PDF is not
@@ -1220,175 +1395,42 @@ export function InvoiceReviewDialog({
                       </Alert>
                     )}
 
-                    {/* Tip / multi-line split.
-                        Auto-detect: when the matched bank line is more
-                        than €0.05 above the receipt total, the difference
-                        is almost certainly a tip the user added on their
-                        card. Surface a one-click "Splits in fooi" action
-                        that adds a GEEN-BTW line for the delta — same
-                        tegenrekening as the meal (representatie), which
-                        is how Dutch bookkeepers consistently treat tips.
-                        After the click (or when there's any extra line),
-                        the editor below lets the user fine-tune. */}
-                    {inv.isReceipt && (() => {
+                    {/* Tip hint. When the bank line is more than € 0,05 above
+                        the receipt, the difference is almost always a tip the
+                        user added on the card. "Splits in fooi" turns the
+                        booking into two lines: the receipt and the tip on the
+                        same tegenrekening without BTW (there is no BTW on a
+                        tip). The editor above then shows the lines; once
+                        split, the remainder line replaces this hint. */}
+                    {inv.isReceipt && inv.regels === null && (() => {
                       const incl = parseAmount(inv.bedragIncl) ?? 0;
-                      const extraSum = inv.extraLines.reduce(
-                        (sum, el) => sum + (parseAmount(el.bedragIncl) ?? 0),
-                        0,
-                      );
                       const bankAmount = inv.bankLine ? Math.abs(inv.bankLine.bedrag) : 0;
-                      const totalNow = incl + extraSum;
-                      const delta = bankAmount > 0 ? bankAmount - totalNow : 0;
-                      const showTipHint =
-                        bankAmount > 0 &&
-                        delta > 0.05 &&
-                        inv.extraLines.length === 0;
-                      const balanced =
-                        bankAmount === 0 ||
-                        Math.abs(bankAmount - totalNow) < 0.02;
-
-                      if (showTipHint) {
-                        return (
-                          <Alert
-                            severity="info"
-                            sx={{ mt: 2 }}
-                            action={
-                              <Button
-                                color="inherit"
-                                size="small"
-                                onClick={() =>
-                                  addExtraLine(index, {
-                                    bedragIncl: formatAmountInput(delta),
-                                    btwCode: "GEEN",
-                                    omschrijving: "Fooi",
-                                  })
-                                }
-                                disabled={submitting}
-                                sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
-                              >
-                                Splits in fooi
-                              </Button>
-                            }
-                          >
-                            <Typography variant="body2">
-                              Het bonnetje is {formatMoney(incl)}, maar op het afschrift
-                              staat {formatMoney(bankAmount)}: een verschil van{" "}
-                              <strong>{formatMoney(delta)}</strong>. Meestal is dat een
-                              fooi. Zet het verschil op een aparte regel zonder BTW, want
-                              op een fooi zit geen BTW.
-                            </Typography>
-                          </Alert>
-                        );
-                      }
-
-                      if (inv.extraLines.length === 0) return null;
-
+                      const deltaCents = bankAmount > 0 ? toCents(bankAmount) - toCents(incl) : 0;
+                      if (deltaCents <= 5) return null;
                       return (
-                        <Box sx={{ mt: 2 }}>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{ fontWeight: 600, display: "block", mb: 1 }}
-                          >
-                            Extra regels
-                          </Typography>
-                          {inv.extraLines.map((el, lineIdx) => (
-                            <Box
-                              key={lineIdx}
-                              sx={{
-                                display: "grid",
-                                gridTemplateColumns: { xs: "1fr", sm: "1.5fr 1.5fr 1fr auto" },
-                                gap: 1.5,
-                                mb: 1.5,
-                                alignItems: "start",
-                              }}
-                            >
-                              <TextField
-                                label="Omschrijving"
-                                value={el.omschrijving}
-                                onChange={(e) => updateExtraLine(index, lineIdx, "omschrijving", e.target.value)}
-                                size="small"
-                                disabled={submitting}
-                              />
-                              <VATCodePicker
-                                codes={purchaseVatCodes}
-                                value={el.btwCode}
-                                onChange={(code) => updateExtraLine(index, lineIdx, "btwCode", code)}
-                                disabled={submitting}
-                              />
-                              <TextField
-                                label="Bedrag incl. BTW"
-                                value={el.bedragIncl}
-                                error={invalidAmountField(el.bedragIncl)}
-                                helperText={invalidAmountField(el.bedragIncl) ? AMOUNT_HINT : undefined}
-                                onChange={(e) => updateExtraLine(index, lineIdx, "bedragIncl", e.target.value)}
-                                size="small"
-                                disabled={submitting}
-                                slotProps={{
-                                  htmlInput: { inputMode: "decimal" },
-                                  input: {
-                                    startAdornment: (
-                                      <Typography variant="body2" color="text.secondary" sx={{ mr: 0.5 }}>
-                                        &euro;
-                                      </Typography>
-                                    ),
-                                  },
-                                }}
-                              />
-                              <Button
-                                color="error"
-                                size="small"
-                                onClick={() => removeExtraLine(index, lineIdx)}
-                                disabled={submitting}
-                                sx={{ minWidth: 0, alignSelf: "center" }}
-                                aria-label={`Regel ${lineIdx + 2} verwijderen`}
-                              >
-                                Verwijderen
-                              </Button>
-                            </Box>
-                          ))}
-                          <Box
-                            sx={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              alignItems: "center",
-                              mt: 1,
-                              pt: 1,
-                              borderTop: "1px solid",
-                              borderColor: "divider",
-                            }}
-                          >
+                        <Alert
+                          severity="info"
+                          sx={{ mt: 2 }}
+                          action={
                             <Button
+                              color="inherit"
                               size="small"
-                              onClick={() =>
-                                addExtraLine(index, {
-                                  bedragIncl: "",
-                                  btwCode: "GEEN",
-                                  omschrijving: "",
-                                })
-                              }
+                              onClick={() => splitTip(index, deltaCents)}
                               disabled={submitting}
+                              sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
                             >
-                              + Regel toevoegen
+                              Splits in fooi
                             </Button>
-                            <Typography
-                              variant="caption"
-                              sx={{
-                                fontFamily: "monospace",
-                                fontWeight: 600,
-                                color: balanced ? "success.dark" : "warning.main",
-                              }}
-                            >
-                              Totaal {formatMoney(totalNow)}
-                              {bankAmount > 0 && (
-                                <>
-                                  {" "}
-                                  / afschrift {formatMoney(bankAmount)}
-                                </>
-                              )}
-                            </Typography>
-                          </Box>
-                        </Box>
+                          }
+                        >
+                          <Typography variant="body2">
+                            Het bonnetje is {formatMoney(incl)}, maar op het afschrift
+                            staat {formatMoney(bankAmount)}: een verschil van{" "}
+                            <strong>{formatMoney(deltaCents / 100)}</strong>. Meestal is dat een
+                            fooi. Zet het verschil op een aparte regel zonder BTW, want
+                            op een fooi zit geen BTW.
+                          </Typography>
+                        </Alert>
                       );
                     })()}
 
@@ -1432,13 +1474,15 @@ export function InvoiceReviewDialog({
                 {(() => {
                   const creditnotas = invoices.filter((inv) => inv.source.invoice.documentType === "creditnota").length;
                   const missingRel = invoices.filter((inv) => !inv.isReceipt && !inv.relation).length;
-                  const missingLedger = invoices.filter((inv) => !inv.ledgerAccount).length;
+                  const missingLedger = invoices.filter((inv) => inv.regels === null && !inv.ledgerAccount).length;
                   const missingBank = invoices.filter((inv) => inv.isReceipt && !inv.importId).length;
+                  const splitOpen = invoices.filter((inv) => splitBlocker(inv) !== null).length;
                   const parts = [];
                   if (creditnotas) parts.push(`${creditnotas} ${creditnotas === 1 ? "creditnota" : "creditnota's"}`);
                   if (missingRel) parts.push(`${missingRel} zonder relatie`);
                   if (missingLedger) parts.push(`${missingLedger} zonder tegenrekening`);
                   if (missingBank) parts.push(`${missingBank} bonnetje${missingBank > 1 ? "s" : ""} zonder afschriftregel`);
+                  if (splitOpen) parts.push(`${splitOpen} met regels die nog niet kloppen`);
                   return `${blockedCount} ${blockedCount === 1 ? "wordt" : "worden"} overgeslagen (${parts.join(", ")})`;
                 })()}
               </Typography>
@@ -1570,6 +1614,21 @@ function buildEdit(
     bedragExcl = bedragIncl - btwBedrag;
   }
 
+  // Claude's split proposal opens the card split, with the single-line
+  // values kept for "Ongedaan maken". Not for a credit note or a non-invoice
+  // (nothing to book), and not when the amounts were swapped for the bank
+  // line's euro amount: the proposed lines are in the invoice's currency.
+  const single: SingleLineValues = {
+    ledgerAccount: ledger.account,
+    ledgerSource: ledger.source,
+    btwCode,
+    bedragExcl: formatAmountInput(bedragExcl),
+    bedragIncl: formatAmountInput(bedragIncl),
+    btwBedrag: formatAmountInput(btwBedrag),
+  };
+  const bookable = inv.documentType !== "creditnota" && inv.documentType !== "overig";
+  const proposal = bookable && !a.matchedBankLine?.currencyConverted ? proposeRegels(inv, ledgerAccounts, ledger.account) : null;
+
   return {
     source: a,
     leverancier: inv.leverancier ?? "",
@@ -1578,15 +1637,20 @@ function buildEdit(
     bedragExcl: formatAmountInput(bedragExcl),
     bedragIncl: formatAmountInput(bedragIncl),
     btwBedrag: formatAmountInput(btwBedrag),
-    btwCode,
+    // Split by a proposal, the booking's ledger and BTW code mirror line 1
+    // (as setRegels keeps them), with "ai" as their source.
+    btwCode: proposal ? proposal.regels[0].btwCode : btwCode,
     omschrijving: inv.omschrijving ?? "",
     relation: matchedRelation,
-    ledgerAccount: ledger.account,
-    ledgerSource: ledger.source,
+    ledgerAccount: proposal ? proposal.regels[0].ledgerAccount : ledger.account,
+    ledgerSource: proposal ? "ai" : ledger.source,
     importId: a.matchedBankLine?.id ?? 0,
     bankLine: a.matchedBankLine ?? null,
     isReceipt: inv.isReceipt ?? false,
-    extraLines: [],
+    regels: proposal?.regels ?? null,
+    proposal,
+    proposalEdited: false,
+    original: proposal ? single : null,
     archiveFolder: null,
   };
 }
