@@ -152,8 +152,9 @@ func NewInvoiceHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto
 	return &InvoiceHandler{claude: claudeSvc, db: db, encKey: encKey, r2: r2, redis: redisClient, sessions: sessions}
 }
 
-// errNoAPIKey is returned by analyzeBytes when the user has not configured
-// an Anthropic API key. Wrappers answer 400 no_api_key.
+// errNoAPIKey is returned by analyzeBytes and classifyWithClaude when the
+// user has not configured an Anthropic API key. Wrappers answer 400
+// no_api_key.
 var errNoAPIKey = errors.New("no Anthropic API key configured")
 
 // claudeReadError wraps a Claude failure other than an unsupported media

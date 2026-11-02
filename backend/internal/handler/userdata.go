@@ -12,7 +12,7 @@ import (
 //
 // Every cached piece of administration data lives under a key that carries
 // the user id; the key builders are inboxClassifyKey (inbox.go),
-// invoiceAnalysisCacheKey and invoiceSubmittedMarkerKey (invoice.go),
+// inboxLineCacheKey (inbox_linecache.go), invoiceAnalysisCacheKey and invoiceSubmittedMarkerKey (invoice.go),
 // documentAnalysisKey, documentAnalyzingKey and documentIgnoredKey
 // (documents.go), and apiKeyStatusKey (settings.go, a fingerprint of the
 // Anthropic key, no administration data, purged all the same).
@@ -46,14 +46,16 @@ func redisGlobEscape(s string) string {
 }
 
 // userCachePatterns returns the SCAN patterns of all cached administration
-// data of one user: the classification base, upload analyses, duplicate
-// markers, mail-folder analyses and locks, and the ignore list. The versioned
-// families keep their "v" prefix in the pattern so the user id has to appear
-// in its own segment; hashes and ids never contain a UUID.
+// data of one user: the classification base and the per-line cache, upload
+// analyses, duplicate markers, mail-folder analyses and locks, and the ignore
+// list. The versioned families keep their "v" prefix in the pattern so the
+// user id has to appear in its own segment; hashes and ids never contain a
+// UUID.
 func userCachePatterns(userID string) []string {
 	u := redisGlobEscape(userID)
 	return []string{
 		"inbox:classify:" + u,
+		"inbox:line:v*:" + u,
 		"invoice:analyze:v*:" + u + ":*",
 		"invoice:submitted:" + u + ":*",
 		"doc:analysis:v*:" + u + ":*",

@@ -3,7 +3,11 @@ import {
   Box,
   Typography,
   Button,
+  ButtonGroup,
   Chip,
+  ListItemText,
+  Menu,
+  MenuItem,
   Tabs,
   Tab,
   Paper,
@@ -28,6 +32,7 @@ import { inboxSubtitle, pendingDocumentCount } from "../../hooks/mailDocumentsMo
 import { runWithConcurrency } from "../../utils/runWithConcurrency";
 import type {
   InboxClassification,
+  InboxClassifyForce,
   InboxCategory,
   InboxProcessResult,
   AnalyzedInvoice,
@@ -189,6 +194,8 @@ export function BookkeepingInbox() {
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [reviewInvoices, setReviewInvoices] = useState<AnalyzedInvoice[] | null>(null);
   const [apiKeyStatus, setApiKeyStatus] = useState<AiStatus | null>(null);
+  // Anchor of the "Vernieuwen" menu (Afschriften tab only).
+  const [refreshMenuAnchor, setRefreshMenuAnchor] = useState<HTMLElement | null>(null);
   // Snackbar shown after rows are processed so the user gets explicit
   // feedback that something happened — without this, processed rows just
   // vanish silently because we render activeItems.
@@ -348,7 +355,12 @@ export function BookkeepingInbox() {
   // momentarily during the connect → classify path because `loading`
   // stayed false from the not-connected branch while `classifying` was
   // true with items still empty.
-  const loadInbox = useCallback(async (force = false) => {
+  //
+  // `force` "lines" drops the cached base but keeps Claude's answer per
+  // line, so only new lines cost a Claude call (after a booking and for
+  // "Vernieuwen"); "all" also drops the per-line cache ("Alles opnieuw
+  // classificeren").
+  const loadInbox = useCallback(async (force: InboxClassifyForce = false) => {
     if (!eboekhoudenConnected) {
       setLoading(false);
       return;
@@ -359,12 +371,12 @@ export function BookkeepingInbox() {
     setError(null);
 
     try {
-      // Try AI classification (force=true skips Redis cache)
+      // Try AI classification first.
       const res = await api.classifyInbox(force);
       setItems(res.classifications);
       setGroups(res.paymentGroups ?? []);
       setSummary(res.summary);
-      track("Inbox Classify", { total: String(res.totalCount) });
+      track("Inbox Classify", { total: String(res.totalCount), mode: force || "auto" });
     } catch (classifyErr: any) {
       // If the e-boekhouden session expired, the API client has already
       // dispatched eb:session-expired and the AuthContext will flip the
@@ -421,7 +433,7 @@ export function BookkeepingInbox() {
   // document has left the mail folder (or shows as linked).
   const handleReviewComplete = useCallback(() => {
     void reloadDocuments({ silent: true });
-    void loadInbox(true);
+    void loadInbox("lines");
   }, [reloadDocuments, loadInbox]);
 
   // Filter items by category
@@ -551,7 +563,7 @@ export function BookkeepingInbox() {
       });
       if (failed === 0 && bookedLines.length > 0) {
         setSnackbar({ message: snackbarMessage(bookedLines.length, invoice, sumLines(bookedLines)), severity: "success" });
-        void loadInbox(true);
+        void loadInbox("lines");
       }
     },
     [items, loadInbox],
@@ -762,16 +774,49 @@ export function BookkeepingInbox() {
             />
           </Button>
 
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => (tab === "documenten" ? void docActions.reload() : loadInbox(true))}
-            disabled={tab === "documenten" ? docState.refreshing : classifying}
-            startIcon={
-              (tab === "documenten" ? docState.refreshing : classifying) ? (
-                <CircularProgress size={16} color="inherit" aria-hidden="true" />
-              ) : (
-                /* Refresh icon */
+          {/* "Vernieuwen" classifies only the lines Claude has not seen;
+              the arrow (Afschriften only) opens "Alles opnieuw
+              classificeren", which also drops the per-line cache. */}
+          <ButtonGroup variant="outlined" size="small" aria-label="Vernieuwen">
+            <Button
+              onClick={() => (tab === "documenten" ? void docActions.reload() : loadInbox("lines"))}
+              disabled={tab === "documenten" ? docState.refreshing : classifying}
+              startIcon={
+                (tab === "documenten" ? docState.refreshing : classifying) ? (
+                  <CircularProgress size={16} color="inherit" aria-hidden="true" />
+                ) : (
+                  /* Refresh icon */
+                  <Box
+                    component="svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                    sx={{ width: 16, height: 16 }}
+                  >
+                    <polyline points="23 4 23 10 17 10" />
+                    <polyline points="1 20 1 14 7 14" />
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                  </Box>
+                )
+              }
+            >
+              Vernieuwen
+            </Button>
+            {tab === "afschriften" && (
+              <Button
+                aria-label="Meer vernieuwopties"
+                aria-haspopup="menu"
+                aria-controls={refreshMenuAnchor ? "inbox-refresh-menu" : undefined}
+                aria-expanded={refreshMenuAnchor ? "true" : undefined}
+                disabled={classifying}
+                onClick={(e) => setRefreshMenuAnchor(e.currentTarget)}
+                sx={{ px: 0.5, minWidth: 0 }}
+              >
+                {/* Chevron-down icon */}
                 <Box
                   component="svg"
                   viewBox="0 0 24 24"
@@ -783,15 +828,28 @@ export function BookkeepingInbox() {
                   aria-hidden="true"
                   sx={{ width: 16, height: 16 }}
                 >
-                  <polyline points="23 4 23 10 17 10" />
-                  <polyline points="1 20 1 14 7 14" />
-                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                  <polyline points="6 9 12 15 18 9" />
                 </Box>
-              )
-            }
+              </Button>
+            )}
+          </ButtonGroup>
+          <Menu
+            id="inbox-refresh-menu"
+            anchorEl={refreshMenuAnchor}
+            open={!!refreshMenuAnchor}
+            onClose={() => setRefreshMenuAnchor(null)}
+            anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+            transformOrigin={{ vertical: "top", horizontal: "left" }}
           >
-            Vernieuwen
-          </Button>
+            <MenuItem
+              onClick={() => {
+                setRefreshMenuAnchor(null);
+                void loadInbox("all");
+              }}
+            >
+              <ListItemText primary="Alles opnieuw classificeren" secondary="Stuurt alle regels opnieuw naar de AI" />
+            </MenuItem>
+          </Menu>
         </Box>
 
         {/* Right: summary badges (bank lines only) */}

@@ -726,6 +726,13 @@ export interface LearnedClassification {
   confirmedAt?: string | null;
 }
 
+/**
+ * How far a classify request bypasses the caches: `false` serves the cached
+ * base, "lines" drops the base but keeps Claude's answer per line, "all"
+ * drops both (the "Alles opnieuw classificeren" menu item).
+ */
+export type InboxClassifyForce = false | "lines" | "all";
+
 export interface InboxClassifyResponse {
   classifications: InboxClassification[];
   totalCount: number;
