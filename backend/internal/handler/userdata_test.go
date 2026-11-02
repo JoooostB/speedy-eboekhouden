@@ -22,6 +22,7 @@ func userKeys(userID string) []string {
 	accounts := []claude.LedgerAccountInfo{{Code: "4000", Omschrijving: "Kosten"}}
 	return []string{
 		inboxClassifyKey(userID),
+		inboxLineCacheKey(userID),
 		invoiceAnalysisCacheKey(userID, []byte("%PDF-1.4 x"), accounts),
 		invoiceSubmittedMarkerKey(userID, invoicePDFContentHash([]byte("%PDF-1.4 x"))),
 		documentAnalysisKey(userID, 12340002),

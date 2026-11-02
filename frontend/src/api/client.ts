@@ -16,6 +16,7 @@ import type {
   Project,
   Activity,
   InboxBatchResponse,
+  InboxClassifyForce,
   InboxClassifyResponse,
   InboxProcessItem,
   InboxSummary,
@@ -382,8 +383,14 @@ export const api = {
   },
 
   // Inbox (AI-classified bank lines)
-  classifyInbox(force = false) {
-    const qs = force ? "?force=true" : "";
+  /**
+   * Classifies the unprocessed bank lines. `false` serves the cached base when
+   * there is one; "lines" drops the base but keeps the per-line cache, so only
+   * lines Claude has not seen go to Claude; "all" also drops the per-line
+   * cache and classifies every line again.
+   */
+  classifyInbox(force: InboxClassifyForce = false) {
+    const qs = force === "all" ? "?force=all" : force === "lines" ? "?force=true" : "";
     return request<InboxClassifyResponse>(`/inbox/classify${qs}`, { method: "POST" });
   },
 

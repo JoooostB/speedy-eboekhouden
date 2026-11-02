@@ -86,11 +86,18 @@ type InboxHandler struct {
 	redis    *redis.Client
 	r2       *storage.Client
 	sessions *session.Store
+	// lineCache is the per-line classification cache (inbox_linecache.go):
+	// the Redis client in production, nil without one, a fake in tests.
+	lineCache lineCacheStore
 }
 
 // NewInboxHandler creates a new inbox handler.
 func NewInboxHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, redisClient *redis.Client, r2 *storage.Client, sessions *session.Store) *InboxHandler {
-	return &InboxHandler{claude: claudeSvc, db: db, encKey: encKey, redis: redisClient, r2: r2, sessions: sessions}
+	h := &InboxHandler{claude: claudeSvc, db: db, encKey: encKey, redis: redisClient, r2: r2, sessions: sessions}
+	if redisClient != nil {
+		h.lineCache = redisClient
+	}
+	return h
 }
 
 // handleEBError is a thin instance wrapper around HandleEBoekhoudenSessionExpired.
@@ -109,7 +116,10 @@ func (h *InboxHandler) handleEBError(c *gin.Context, sess *session.SessionData, 
 // through paymentGroupId), and lines that are the assigned payment of an
 // analysed mail-folder document are annotated with that document. On a
 // cache miss the open posts are matched before Claude is called, so those
-// lines never cost tokens. ?force=true drops the cached base first.
+// lines never cost tokens, and lines Claude classified before are answered
+// from the per-line cache (inbox_linecache.go). ?force=true drops the
+// cached base first but keeps the per-line cache, so only new lines go to
+// Claude; ?force=all drops both and classifies every line again.
 func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 	sess := session.FromContext(c)
 	if sess == nil {
@@ -126,8 +136,11 @@ func (h *InboxHandler) ClassifyBatch(c *gin.Context) {
 	cacheKey := inboxClassifyKey(sess.UserID)
 
 	var base *inboxClassifyBase
-	if c.Query("force") == "true" {
+	if force := c.Query("force"); force == "true" || force == "all" {
 		h.redis.Del(ctx, cacheKey)
+		if force == "all" {
+			h.redis.Del(ctx, inboxLineCacheKey(sess.UserID))
+		}
 	} else if cached, err := h.redis.Get(ctx, cacheKey).Bytes(); err == nil {
 		var b inboxClassifyBase
 		if json.Unmarshal(cached, &b) == nil && b.Classifications != nil {
@@ -184,20 +197,27 @@ func (h *InboxHandler) writeEBError(c *gin.Context, sess *session.SessionData, e
 	c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 }
 
+// classifyWithClaude fetches the user's API key and sends lines to Claude.
+// A variable so tests can play Claude and see which lines reach it. The key
+// is only fetched here, so an inbox that is fully answered from the
+// per-line cache needs no key at all; without one it returns errNoAPIKey
+// (invoice.go) and classifyFresh answers no_api_key.
+var classifyWithClaude = func(h *InboxHandler, c *gin.Context, userID, entityType string, lines []claude.BatchLine) ([]claude.BatchClassifyResult, error) {
+	apiKey, err := h.getAPIKey(c, userID)
+	if err != nil {
+		return nil, errNoAPIKey
+	}
+	return h.claude.ClassifyBatch(c.Request.Context(), apiKey, entityType, lines)
+}
+
 // classifyFresh fetches the unprocessed bank lines and builds the base
 // classification: lines that pay an open post or hit the confirmed learned
-// memory are decided locally, the rest goes to Claude in one batch. It
-// returns the base, the open-post matches and the payment groups it found;
-// ok is false when it already wrote the response (an error, or an empty
-// inbox).
+// memory are decided locally, lines Claude classified before come from the
+// per-line cache, and the rest goes to Claude in one batch. It returns the
+// base, the open-post matches and the payment groups it found; ok is false
+// when it already wrote the response (an error, or an empty inbox).
 func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, client *eboekhouden.Client) (base *inboxClassifyBase, openMatches map[int]openPostMatch, groups []paymentGroup, ok bool) {
 	ctx := c.Request.Context()
-
-	apiKey, err := h.getAPIKey(c, sess.UserID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Vul eerst je Anthropic API-sleutel in bij Instellingen."})
-		return nil, nil, nil, false
-	}
 
 	raw, err := client.GetImportGrid(0, importGridFetchLimit)
 	if err != nil {
@@ -241,7 +261,10 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 	// signal matches a confirmed mapping are auto-classified locally and
 	// never reach Claude — saves API tokens and gives the user instant
 	// feedback for recurring transactions they've already booked once.
-	learned, _ := h.db.LookupLearnedBatch(ctx, sess.UserID)
+	var learned map[string]*database.LearnedClassification
+	if h.db != nil {
+		learned, _ = h.db.LookupLearnedBatch(ctx, sess.UserID)
+	}
 
 	// Convert to batch lines, but skip lines that have a confirmed learned
 	// mapping (count >= 2 with confirmed_at set), lines that pay an open
@@ -286,25 +309,34 @@ func (h *InboxHandler) classifyFresh(c *gin.Context, sess *session.SessionData, 
 		})
 	}
 
-	// Classify with AI — only the lines that were not decided locally.
-	// Pass the user's entity type so the prompt can apply BV-vs-ZZP rules
-	// (e.g. investments on a B.V. account are business assets, not private).
+	// Classify with AI — only the lines that were not decided locally and
+	// that Claude has not seen before (per-line cache). Pass the user's
+	// entity type so the prompt can apply BV-vs-ZZP rules (e.g. investments
+	// on a B.V. account are business assets, not private); it is part of
+	// the cache fingerprint, so a changed entity type misses.
 	entityType := readEntityType(ctx, h.db, sess.UserID)
-	var results []claude.BatchClassifyResult
-	if len(lines) > 0 {
-		results, err = h.claude.ClassifyBatch(ctx, apiKey, entityType, lines)
+	classMap, misses := loadLineCache(ctx, h.lineCache, sess.UserID, entityType, lines)
+	if len(misses) > 0 {
+		results, err := classifyWithClaude(h, c, sess.UserID, entityType, misses)
+		if errors.Is(err, errNoAPIKey) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key", "message": "Vul eerst je Anthropic API-sleutel in bij Instellingen."})
+			return nil, nil, nil, false
+		}
 		if err != nil {
+			// Nothing is cached from a failed pass: the hits are still in
+			// the hash, the misses are asked again next time.
 			log.Printf("Claude API error for user %s: %s", sess.UserID, errClass(err))
 			c.JSON(http.StatusBadGateway, gin.H{"error": "claude_error", "message": err.Error()})
 			return nil, nil, nil, false
 		}
+		for _, r := range results {
+			classMap[r.ID] = r
+		}
 	}
-
-	// Merge classifications with original row data
-	classMap := make(map[int]claude.BatchClassifyResult)
-	for _, r := range results {
-		classMap[r.ID] = r
-	}
+	// Every line of the Claude path, hit or fresh, goes into the hash, also
+	// on a pass without misses: that drops booked lines and slides the TTL.
+	// The lines decided locally above are recomputed on every pass.
+	storeLineCache(ctx, h.lineCache, sess.UserID, entityType, lines, classMap)
 
 	classified := make([]inboxClassifiedRow, 0, len(rows))
 	for _, row := range rows {
@@ -794,6 +826,9 @@ var upsertLearned = func(h *InboxHandler, ctx context.Context, userID, signal, g
 }
 
 func (h *InboxHandler) getAPIKey(c *gin.Context, userID string) (string, error) {
+	if h.db == nil {
+		return "", errNoAPIKey
+	}
 	settings, err := h.db.GetSettings(c.Request.Context(), userID)
 	if err != nil || !settings.HasAnthropicKey {
 		return "", fmt.Errorf("no API key")

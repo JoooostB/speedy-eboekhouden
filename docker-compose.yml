@@ -7,7 +7,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-speedy}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # Postgres 18+ keeps its data in a versioned subdirectory and refuses a
+      # mount on /var/lib/postgresql/data; pgdata18 leaves the old volume alone.
+      - pgdata18:/var/lib/postgresql
     ports:
       - "5432:5432"
     healthcheck:
@@ -49,4 +51,4 @@ services:
       - frontend
 
 volumes:
-  pgdata:
+  pgdata18:

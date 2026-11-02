@@ -10,6 +10,12 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/v2/option"
 )
 
+// Claude's answer per bank line is cached by the inbox handler under a
+// fingerprint of the line (handler/inbox_linecache.go,
+// inboxLineCachePromptVersion). Bump that version whenever
+// batchClassifyPrompt, buildBatchSystemPrompt or the model below changes,
+// or cached lines keep the answers of the old prompt.
+
 // batchClassifyMaxTokens caps Claude's response budget for a single batch
 // classification call. Each result row is roughly 120-180 output tokens
 // (id + category + needsInvoice + confidence + grootboekcode + btwCode +
