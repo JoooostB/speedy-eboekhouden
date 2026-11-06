@@ -16,7 +16,7 @@ import { parseAmount } from "./reviewAmounts";
  *    is a legacy field, empty since the analyser stores nothing;
  *  - a Mail & herken document (archiveFileId): nothing is sent but the id,
  *    the backend links, renames and moves the file; targetFolderId says
- *    where, omitted means Facturen/<jaar>/<maand>.
+ *    where, omitted means the automatic month folder.
  *
  * The upload payloads are the ones the dialog has always sent; only the
  * construction moved here so both sources are unit-tested.
@@ -51,12 +51,12 @@ export interface SubmitInput {
   tegenRekeningId: number;
   /** The linked bank line, 0 for none. */
   importId: number;
-  /** The archive folder the user picked, 0 for none. For an upload none
-   *  means "do not archive"; for a mail-folder document it means the
-   *  automatic Facturen/<jaar>/<maand>. */
+  /** The archive folder the user picked, 0 for none. None means the
+   *  automatic month folder, for an upload and a mail-folder document
+   *  alike. */
   folderId: number;
-  /** The upload inlined as base64. Upload source only; the dialog reads the
-   *  file only when a folder was picked. */
+  /** The upload inlined as base64. Upload source only; the dialog always
+   *  reads the file of an upload. */
   pdfBase64?: string;
   /** Legacy receipt split (lines after the main line); the dialog no
    *  longer fills it and sends `regels` instead. */

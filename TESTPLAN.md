@@ -126,7 +126,7 @@ Needs a card check in the bank statement: a web shop charged −€ 1,00 on the 
 - [ ] Amounts show with a decimal comma ("12,50"). Type "12,50", "1.234,56" and "12.50" in "Bedrag incl. BTW" in turn: "BTW-bedrag" and "Bedrag excl. BTW" follow each time. Type "12,505" or "twaalf": the field turns red with "Vul een bedrag in, bijvoorbeeld 12,50" and "Boeken" skips the row with "Bedrag ontbreekt of klopt niet"
 - [ ] Book an invoice of € 12,50 typed as "12,50", and a receipt with a tip line typed as "2,50": e-Boekhouden shows exactly 12,50 and 2,50 (the old parser booked 12,00 and 2,00)
 - [ ] "Boeken" books the invoice; the dialog shows "1 van 1 facturen geboekt" and "Sluiten"; after closing, both lists reload
-- [ ] With an "Archiefmap" picked, the file is in that folder in e-boekhouden, named `JJJJ-MM-DD_Leverancier_Factuurnummer.pdf` and linked to the mutation. Without a folder and without R2 (the local stack) nothing is archived
+- [ ] With an "Archiefmap" picked, the file is in that folder in e-boekhouden, named `JJJJ-MM-DD_Leverancier_Factuurnummer.pdf` and linked to the mutation. Without a folder the file goes into the month folder (`Facturen / <jaar> / <maand>`, or `<jaar> / <maand>` when the year folders sit at the archive root); the helper under the picker names that path
 - [ ] Upload the same PDF again: the dialog warns "Mogelijk dubbele factuur"
 
 ### 7a. Split bookings (gesplitste boekingen)
@@ -256,7 +256,9 @@ End-to-end with a real administration. The Go and vitest suites cover the status
 - [ ] Live-only, name conflict: first put a file with exactly the expected archive name in the target folder, then book. The booked file becomes `…_2.pdf` (counter before the extension) and nothing is overwritten
 - [ ] Live-only, explicit target: pick a folder in "Verplaatsen naar"; the file lands there with the same id as before (links intact). The picker never offers the mail folder or its subfolders; through the API such a target is refused with 400 ("De mailmap kan geen doelmap zijn" / "Een submap van de mailmap kan geen doelmap zijn")
 - [ ] Live-only, supplier folder: when the supplier already has a folder in the archive, the picker preselects it
-- [ ] Live-only, deleted month folder: delete `Facturen / 2026 / 10 Oktober` in e-Boekhouden, then book a document without picking a folder. Speedy creates a new "10 Oktober" under "2026" and files the document there, never in the deleted folder. Check in devtools that `GET /v1/api/folder/directory` still lists the deleted folder with `isDeleted: true`: ______
+- [ ] Live-only, deleted month folder: delete `Facturen / 2026 / 10 Oktober` in e-Boekhouden, then book a document without picking a folder. Either Speedy creates a new "10 Oktober" under "2026" and files the document there (never in the deleted folder), or e-Boekhouden refuses the create; then a mail-folder document gets the warning "…de maandmap in je archief niet vinden of aanmaken…" and an upload is not booked at all (502 "Het bestand kon niet in je digitale archief worden gezet. Er is nog niets geboekt. …"). Note which one happened and whether `GET /v1/api/folder/directory` still lists the deleted folder with `isDeleted: true`: ______
+- [ ] Live-only, year folders at the root: on an administration whose archive has `2026 / 11 November` directly under Basismap and no `Facturen`, book an upload and a mail-folder document without picking a folder. Both land in `2026 / <maand>`, no `Facturen` folder is created, and the helper under the picker named that path beforehand
+- [ ] Live-only, upload without a folder gets its attachment: upload a receipt (JPG) and an invoice (PDF), leave "Archiefmap" empty and book. In e-Boekhouden each mutation has the file attached, and the file sits in the month folder under its archive name
 - [ ] Book a receipt (JPG) against its bank line: one "Geld uitgegeven" mutation; the file is renamed `JJJJ-MM-DD_Leverancier_bonnetje.jpg` and moved
 - [ ] Book a mail-folder invoice split over two ledgers (section 7a): the mutation has two regels, and the file is still linked, renamed and moved
 
@@ -282,7 +284,7 @@ End-to-end with a real administration. The Go and vitest suites cover the status
 ### 14f. Already processed in e-Boekhouden
 
 - [ ] Link a mail-folder file to a booking in e-Boekhouden itself. In Speedy it appears under "Al verwerkt in e-Boekhouden" with the chip "Al gekoppeld"; "Alles analyseren" skips it
-- [ ] "Alles opruimen" (or the row's "Opruimen") renames and moves it; snackbar "1 document opgeruimd". The link is intact (same file id, still attached to the mutation). Without a target the file goes to `Facturen/<jaar>/<maand>` for the invoice date, or the received date when it was not analysed
+- [ ] "Alles opruimen" (or the row's "Opruimen") renames and moves it; snackbar "1 document opgeruimd". The link is intact (same file id, still attached to the mutation). Without a target the file goes to the month folder (`Facturen/<jaar>/<maand>`, or `<jaar>/<maand>` with year folders at the root) for the invoice date, or the received date when it was not analysed
 - [ ] ⋮ → "Verplaatsen naar…" opens the dialog with "Doelmap" and the helper "Het bestand krijgt een archiefnaam en verlaat je mailmap."; an unanalysed file gets `<ontvangstdatum>_<bestandsnaam>_document.<ext>`
 
 ### 14g. Duplicates, errors, session expiry

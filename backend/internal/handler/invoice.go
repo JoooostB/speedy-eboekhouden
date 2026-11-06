@@ -11,7 +11,9 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -520,7 +522,8 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		//   - UploadKey: R2 object key from a prior /invoices/analyze call
 		//   - ArchiveFileId: a file that already sits in the Mail & herken
 		//     folder; nothing is uploaded, the file is linked, renamed and
-		//     moved to TargetFolderId (or Facturen/<jaar>/<maand> when 0)
+		//     moved to TargetFolderId (or the automatic month folder,
+		//     findOrCreateArchiveFolder, when 0)
 		// Filename is accepted for compatibility but no longer used: the
 		// archive name follows archiveFileName.
 		UploadKey      string `json:"uploadKey"`
@@ -533,10 +536,8 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		DocumentType string `json:"documentType,omitempty"`
 
 		// FolderID is the e-boekhouden archive folder the user picked for an
-		// upload. When zero we fall back to the legacy
-		// findOrCreateArchiveFolder behavior (only relevant for R2
-		// deployments — self-hosted clients should always send a FolderID or
-		// skip archiving entirely).
+		// upload. When zero the upload goes into the automatic month folder
+		// (findOrCreateArchiveFolder).
 		FolderID int `json:"folderId,omitempty"`
 
 		// Optional: bank statement line to mark as processed
@@ -630,8 +631,8 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	}
 
 	// Step 1: Resolve the document and stage the archive file. Every check
-	// that can fail the request happens here, before anything is booked; the
-	// upload itself stays best-effort as it always was.
+	// that can fail the request happens here, before anything is booked; an
+	// upload that cannot be put in the archive fails the request too.
 	src, err := h.prepareArchiveSource(ctx, client, archiveSourceInput{
 		archiveFileID:  req.ArchiveFileId,
 		targetFolderID: req.TargetFolderId,
@@ -649,7 +650,11 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		datum:       req.Datum,
 		docType:     submitFullDocType(req.DocumentType),
 	})
-	arch := h.stageArchiveFile(client, src, req.FolderID, datum, archiveName)
+	arch, err := h.stageArchiveFile(client, src, req.FolderID, datum, archiveName)
+	if err != nil {
+		h.writeStageError(c, sess, err)
+		return
+	}
 	archiefFileId := arch.fileID
 
 	// Step 2: Create "Factuur ontvangen" mutation (soort 1)
@@ -924,8 +929,8 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		Filename       string `json:"filename"`
 		ArchiveFileId  int    `json:"archiveFileId,omitempty"`
 		TargetFolderId int    `json:"targetFolderId,omitempty"`
-		// FolderID is the picked archive folder for an upload; zero falls
-		// back to legacy auto-folder when R2 is configured.
+		// FolderID is the picked archive folder for an upload; zero means
+		// the automatic month folder, as in SubmitFull.
 		FolderID int `json:"folderId,omitempty"`
 		ImportId int `json:"importId,omitempty"`
 		// BankAccountId is the e-boekhouden internal ID of the bank account
@@ -1090,7 +1095,11 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		datum:       req.Datum,
 		docType:     claude.DocumentTypeBonnetje,
 	})
-	arch := h.stageArchiveFile(client, src, req.FolderID, datum, archiveName)
+	arch, err := h.stageArchiveFile(client, src, req.FolderID, datum, archiveName)
+	if err != nil {
+		h.writeStageError(c, sess, err)
+		return
+	}
 	archiefFileId := arch.fileID
 
 	// Step 2: Create the "Geld uitgegeven" mutation (soort 6).
@@ -1204,8 +1213,99 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// findOrCreateArchiveFolder finds or creates the Facturen/year/month folder
-// structure. Path: (implicit root Basismap) → Facturen → 2026 → 01 Januari.
+// maandNamen are the month folder names, "01 Januari" … "12 December".
+var maandNamen = [12]string{
+	"01 Januari", "02 Februari", "03 Maart", "04 April", "05 Mei", "06 Juni",
+	"07 Juli", "08 Augustus", "09 September", "10 Oktober", "11 November", "12 December",
+}
+
+// Archive folder levels, named in errors and logs by archiveFolderError.
+// Fixed words, never user data.
+const (
+	folderLevelFacturen = "facturen"
+	folderLevelJaar     = "jaar"
+	folderLevelMaand    = "maand"
+)
+
+// archiveFolderError is a failed folder creation at one level of the month
+// folder path. It unwraps to e-boekhouden's error, so errors.Is still finds
+// eboekhouden.ErrSessionExpired and errFolderCreateNoID.
+type archiveFolderError struct {
+	level string
+	err   error
+}
+
+func (e *archiveFolderError) Error() string {
+	return "creating " + e.level + " folder: " + e.err.Error()
+}
+
+func (e *archiveFolderError) Unwrap() error { return e.err }
+
+// archiveFolderLevel is the level a findOrCreateArchiveFolder error failed
+// at, for the log line next to errClass; "listing" when the folder listing
+// itself failed.
+func archiveFolderLevel(err error) string {
+	var fe *archiveFolderError
+	if errors.As(err, &fe) {
+		return fe.level
+	}
+	return "listing"
+}
+
+// sameFolderName compares folder names the way a user reads them: case and
+// surrounding whitespace do not matter.
+func sameFolderName(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+// liveChildNamed returns the id of the live folder called name directly
+// under parent (0 is the root), or 0.
+func liveChildNamed(folders []archiveFolder, parent int, name string) int {
+	for _, f := range folders {
+		if !f.IsDeleted && f.ParentID == parent && sameFolderName(f.Naam, name) {
+			return f.ID
+		}
+	}
+	return 0
+}
+
+var yearFolderRe = regexp.MustCompile(`^\d{4}$`)
+
+// resolveArchiveBase decides under which folder the year folders of the
+// automatic month folder live, following the archive the user already has:
+//
+//  1. a live "Facturen" at the root, or the legacy "Basismap/Facturen" (see
+//     findOrCreateArchiveFolder): that folder;
+//  2. otherwise, when the root holds a live folder named like a year
+//     ("2025"), the root itself (base 0), so the path is <jaar>/<maand>;
+//  3. otherwise create = true: a fresh administration gets "Facturen" at
+//     the root.
+//
+// Deleted folders never count. The frontend predicts the same target with
+// archiveBaseFolder in mailDocumentReview.ts; keep the two in step.
+func resolveArchiveBase(folders []archiveFolder) (base int, create bool) {
+	if id := liveChildNamed(folders, 0, "Facturen"); id != 0 {
+		return id, false
+	}
+	for _, f := range folders {
+		if !f.IsDeleted && sameFolderName(f.Naam, "Basismap") {
+			if id := liveChildNamed(folders, f.ID, "Facturen"); id != 0 {
+				return id, false
+			}
+		}
+	}
+	for _, f := range folders {
+		if !f.IsDeleted && f.ParentID == 0 && yearFolderRe.MatchString(strings.TrimSpace(f.Naam)) {
+			return 0, false
+		}
+	}
+	return 0, true
+}
+
+// findOrCreateArchiveFolder finds or creates the month folder for datum,
+// "<base>/2026/01 Januari", where the base follows resolveArchiveBase:
+// "Facturen" when the archive has it, the root when the year folders sit
+// there already, and a new "Facturen" otherwise.
 //
 // IMPORTANT: e-Boekhouden treats parentFolderId=0 as "the implicit root
 // Basismap" and Basismap itself does NOT appear as a real folder in the
@@ -1213,85 +1313,46 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 // find Basismap with parentId=0, didn't, and "helpfully" created a real
 // folder literally named "Basismap" — producing a doubled
 // Basismap/Basismap/Facturen/... structure. We now skip Basismap entirely
-// and create Facturen directly under parentFolderId=0.
-//
-// For backwards-compat with users who have the doubled structure from the
-// previous broken behavior, we look for an existing "Facturen" folder at
-// any depth so we don't strand old files.
+// and create Facturen directly under parentFolderId=0. For users who have
+// the doubled structure, a Facturen under a folder named "Basismap" is
+// reused so old files stay findable.
 //
 // Deleted folders (isDeleted, still listed by e-boekhouden) are never
-// reused: a document filed there would vanish with the folder. A level that
-// only exists as a deleted folder is created afresh. A create call whose
-// answer carries no folder id is an error, not id 0: id 0 is the root, so
-// carrying on would create the next level at the top of the archive.
+// reused: a document filed there would vanish with the folder. A create
+// call whose answer carries no folder id is an error, not id 0: id 0 is the
+// root, so carrying on would create the next level at the top of the
+// archive. A refused create is an *archiveFolderError naming the level.
 func (h *InvoiceHandler) findOrCreateArchiveFolder(client *eboekhouden.Client, datum time.Time) (int, error) {
-	maandNamen := []string{
-		"01 Januari", "02 Februari", "03 Maart", "04 April", "05 Mei", "06 Juni",
-		"07 Juli", "08 Augustus", "09 September", "10 Oktober", "11 November", "12 December",
-	}
-
-	jaar := fmt.Sprintf("%d", datum.Year())
+	jaar := strconv.Itoa(datum.Year())
 	maand := maandNamen[datum.Month()-1]
 
-	all, err := listArchiveFolders(client)
+	folders, err := listArchiveFolders(client)
 	if err != nil {
 		return 0, fmt.Errorf("getting folders: %w", err)
 	}
-	folders := make([]archiveFolder, 0, len(all))
-	for _, f := range all {
-		if !f.IsDeleted {
-			folders = append(folders, f)
-		}
-	}
-	// childNamed returns the live folder called name directly under parent.
-	childNamed := func(parent int, name string) int {
-		for _, f := range folders {
-			if f.Naam == name && f.ParentID == parent {
-				return f.ID
-			}
-		}
-		return 0
-	}
 
-	// Find "Facturen" — preferring one at the top level (parentId == 0,
-	// which is the implicit Basismap root). If we don't find one there but
-	// there IS one under a folder literally named "Basismap" (legacy doubled
-	// structure from the old broken code), reuse that one so old files stay
-	// findable. If neither exists, create a fresh Facturen at the root.
-	rootId := childNamed(0, "Facturen")
-	if rootId == 0 {
-		// Legacy fallback: look for Facturen under any "Basismap" parent.
-		for _, f := range folders {
-			if f.Naam == "Basismap" {
-				if id := childNamed(f.ID, "Facturen"); id != 0 {
-					rootId = id
-					break
-				}
-			}
-		}
-	}
-	if rootId == 0 {
-		// Create Facturen directly at the implicit root.
-		if rootId, err = createArchiveFolder(client, 0, "Facturen"); err != nil {
-			return 0, fmt.Errorf("creating Facturen folder: %w", err)
+	base, create := resolveArchiveBase(folders)
+	if create {
+		if base, err = createArchiveFolder(client, 0, "Facturen"); err != nil {
+			return 0, &archiveFolderError{folderLevelFacturen, err}
 		}
 	}
 
-	yearId := childNamed(rootId, jaar)
-	if yearId == 0 {
-		if yearId, err = createArchiveFolder(client, rootId, jaar); err != nil {
-			return 0, fmt.Errorf("creating year folder: %w", err)
+	yearID := liveChildNamed(folders, base, jaar)
+	if yearID == 0 {
+		if yearID, err = createArchiveFolder(client, base, jaar); err != nil {
+			return 0, &archiveFolderError{folderLevelJaar, err}
 		}
 	}
 
-	monthId := childNamed(yearId, maand)
-	if monthId == 0 {
-		if monthId, err = createArchiveFolder(client, yearId, maand); err != nil {
-			return 0, fmt.Errorf("creating month folder: %w", err)
+	monthID := liveChildNamed(folders, yearID, maand)
+	if monthID == 0 {
+		if monthID, err = createArchiveFolder(client, yearID, maand); err != nil {
+			return 0, &archiveFolderError{folderLevelMaand, err}
 		}
 	}
 
-	return monthId, nil
+	return monthID, nil
 }
 
 // errFolderCreateNoID is a create-folder answer without a usable folder id.

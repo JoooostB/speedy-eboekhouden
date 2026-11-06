@@ -211,3 +211,18 @@ func TestSubmitUploadLinkFailureWarns(t *testing.T) {
 		t.Error("a link failure that is not an expired session must keep the token")
 	}
 }
+
+func TestSubmitReceiptUploadLinkFailureWarns(t *testing.T) {
+	fake, h, client := submitTestEnv(t)
+	fake.linkStatus = http.StatusInternalServerError
+
+	got := callSubmitWithSession(t, h.SubmitReceipt, client, receiptRequest(map[string]any{
+		"pdfBase64": base64.StdEncoding.EncodeToString(jpegBytes),
+	}))
+	if got.status != http.StatusOK || got.resp["archived"] != true || got.resp["linked"] != false {
+		t.Fatalf("status %d: %v", got.status, got.resp)
+	}
+	if got.resp["archiveWarning"] != "De boeking is gelukt en het bestand staat in je archief, maar het is er niet aan gekoppeld. Koppel het zelf aan de boeking in e-Boekhouden." {
+		t.Errorf("archiveWarning = %v", got.resp["archiveWarning"])
+	}
+}

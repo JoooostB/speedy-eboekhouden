@@ -448,16 +448,17 @@ export interface InvoiceSubmitFullRequest {
   /** The uploaded document inlined as base64: the way an upload reaches the
    *  archive. The backend prefers it over uploadKey when both are present. */
   pdfBase64?: string;
-  /** Archive folder ID picked by the user. When omitted the backend either
-   *  auto-creates Facturen/year/month (if R2 is configured) or skips
-   *  archiving entirely. */
+  /** Archive folder ID picked by the user. When omitted the backend puts
+   *  the upload in the month folder (Facturen/<jaar>/<maand>, or
+   *  <jaar>/<maand> when the year folders sit at the archive root); when
+   *  that fails nothing is booked. */
   folderId?: number;
   /** A file in the Mail & herken folder to book from instead of an upload.
    *  Mutually exclusive with pdfBase64/uploadKey. The backend links the
    *  file, renames it and moves it to targetFolderId. */
   archiveFileId?: number;
-  /** Where the mail-folder document goes after booking. Omitted means
-   *  Facturen/<jaar>/<maand>. Only with archiveFileId. */
+  /** Where the mail-folder document goes after booking. Omitted means the
+   *  month folder. Only with archiveFileId. */
   targetFolderId?: number;
   /** Only influences the archive name: "creditnota" or (default) "factuur". */
   documentType?: "factuur" | "creditnota";

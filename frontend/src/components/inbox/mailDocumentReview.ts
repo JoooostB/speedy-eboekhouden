@@ -1,11 +1,13 @@
 import type {
   AnalyzedInvoice,
+  ArchiveFolder,
   BankLineCandidate,
   MailDocument,
   MatchedBankLine,
   SubmitArchiveOutcome,
 } from "../../api/types";
 import { formatLongDate, formatMoney, parseDate } from "../../hooks/mailDocumentsModel";
+import { buildArchiveFolderPath } from "../../hooks/useArchiveFolders";
 
 /**
  * Pure helpers for booking a Mail & herken document through the invoice
@@ -180,7 +182,7 @@ export function submitButtonLabel(i: SubmitLabelInput): string {
   return `Alles boeken (${i.total})`;
 }
 
-/** The month folder names the backend creates under Facturen/<jaar>. */
+/** The month folder names the backend creates under <jaar>. */
 export const MONTH_FOLDER_NAMES: readonly string[] = [
   "01 Januari",
   "02 Februari",
@@ -196,19 +198,68 @@ export const MONTH_FOLDER_NAMES: readonly string[] = [
   "12 December",
 ];
 
-/** "Facturen / 2026 / 10 Oktober": the folder the backend picks when none
- *  was chosen, for the booking date, written like the folder picker and the
- *  backend's targetFolderPath write paths. An unreadable date means today,
- *  like the backend's bookingDate. */
-export function autoArchiveFolderPath(datum: string, now: Date = new Date()): string {
+/** Where the year folders of the automatic month folder live: an existing
+ *  folder ("Facturen"), the archive root (year folders already sit there),
+ *  or a "Facturen" the backend still has to create. */
+export type ArchiveBase = { kind: "folder"; id: number } | { kind: "root" } | { kind: "create" };
+
+const sameFolderName = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+function liveChildNamed(folders: readonly ArchiveFolder[], parentId: number, name: string): ArchiveFolder | undefined {
+  return folders.find((f) => !f.isDeleted && f.parentId === parentId && sameFolderName(f.naam, name));
+}
+
+/** The backend's resolveArchiveBase (handler/invoice.go), same order: a live
+ *  "Facturen" at the root, then a "Facturen" under a folder named
+ *  "Basismap" (legacy), then year folders ("2025") at the root, else a new
+ *  "Facturen". Deleted folders never count. */
+export function archiveBaseFolder(folders: readonly ArchiveFolder[]): ArchiveBase {
+  const facturen = liveChildNamed(folders, 0, "Facturen");
+  if (facturen) return { kind: "folder", id: facturen.id };
+  for (const f of folders) {
+    if (f.isDeleted || !sameFolderName(f.naam, "Basismap")) continue;
+    const legacy = liveChildNamed(folders, f.id, "Facturen");
+    if (legacy) return { kind: "folder", id: legacy.id };
+  }
+  if (folders.some((f) => !f.isDeleted && f.parentId === 0 && /^\d{4}$/.test(f.naam.trim()))) return { kind: "root" };
+  return { kind: "create" };
+}
+
+/** "Facturen / 2026 / 10 Oktober" or "2026 / 10 Oktober": the folder the
+ *  backend picks when none was chosen, for the booking date and the archive
+ *  as it is (archiveBaseFolder), written like the folder picker and the
+ *  backend's targetFolderPath. Existing folders keep their own spelling. An
+ *  unreadable date means today, like the backend's bookingDate. */
+export function autoArchiveFolderPath(datum: string, folders: readonly ArchiveFolder[], now: Date = new Date()): string {
   const d = parseDate(datum) ?? now;
-  return `Facturen / ${d.getFullYear()} / ${MONTH_FOLDER_NAMES[d.getMonth()]}`;
+  const jaar = String(d.getFullYear());
+  const maand = MONTH_FOLDER_NAMES[d.getMonth()];
+  const base = archiveBaseFolder(folders);
+  const segments: string[] = [];
+  let parentId: number | null = null;
+  if (base.kind === "folder") {
+    const byId = new Map(folders.map((f) => [f.id, f]));
+    const folder = byId.get(base.id);
+    if (folder) segments.push(buildArchiveFolderPath(folder, byId));
+    parentId = base.id;
+  } else if (base.kind === "root") {
+    parentId = 0;
+  } else {
+    segments.push("Facturen");
+  }
+  const year = parentId === null ? undefined : liveChildNamed(folders, parentId, jaar);
+  segments.push(year?.naam ?? jaar);
+  const month = year ? liveChildNamed(folders, year.id, maand) : undefined;
+  segments.push(month?.naam ?? maand);
+  return segments.join(" / ");
 }
 
 export interface FolderHelperInput {
   folderPicked: boolean;
   /** The booking date, for the automatic folder. */
   datum: string;
+  /** The archive's folders, for the automatic folder (archiveBaseFolder). */
+  folders: readonly ArchiveFolder[];
   mailFolderName: string;
 }
 
@@ -220,7 +271,15 @@ export function archiveFolderHelperText(i: FolderHelperInput, now?: Date): strin
     ? `Het bestand krijgt een archiefnaam en verlaat je mailmap ${i.mailFolderName}.`
     : "Het bestand krijgt een archiefnaam en verlaat je mailmap.";
   if (i.folderPicked) return leaves;
-  return `${leaves} Kies je geen map, dan komt het in ${autoArchiveFolderPath(i.datum, now)}.`;
+  return `${leaves} Kies je geen map, dan komt het in ${autoArchiveFolderPath(i.datum, i.folders, now)}.`;
+}
+
+/** Helper text under the folder picker of an upload: the file always goes
+ *  into the digital archive, into the automatic month folder when no folder
+ *  is picked. The upload is not booked without it. */
+export function uploadFolderHelperText(i: Omit<FolderHelperInput, "mailFolderName">, now?: Date): string {
+  if (i.folderPicked) return "Het bestand komt in deze map in je digitale archief.";
+  return `Het bestand komt in je digitale archief. Kies je geen map, dan komt het in ${autoArchiveFolderPath(i.datum, i.folders, now)}.`;
 }
 
 /** The result line of a booked mail-folder document: "Geboekt · verplaatst

@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -304,6 +306,30 @@ func TestSubmitReceiptWithRegelsBooksAgainstTheBankLine(t *testing.T) {
 		`{"bedrag":10,"bedragExclusief":10,"bedragInclusief":10,"btw":0,"btwCode":"GEEN","index":2,"omschrijving":"Fooi","tegenRekening":4310}]}`
 	if bodies[0] != want {
 		t.Errorf("mutatie =\n %s\nwant\n %s", bodies[0], want)
+	}
+}
+
+// A split receipt with an uploaded file books the split and links the file.
+func TestSubmitReceiptWithRegelsAndAFile(t *testing.T) {
+	fake, h, client := submitTestEnv(t)
+
+	status, resp := callSubmit(t, h.SubmitReceipt, client, receiptRequest(map[string]any{
+		"bedragIncl": 121, "importId": 77,
+		"pdfBase64": base64.StdEncoding.EncodeToString(jpegBytes),
+		"regels": []map[string]any{
+			{"omschrijving": "Drank", "tegenRekeningId": 4300, "btwCode": "HOOG_INK_21", "bedragIncl": 24.20},
+			{"omschrijving": "Eten", "tegenRekeningId": 4300, "btwCode": "LAAG_INK_9", "bedragIncl": 96.80},
+		},
+	}))
+	if status != http.StatusOK || resp["archived"] != true || resp["linked"] != true {
+		t.Fatalf("status %d: %v", status, resp)
+	}
+	if bodies := fake.mutatieBodies(); len(bodies) != 1 || !strings.Contains(bodies[0], `"index":1`) {
+		t.Errorf("mutaties = %v", bodies)
+	}
+	wantWrites := []string{"POST /v1/api/folder/upload", "POST /v1/api/mutatie", "POST /v1/api/folderkoppel/koppel/item"}
+	if got := fake.writes(); !reflect.DeepEqual(got, wantWrites) {
+		t.Errorf("writes = %v, want %v", got, wantWrites)
 	}
 }
 

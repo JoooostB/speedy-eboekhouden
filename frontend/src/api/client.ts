@@ -606,8 +606,9 @@ export const api = {
   },
 
   /** Renames the files by the archive naming convention and moves them out
-   *  of the mail folder. Without targetFolderId each file goes to
-   *  Facturen/<jaar>/<maand>. */
+   *  of the mail folder. Without targetFolderId each file goes to its month
+   *  folder (Facturen/<jaar>/<maand>, or <jaar>/<maand> when the year
+   *  folders sit at the archive root). */
   archiveDocuments(fileIds: number[], targetFolderId?: number) {
     const body: { fileIds: number[]; targetFolderId?: number } = { fileIds };
     if (targetFolderId) body.targetFolderId = targetFolderId;

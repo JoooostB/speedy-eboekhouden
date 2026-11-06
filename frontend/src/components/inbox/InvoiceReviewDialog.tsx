@@ -48,6 +48,7 @@ import {
 import {
   NO_MATCH_ALERT_TEXT,
   archiveFolderHelperText,
+  uploadFolderHelperText,
   archiveResultLine,
   bankLineChoices,
   bankLineOptionLabel,
@@ -225,10 +226,10 @@ const NO_FOLDERS: readonly number[] = [];
  * - All interactive elements are keyboard accessible (native MUI)
  *
  * Two document sources share the dialog. An upload (the "Facturen uploaden"
- * button or a bank line's upload zone) is sent inline with the booking when
- * a folder is picked. A Mail & herken document (source.archiveFileId) is
+ * button or a bank line's upload zone) is sent inline with the booking and
+ * archived in the picked folder or the month folder. A Mail & herken document (source.archiveFileId) is
  * already in e-boekhouden: the booking sends its id and the folder to move
- * it to ("Verplaatsen naar"; none means Facturen/<jaar>/<maand>), and the
+ * it to ("Verplaatsen naar"; none means the month folder), and the
  * backend links, renames and moves it. For such a document the card is
  * headed by its title, several candidate bank lines can be chosen from, an
  * invoice without a bank line is booked as an open invoice, and on phones
@@ -563,7 +564,7 @@ export function InvoiceReviewDialog({
       // Encode the original File as base64 once per invoice: the analyser
       // keeps no copy of an upload (nothing goes to R2), so the inline bytes
       // are the only way the backend can archive it. Always sent for an
-      // upload; whether it is archived, and where, follows folderId. A
+      // upload; where it is archived follows folderId (0: the month folder). A
       // mail-folder document is never inlined: the backend already has the
       // file and only needs its id.
       let pdfBase64: string | undefined;
@@ -581,11 +582,11 @@ export function InvoiceReviewDialog({
       }
       const folderId = inv.archiveFolder?.id ?? 0;
 
-      // The user expected the PDF to be archived if and only if both a folder
-      // and a PDF were available. We use this below to detect a silent
-      // archive failure (mutation booked but `archived: false`) and surface
-      // it as a warning instead of letting the user assume everything is OK.
-      const archiveExpected = !!pdfBase64 && !!folderId;
+      // An inlined upload is always archived: in the picked folder or in the
+      // automatic month folder, and the backend refuses the booking when it
+      // cannot. As a safety net, a booked upload that comes back with
+      // `archived: false` is still surfaced as a warning below.
+      const archiveExpected = !!pdfBase64;
 
       // A split booking sends its lines and the totals they add up to (the
       // BTW is the sum of the per-line BTW); invoiceBlocker refused the row
@@ -1194,13 +1195,13 @@ export function InvoiceReviewDialog({
                     </Box>
                     )}
 
-                    {/* Row 4b: Archive folder picker. For an upload it is
-                        optional — leaving it empty means the PDF is not
-                        uploaded to the digitaal archief (mutation is still
-                        booked). For a mail-folder document the file always
-                        leaves the mail folder: the picker says where it goes,
-                        empty meaning Facturen/<jaar>/<maand>, and the mail
-                        folder's subtree is not on offer. */}
+                    {/* Row 4b: Archive folder picker. An upload always goes
+                        into the digitaal archief: the picked folder, or the
+                        automatic month folder when it is left empty. For a
+                        mail-folder document the file always leaves the mail
+                        folder: the picker says where it goes, empty meaning
+                        the month folder, and the mail folder's subtree is not
+                        on offer. */}
                     <Box sx={{ mt: 2 }}>
                       {isArchiveSource(inv.source) ? (
                         <ArchiveFolderPicker
@@ -1211,6 +1212,7 @@ export function InvoiceReviewDialog({
                           helperText={archiveFolderHelperText({
                             folderPicked: inv.archiveFolder !== null,
                             datum: inv.datum,
+                            folders: archiveFolders,
                             mailFolderName: inv.source.mailFolderName ?? "",
                           })}
                           excludeFolderIds={excludeFolderIds}
@@ -1220,7 +1222,11 @@ export function InvoiceReviewDialog({
                           value={inv.archiveFolder}
                           onChange={(f) => updateField(index, "archiveFolder", f)}
                           disabled={submitting}
-                          helperText="Optioneel. Kies een map om het bestand in je digitale archief te bewaren."
+                          helperText={uploadFolderHelperText({
+                            folderPicked: inv.archiveFolder !== null,
+                            datum: inv.datum,
+                            folders: archiveFolders,
+                          })}
                         />
                       )}
                     </Box>

@@ -184,7 +184,7 @@ The backend reads its configuration from environment variables. `.env.example` l
 | `WEBAUTHN_ORIGIN` | *(FRONTEND_ORIGIN)* | WebAuthn relying party origin |
 | `WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying party ID |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | *(empty)*, `587`, *(empty)*, *(empty)*, `noreply@speedy-eboekhouden.nl` | Welcome and recovery e-mails. Without `SMTP_HOST` no mail is sent and passkey recovery is unavailable. |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_JURISDICTION`, `R2_PUBLIC_URL` | *(empty)*, bucket `speedy-eboekhouden` | Cloudflare R2 for avatars; off without account id and key id. When R2 is on, an upload booked without an archive folder is filed under `Facturen/<jaar>/<maand>`; without R2 such an upload is not archived. |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_JURISDICTION`, `R2_PUBLIC_URL` | *(empty)*, bucket `speedy-eboekhouden` | Cloudflare R2 for avatars; off without account id and key id. |
 
 ## Security
 
