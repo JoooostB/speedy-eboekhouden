@@ -128,6 +128,9 @@ Needs a card check in the bank statement: a web shop charged −€ 1,00 on the 
 - [ ] "Boeken" books the invoice; the dialog shows "1 van 1 facturen geboekt" and "Sluiten"; after closing, both lists reload
 - [ ] With an "Archiefmap" picked, the file is in that folder in e-boekhouden, named `JJJJ-MM-DD_Leverancier_Factuurnummer.pdf` and linked to the mutation. Without a folder the file goes into the month folder (`Facturen / <jaar> / <maand>`, or `<jaar> / <maand>` when the year folders sit at the archive root); the helper under the picker names that path
 - [ ] Upload the same PDF again: the dialog warns "Mogelijk dubbele factuur"
+- [ ] "Niet boeken": upload three files of which one was booked before. Click "Niet boeken" in its "Mogelijk dubbele factuur" alert: the card disappears, a screen reader says "{titel} wordt niet geboekt", focus is on the heading of the next card, and the button reads "Alles boeken (2)". Book: "2 van 2 facturen geboekt", and nothing is booked or archived for the removed file
+- [ ] "Niet boeken" on the last remaining card closes the dialog like "Annuleren" (nothing booked, the lists do not reload). For a mail-folder document the file is still in the mail folder afterwards, not ignored and with its analysis
+- [ ] "Niet boeken" while a lookup is still running: open a batch of two where the first card's relation has no known default ledger (an older cached analysis), throttle the network in devtools, and remove the first card right away. When the lookup answers, the remaining card's tegenrekening does not change
 
 ### 7a. Split bookings (gesplitste boekingen)
 
