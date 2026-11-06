@@ -104,7 +104,6 @@ The backend handles passkey authentication and sessions, talks to e-boekhouden.n
 | `internal/mail` | SMTP mailer for welcome and recovery e-mails |
 | `internal/middleware` | CORS, security headers, rate limiting |
 | `internal/session` | Redis-backed session store and middleware |
-| `internal/storage` | Cloudflare R2 client for avatars |
 
 ### Frontend
 

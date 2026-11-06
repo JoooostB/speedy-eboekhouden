@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import type { BankLineCandidate, InvoiceAnalyzeResponse, InvoiceData, MailDocument } from "../../api/types";
+import type { ArchiveFolder, BankLineCandidate, InvoiceAnalyzeResponse, InvoiceData, MailDocument } from "../../api/types";
 import {
   INVOICE_FILE_ACCEPT,
+  archiveBaseFolder,
   archiveFolderHelperText,
   archiveResultLine,
   autoArchiveFolderPath,
@@ -14,6 +15,7 @@ import {
   mediaTypeFromName,
   previewKind,
   submitButtonLabel,
+  uploadFolderHelperText,
   NO_MATCH_ALERT_TEXT,
 } from "./mailDocumentReview";
 
@@ -51,8 +53,6 @@ const candidate = (id: number, overrides: Partial<BankLineCandidate> = {}): Bank
 const analysis = (overrides: Partial<InvoiceAnalyzeResponse> = {}): InvoiceAnalyzeResponse => ({
   invoice: invoice(),
   filename: "Voorbeeld-Bijlage.pdf",
-  uploadKey: "",
-  pdfUrl: "",
   pdfHash: "abc",
   matchedRelation: { id: 55, code: "R1", bedrijf: "Anthropic" },
   crediteurenId: 1600,
@@ -157,17 +157,6 @@ describe("buildAnalyzedInvoiceFromDocument", () => {
     expect(out.filename).toBe("Voorbeeld-Bijlage.pdf");
   });
 
-  it("never uses R2 for a mail-folder document", () => {
-    const out = buildAnalyzedInvoiceFromDocument(
-      document({ analysis: analysis({ uploadKey: "uploads/x/document.pdf", pdfUrl: "https://r2/x" }) }),
-      pdfFile(),
-      "blob:1",
-      opts,
-    )!;
-    expect(out.uploadKey).toBe("");
-    expect(out.pdfUrl).toBe("");
-  });
-
   it("takes the match and candidates from the document's fresh data", () => {
     // The list reassigned the line to another document: the cached analysis
     // still names it, the document no longer does.
@@ -268,26 +257,79 @@ describe("isOpenBooking and the dialog texts", () => {
 
 describe("automatic folder", () => {
   const now = new Date(2026, 9, 24);
+  const folder = (id: number, naam: string, parentId = 0, isDeleted = false): ArchiveFolder => ({ id, naam, parentId, isDeleted });
+  // The same trees as the backend's archive_folder_test.go.
+  const facturenTree = [folder(100, "Inbox"), folder(200, "Facturen"), folder(201, "2026", 200), folder(202, "10 Oktober", 201)];
+  const rootYears = [folder(100, "Inbox"), folder(800, "2025"), folder(810, "01 Januari", 800), folder(801, "2026"), folder(802, "10 Oktober", 801)];
+  const without = (folders: ArchiveFolder[], ...ids: number[]) => folders.filter((f) => !ids.includes(f.id));
+
+  it("picks the base like the backend's resolveArchiveBase", () => {
+    expect(archiveBaseFolder([])).toEqual({ kind: "create" });
+    expect(archiveBaseFolder(facturenTree)).toEqual({ kind: "folder", id: 200 });
+    expect(archiveBaseFolder([folder(50, "Basismap"), folder(51, "Facturen", 50)])).toEqual({ kind: "folder", id: 51 });
+    expect(archiveBaseFolder(rootYears)).toEqual({ kind: "root" });
+    expect(archiveBaseFolder([folder(100, "Inbox")])).toEqual({ kind: "create" });
+    expect(archiveBaseFolder([folder(1, "Oud"), folder(2, "2024", 1)])).toEqual({ kind: "create" });
+    expect(archiveBaseFolder([folder(1, "2024 oud")])).toEqual({ kind: "create" });
+  });
 
   it("names Facturen / <jaar> / <NN Maand> for the booking date", () => {
-    expect(autoArchiveFolderPath("2026-10-12", now)).toBe("Facturen / 2026 / 10 Oktober");
-    expect(autoArchiveFolderPath("2025-01-03", now)).toBe("Facturen / 2025 / 01 Januari");
-    expect(autoArchiveFolderPath("2026-12-31", now)).toBe("Facturen / 2026 / 12 December");
+    expect(autoArchiveFolderPath("2026-10-12", facturenTree, now)).toBe("Facturen / 2026 / 10 Oktober");
+    expect(autoArchiveFolderPath("2025-01-03", facturenTree, now)).toBe("Facturen / 2025 / 01 Januari");
+    expect(autoArchiveFolderPath("2026-12-31", [], now)).toBe("Facturen / 2026 / 12 December");
+  });
+
+  it("follows year folders at the root", () => {
+    expect(autoArchiveFolderPath("2026-10-12", rootYears, now)).toBe("2026 / 10 Oktober");
+    // Month missing, year missing: created under the root years.
+    expect(autoArchiveFolderPath("2026-10-12", without(rootYears, 802), now)).toBe("2026 / 10 Oktober");
+    expect(autoArchiveFolderPath("2026-10-12", without(rootYears, 801, 802), now)).toBe("2026 / 10 Oktober");
+  });
+
+  it("prefers Facturen over year folders at the root", () => {
+    expect(autoArchiveFolderPath("2026-10-12", [...facturenTree, folder(801, "2026")], now)).toBe("Facturen / 2026 / 10 Oktober");
+  });
+
+  it("ignores deleted folders", () => {
+    expect(autoArchiveFolderPath("2026-10-12", [folder(200, "Facturen", 0, true), ...rootYears], now)).toBe("2026 / 10 Oktober");
+    expect(autoArchiveFolderPath("2026-10-12", [folder(800, "2025", 0, true)], now)).toBe("Facturen / 2026 / 10 Oktober");
+  });
+
+  it("matches names regardless of case and whitespace, keeping their spelling", () => {
+    expect(
+      autoArchiveFolderPath("2026-10-12", [folder(200, " facturen "), folder(201, "2026 ", 200), folder(202, "10 OKTOBER", 201)], now),
+    ).toBe(" facturen  / 2026  / 10 OKTOBER");
+    expect(autoArchiveFolderPath("2026-10-12", [folder(801, " 2026"), folder(802, "10 oktober ", 801)], now)).toBe(" 2026 / 10 oktober ");
+  });
+
+  it("names the legacy Basismap / Facturen", () => {
+    expect(autoArchiveFolderPath("2026-10-12", [folder(50, "Basismap"), folder(51, "Facturen", 50)], now)).toBe(
+      "Basismap / Facturen / 2026 / 10 Oktober",
+    );
   });
 
   it("falls back to today for an unreadable date", () => {
-    expect(autoArchiveFolderPath("", now)).toBe("Facturen / 2026 / 10 Oktober");
-    expect(autoArchiveFolderPath("geen datum", now)).toBe("Facturen / 2026 / 10 Oktober");
+    expect(autoArchiveFolderPath("", [], now)).toBe("Facturen / 2026 / 10 Oktober");
+    expect(autoArchiveFolderPath("geen datum", rootYears, now)).toBe("2026 / 10 Oktober");
+  });
+
+  it("tells an upload where its file goes", () => {
+    expect(uploadFolderHelperText({ folderPicked: false, datum: "2026-10-12", folders: rootYears }, now)).toBe(
+      "Het bestand komt in je digitale archief. Kies je geen map, dan komt het in 2026 / 10 Oktober.",
+    );
+    expect(uploadFolderHelperText({ folderPicked: true, datum: "2026-10-12", folders: rootYears }, now)).toBe(
+      "Het bestand komt in deze map in je digitale archief.",
+    );
   });
 
   it("explains the automatic folder only while none is picked", () => {
-    expect(archiveFolderHelperText({ folderPicked: false, datum: "2026-10-12", mailFolderName: "Inbox" }, now)).toBe(
+    expect(archiveFolderHelperText({ folderPicked: false, datum: "2026-10-12", folders: facturenTree, mailFolderName: "Inbox" }, now)).toBe(
       "Het bestand krijgt een archiefnaam en verlaat je mailmap Inbox. Kies je geen map, dan komt het in Facturen / 2026 / 10 Oktober.",
     );
-    expect(archiveFolderHelperText({ folderPicked: true, datum: "2026-10-12", mailFolderName: "Inbox" }, now)).toBe(
+    expect(archiveFolderHelperText({ folderPicked: true, datum: "2026-10-12", folders: facturenTree, mailFolderName: "Inbox" }, now)).toBe(
       "Het bestand krijgt een archiefnaam en verlaat je mailmap Inbox.",
     );
-    expect(archiveFolderHelperText({ folderPicked: true, datum: "2026-10-12", mailFolderName: "" }, now)).toBe(
+    expect(archiveFolderHelperText({ folderPicked: true, datum: "2026-10-12", folders: facturenTree, mailFolderName: "" }, now)).toBe(
       "Het bestand krijgt een archiefnaam en verlaat je mailmap.",
     );
   });

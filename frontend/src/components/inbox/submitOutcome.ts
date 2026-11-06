@@ -25,9 +25,10 @@ export interface SubmitOutcome {
 
 export interface SubmitOutcomeInput {
   isReceipt: boolean;
-  /** An upload was inlined with a folder picked, so the backend should
-   *  have archived it. A mail-folder document never sets this: its archive
-   *  side is reported through archiveWarning. */
+  /** An upload was inlined, so the backend should have archived it (in the
+   *  picked folder or the month folder; it refuses the booking otherwise).
+   *  A mail-folder document never sets this: its archive side is reported
+   *  through archiveWarning. */
   archiveExpected: boolean;
   /** The submit answer; a receipt answer has no paymentWarning. */
   resp: Pick<InvoiceSubmitFullResponse, "archived" | "archiveWarning" | "paymentWarning">;

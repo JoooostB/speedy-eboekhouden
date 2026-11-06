@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -47,25 +46,21 @@ var testFolders = []archiveFolder{
 
 func TestValidateArchiveSource(t *testing.T) {
 	tests := []struct {
-		name                 string
-		fileID               int
-		pdfBase64, uploadKey string
-		wantErr              string
+		name      string
+		fileID    int
+		pdfBase64 string
+		wantErr   string
 	}{
-		{"nothing", 0, "", "", ""},
-		{"base64 only", 0, "b64", "", ""},
-		{"upload key only", 0, "", "key", ""},
-		{"base64 and upload key", 0, "b64", "key", ""},
-		{"archive file only", 5, "", "", ""},
-		{"archive file and base64", 5, "b64", "", "Kies één bron voor het document."},
-		{"archive file and upload key", 5, "", "key", "Kies één bron voor het document."},
-		{"archive file and both", 5, "b64", "key", "Kies één bron voor het document."},
-		{"negative id", -1, "", "", "Ongeldig document-id."},
-		{"negative id beats double source", -1, "b64", "", "Ongeldig document-id."},
+		{"nothing", 0, "", ""},
+		{"base64 only", 0, "b64", ""},
+		{"archive file only", 5, "", ""},
+		{"archive file and base64", 5, "b64", "Kies één bron voor het document."},
+		{"negative id", -1, "", "Ongeldig document-id."},
+		{"negative id beats double source", -1, "b64", "Ongeldig document-id."},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateArchiveSource(tc.fileID, tc.pdfBase64, tc.uploadKey)
+			err := validateArchiveSource(tc.fileID, tc.pdfBase64)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
@@ -250,11 +245,8 @@ func TestArchiveSourceName(t *testing.T) {
 var jpegBytes = append([]byte{0xff, 0xd8, 0xff, 0xe0}, make([]byte, 32)...)
 
 func TestUploadArchiveName(t *testing.T) {
-	h := &InvoiceHandler{}
-	ctx := context.Background()
-
 	t.Run("jpg body is archived as .jpg and dodges a conflict", func(t *testing.T) {
-		src, err := h.prepareUploadSource(ctx, archiveSourceInput{pdfBase64: base64.StdEncoding.EncodeToString(jpegBytes)})
+		src, err := prepareUploadSource(archiveSourceInput{pdfBase64: base64.StdEncoding.EncodeToString(jpegBytes)})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -271,19 +263,20 @@ func TestUploadArchiveName(t *testing.T) {
 		}
 	})
 	t.Run("unsupported bytes are refused", func(t *testing.T) {
-		_, err := h.prepareUploadSource(ctx, archiveSourceInput{pdfBase64: base64.StdEncoding.EncodeToString([]byte("hello world"))})
+		_, err := prepareUploadSource(archiveSourceInput{pdfBase64: base64.StdEncoding.EncodeToString([]byte("hello world"))})
 		if !errors.Is(err, claude.ErrUnsupportedMediaType) {
 			t.Errorf("err = %v, want ErrUnsupportedMediaType", err)
 		}
 	})
-	t.Run("undecodable base64 means no archive, not an error", func(t *testing.T) {
-		src, err := h.prepareUploadSource(ctx, archiveSourceInput{pdfBase64: "%%%"})
-		if err != nil || src.fromMailFolder() || len(src.data) != 0 {
-			t.Errorf("got (%+v, %v)", src, err)
+	t.Run("undecodable base64 is refused", func(t *testing.T) {
+		_, err := prepareUploadSource(archiveSourceInput{pdfBase64: "%%%"})
+		var bad *badRequestError
+		if !errors.As(err, &bad) || bad.msg != errUnreadableUpload {
+			t.Errorf("err = %v, want errUnreadableUpload", err)
 		}
 	})
-	t.Run("upload key without R2 means no archive", func(t *testing.T) {
-		src, err := h.prepareUploadSource(ctx, archiveSourceInput{uploadKey: "uploads/x/document.pdf"})
+	t.Run("no document means no archive", func(t *testing.T) {
+		src, err := prepareUploadSource(archiveSourceInput{})
 		if err != nil || len(src.data) != 0 {
 			t.Errorf("got (%+v, %v)", src, err)
 		}
@@ -377,6 +370,11 @@ type fakeEBoekhouden struct {
 	moveBody   string // "" moves the files
 	createBody string // "" creates the folder and answers it
 
+	createStatus    int  // != 0 refuses folder creation with this status
+	directoryStatus int  // != 0 fails the folder listing with this status
+	uploadStatus    int  // != 0 refuses the upload with this status
+	uploadHidden    bool // accepts the upload but never lists the file
+
 	mutatieBody   string // "" books with mutNr
 	mutatieHangup bool   // drops the connection instead of answering
 
@@ -452,8 +450,17 @@ func (f *fakeEBoekhouden) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/header"):
 		write(map[string]any{"menhFolderId": f.menh, "credits": 1})
 	case r.Method == http.MethodGet && path == "/v1/api/folder/directory":
+		if f.directoryStatus != 0 {
+			w.WriteHeader(f.directoryStatus)
+			return
+		}
 		write(f.folders)
 	case r.Method == http.MethodPost && path == "/v1/api/folder/directory":
+		if f.createStatus != 0 {
+			w.WriteHeader(f.createStatus)
+			w.Write([]byte(`{"message":"refused"}`))
+			return
+		}
 		if f.createBody != "" {
 			w.Write([]byte(f.createBody))
 			return
@@ -481,7 +488,15 @@ func (f *fakeEBoekhouden) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Data     string `json:"data"`
 		}
 		json.Unmarshal(body, &req)
+		if f.uploadStatus != 0 {
+			w.WriteHeader(f.uploadStatus)
+			return
+		}
 		f.nextID++
+		if f.uploadHidden {
+			write(req.FolderID)
+			return
+		}
 		f.files[req.FolderID] = append(f.files[req.FolderID], eboekhouden.ArchiveFile{
 			ID: f.nextID, ParentID: req.FolderID, Soort: "F", Naam: req.FileName, Datum: "2026-10-24T16:00:00", Size: int64(len(req.Data)),
 		})
@@ -620,7 +635,7 @@ func (f *fakeEBoekhouden) call(method, path string) (fakeCall, bool) {
 }
 
 // submitTestEnv starts the fake, builds a client pointed at it and a handler
-// without Redis, R2 or a database.
+// without Redis or a database.
 func submitTestEnv(t *testing.T) (*fakeEBoekhouden, *InvoiceHandler, *eboekhouden.Client) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -971,6 +986,162 @@ func TestSubmitFullWithoutDocument(t *testing.T) {
 	}
 }
 
+// An upload without a picked folder goes into the month folder, for an
+// invoice and a receipt alike, and is linked to the booking.
+func TestSubmitUploadWithoutFolderGoesIntoTheMonthFolder(t *testing.T) {
+	tests := []struct {
+		name       string
+		receipt    bool
+		folders    []archiveFolder
+		wantFolder int
+		wantName   string
+	}{
+		{"invoice, Facturen", false, nil, 202, "2026-10-12_Anthropic_INV-0042.jpg"},
+		{"receipt, Facturen", true, nil, 202, "2026-10-03_Albert-Heijn_bonnetje.jpg"},
+		{"receipt, year folders at the root", true, rootYearFolders, 802, "2026-10-03_Albert-Heijn_bonnetje.jpg"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake, h, client := submitTestEnv(t)
+			if tc.folders != nil {
+				fake.folders = append([]archiveFolder(nil), tc.folders...)
+			}
+			handler, body := h.SubmitFull, fullRequest(nil)
+			if tc.receipt {
+				handler, body = h.SubmitReceipt, receiptRequest(nil)
+			}
+			body["pdfBase64"] = base64.StdEncoding.EncodeToString(jpegBytes)
+
+			status, resp := callSubmit(t, handler, client, body)
+			if status != http.StatusOK {
+				t.Fatalf("status %d: %v", status, resp)
+			}
+			if resp["archived"] != true || resp["linked"] != true || resp["targetFolderId"] != float64(tc.wantFolder) || resp["archiveName"] != tc.wantName {
+				t.Errorf("response = %v", resp)
+			}
+			if _, ok := resp["archiveWarning"]; ok {
+				t.Errorf("unexpected warning %v", resp["archiveWarning"])
+			}
+			// No folder was created: the month folder exists in both layouts.
+			wantWrites := []string{"POST /v1/api/folder/upload", "POST /v1/api/mutatie", "POST /v1/api/folderkoppel/koppel/item"}
+			if got := fake.writes(); !reflect.DeepEqual(got, wantWrites) {
+				t.Errorf("writes = %v, want %v", got, wantWrites)
+			}
+			upload, _ := fake.call(http.MethodPost, "/v1/api/folder/upload")
+			if !strings.Contains(upload.body, `"folderId":`+strconv.Itoa(tc.wantFolder)) {
+				t.Errorf("upload payload = %s", upload.body)
+			}
+		})
+	}
+}
+
+// An upload that cannot be put in the archive is never booked: the request
+// fails before the mutation, for an invoice and a receipt alike.
+func TestSubmitUploadThatCannotBeArchivedIsNotBooked(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(f *fakeEBoekhouden)
+		extra map[string]any
+	}{
+		{"month folder cannot be created", func(f *fakeEBoekhouden) {
+			f.folders = withoutFolder(rootYearFolders, 802)
+			f.createStatus = http.StatusBadRequest
+		}, nil},
+		{"folder listing fails", func(f *fakeEBoekhouden) { f.directoryStatus = http.StatusInternalServerError }, nil},
+		{"upload refused", func(f *fakeEBoekhouden) { f.uploadStatus = http.StatusInternalServerError }, map[string]any{"folderId": 202}},
+		{"uploaded file not found", func(f *fakeEBoekhouden) { f.uploadHidden = true }, nil},
+	}
+	for _, tc := range tests {
+		for _, receipt := range []bool{false, true} {
+			name := tc.name + ", invoice"
+			if receipt {
+				name = tc.name + ", receipt"
+			}
+			t.Run(name, func(t *testing.T) {
+				fake, h, client := submitTestEnv(t)
+				tc.setup(fake)
+				handler, body := h.SubmitFull, fullRequest(tc.extra)
+				if receipt {
+					handler, body = h.SubmitReceipt, receiptRequest(tc.extra)
+				}
+				body["pdfBase64"] = base64.StdEncoding.EncodeToString(jpegBytes)
+
+				status, resp := callSubmit(t, handler, client, body)
+				if status != http.StatusBadGateway || resp["error"] != errStageFailed {
+					t.Errorf("status %d, response %v", status, resp)
+				}
+				for _, w := range fake.writes() {
+					if w == "POST /v1/api/mutatie" || strings.Contains(w, "koppel") {
+						t.Errorf("nothing may be booked, got %v", fake.writes())
+						break
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSubmitUploadSessionExpiresWhileStaging(t *testing.T) {
+	for _, receipt := range []bool{false, true} {
+		fake, h, client := submitTestEnv(t)
+		fake.expireAt = "POST /v1/api/folder/upload"
+		handler, body := h.SubmitFull, fullRequest(nil)
+		if receipt {
+			handler, body = h.SubmitReceipt, receiptRequest(nil)
+		}
+		body["pdfBase64"] = base64.StdEncoding.EncodeToString(jpegBytes)
+
+		got := callSubmitWithSession(t, handler, client, body)
+		if got.status != http.StatusPreconditionFailed || got.resp["error"] != "eboekhouden_session_expired" || !got.tokenCleared {
+			t.Errorf("receipt=%v: status %d, response %v, token cleared %v", receipt, got.status, got.resp, got.tokenCleared)
+		}
+		if writes := fake.writes(); !reflect.DeepEqual(writes, []string{"POST /v1/api/folder/upload"}) {
+			t.Errorf("receipt=%v: writes = %v", receipt, writes)
+		}
+	}
+}
+
+func TestSubmitUploadUnreadableBase64(t *testing.T) {
+	for _, receipt := range []bool{false, true} {
+		fake, h, client := submitTestEnv(t)
+		handler, body := h.SubmitFull, fullRequest(map[string]any{"pdfBase64": "%%%"})
+		if receipt {
+			handler, body = h.SubmitReceipt, receiptRequest(map[string]any{"pdfBase64": "%%%"})
+		}
+		status, resp := callSubmit(t, handler, client, body)
+		if status != http.StatusBadRequest || resp["error"] != errUnreadableUpload {
+			t.Errorf("receipt=%v: status %d, response %v", receipt, status, resp)
+		}
+		if writes := fake.writes(); len(writes) != 0 {
+			t.Errorf("receipt=%v: nothing may be booked, got %v", receipt, writes)
+		}
+	}
+}
+
+func TestResolveUploadedFile(t *testing.T) {
+	before := []eboekhouden.ArchiveFile{{ID: 1, Naam: "a.pdf"}}
+	tests := []struct {
+		name   string
+		after  []eboekhouden.ArchiveFile
+		wantID int
+		wantOK bool
+	}{
+		{"exact name", []eboekhouden.ArchiveFile{{ID: 1, Naam: "a.pdf"}, {ID: 2, Naam: "2026-10-03_X_bonnetje.jpg"}}, 2, true},
+		{"name in another case", []eboekhouden.ArchiveFile{{ID: 1, Naam: "a.pdf"}, {ID: 2, Naam: "2026-10-03_x_BONNETJE.JPG"}}, 2, true},
+		{"renamed, one new file", []eboekhouden.ArchiveFile{{ID: 1, Naam: "a.pdf"}, {ID: 3, Naam: "anders.jpg"}}, 3, true},
+		{"renamed, two new files", []eboekhouden.ArchiveFile{{ID: 1, Naam: "a.pdf"}, {ID: 3, Naam: "x.jpg"}, {ID: 4, Naam: "y.jpg"}}, 0, false},
+		{"nothing new", []eboekhouden.ArchiveFile{{ID: 1, Naam: "a.pdf"}}, 0, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id, ok := resolveUploadedFile(before, tc.after, "2026-10-03_X_bonnetje.jpg")
+			if id != tc.wantID || ok != tc.wantOK {
+				t.Errorf("got (%d, %v), want (%d, %v)", id, ok, tc.wantID, tc.wantOK)
+			}
+		})
+	}
+}
+
 func TestSubmitReceiptMailDocument(t *testing.T) {
 	fake, h, client := submitTestEnv(t)
 
@@ -1003,7 +1174,7 @@ func TestSubmitReceiptMailDocument(t *testing.T) {
 func TestSubmitReceiptRefusesTwoSources(t *testing.T) {
 	fake, h, client := submitTestEnv(t)
 
-	status, resp := callSubmit(t, h.SubmitReceipt, client, receiptRequest(map[string]any{"archiveFileId": 502, "uploadKey": "uploads/x/document.jpg"}))
+	status, resp := callSubmit(t, h.SubmitReceipt, client, receiptRequest(map[string]any{"archiveFileId": 502, "pdfBase64": base64.StdEncoding.EncodeToString(jpegBytes)}))
 	if status != http.StatusBadRequest || resp["error"] != "Kies één bron voor het document." {
 		t.Errorf("status %d, response %v", status, resp)
 	}

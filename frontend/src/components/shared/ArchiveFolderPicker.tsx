@@ -8,7 +8,8 @@ interface Props {
   onChange: (folder: ArchiveFolderWithPath | null) => void;
   label?: string;
   disabled?: boolean;
-  /** Helper text under the input; useful for explaining the opt-in nature. */
+  /** Helper text under the input: where the file goes, also when no folder
+   *  is picked. */
   helperText?: string;
   /** Folders that may not be chosen, together with everything nested under
    *  them (the mail folder, when moving a document out of it). They are
@@ -32,7 +33,7 @@ const CREATE_NEW_SENTINEL: ArchiveFolderWithPath = {
 /**
  * ArchiveFolderPicker — choose a destination in the e-boekhouden digitaal
  * archief for the PDF that's about to be booked. Selection is optional; an
- * empty value means "do not upload to the archive".
+ * empty value means the backend's automatic month folder.
  *
  * Shows folders with their full breadcrumb path so a flat Autocomplete dropdown
  * still conveys hierarchy ("Verwerkte facturen / Anthropic"). Deleted folders

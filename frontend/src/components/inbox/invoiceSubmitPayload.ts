@@ -12,11 +12,10 @@ import { parseAmount } from "./reviewAmounts";
  * from what the review dialog has at submit time. Two document sources exist:
  *
  *  - an upload: the file was analysed through /invoices/analyze and is sent
- *    again inline as pdfBase64 (folderId says where it is archived); uploadKey
- *    is a legacy field, empty since the analyser stores nothing;
+ *    again inline as pdfBase64 (folderId says where it is archived);
  *  - a Mail & herken document (archiveFileId): nothing is sent but the id,
  *    the backend links, renames and moves the file; targetFolderId says
- *    where, omitted means Facturen/<jaar>/<maand>.
+ *    where, omitted means the automatic month folder.
  *
  * The upload payloads are the ones the dialog has always sent; only the
  * construction moved here so both sources are unit-tested.
@@ -33,7 +32,7 @@ export interface ExtraLineEdit {
 }
 
 /** The part of the analyse response the payloads read. */
-export type SubmitSource = Pick<AnalyzedInvoice, "uploadKey" | "filename" | "pdfHash" | "crediteurenId" | "archiveFileId"> & {
+export type SubmitSource = Pick<AnalyzedInvoice, "filename" | "pdfHash" | "crediteurenId" | "archiveFileId"> & {
   invoice: Pick<AnalyzedInvoice["invoice"], "documentType">;
 };
 
@@ -51,12 +50,12 @@ export interface SubmitInput {
   tegenRekeningId: number;
   /** The linked bank line, 0 for none. */
   importId: number;
-  /** The archive folder the user picked, 0 for none. For an upload none
-   *  means "do not archive"; for a mail-folder document it means the
-   *  automatic Facturen/<jaar>/<maand>. */
+  /** The archive folder the user picked, 0 for none. None means the
+   *  automatic month folder, for an upload and a mail-folder document
+   *  alike. */
   folderId: number;
-  /** The upload inlined as base64. Upload source only; the dialog reads the
-   *  file only when a folder was picked. */
+  /** The upload inlined as base64. Upload source only; the dialog always
+   *  reads the file of an upload. */
   pdfBase64?: string;
   /** Legacy receipt split (lines after the main line); the dialog no
    *  longer fills it and sends `regels` instead. */
@@ -127,7 +126,6 @@ export function buildFullSubmitPayload(i: SubmitInput): InvoiceSubmitFullRequest
   }
   return {
     ...base,
-    uploadKey: i.source.uploadKey,
     filename: i.source.filename,
     pdfHash: i.source.pdfHash,
     ...(i.importId ? { importId: i.importId } : {}),
@@ -164,7 +162,6 @@ export function buildReceiptSubmitPayload(i: SubmitInput): InvoiceSubmitReceiptR
   }
   return {
     ...base,
-    uploadKey: i.source.uploadKey,
     filename: i.source.filename,
     importId: i.importId,
     ...extra,

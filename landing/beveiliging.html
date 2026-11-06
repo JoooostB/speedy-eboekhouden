@@ -171,7 +171,7 @@
                         </div>
                         <div class="sec-data-row sec-data-yes">
                             <span class="sec-data-icon">&#10003;</span>
-                            <span><strong>Herstellinks en profielfoto:</strong> van een herstellink alleen een hash (15 minuten geldig, één keer te gebruiken); een profielfoto alleen als je er een instelt (de foto zelf staat in Cloudflare R2)</span>
+                            <span><strong>Herstellinks:</strong> alleen een hash (15 minuten geldig, één keer te gebruiken)</span>
                         </div>
                         <div class="sec-data-row sec-data-no">
                             <span class="sec-data-icon">&#10007;</span>
@@ -257,7 +257,7 @@
                     <p>Of je sleutel werkt en je tegoed nog niet op is, controleert Speedy met een heel klein bericht aan Anthropic. Is de sleutel in orde, dan onthoudt Speedy dat 15 minuten in Redis, zodat niet elk bezoek aan je inbox opnieuw een aanroep kost. Daarvoor bewaart Speedy alleen een hash van de versleutelde sleutel, niet de sleutel zelf.</p>
                     <p>Van een analyse bewaart Speedy de <strong>uitkomst</strong> tijdelijk in Redis, zodat dezelfde analyse niet nog een keer een AI-aanroep kost. Voor een geüpload bestand is dat zeven dagen en voor een document uit je mailmap 30 dagen (leverancier, factuurnummer, datum, bedragen en de voorgestelde grootboekrekening). Het overzicht van je afschriftregels (datum, bedrag, omschrijving en de voorgestelde boeking) blijft een uur staan. Het voorstel per afschriftregel (grootboekrekening, btw-code, soort boeking en een ingekorte omschrijving) bewaart Speedy 30 dagen na het laatste gebruik, onder een hash van de regel in plaats van de regel zelf, zodat dezelfde regel niet nog een keer naar Claude gaat. Boek je een regel, dan valt het voorstel er bij de volgende classificatie vanzelf uit. Na het boeken bewaart Speedy 90 dagen een markering waaraan het herkent dat je hetzelfde bestand al hebt geboekt. Daarin staan alleen een hash van het bestand, de mutatienummers en het tijdstip van boeken. Verder slaat Speedy geen analyses op, en dit alles wordt gewist zodra je de verbinding met e-Boekhouden verbreekt.</p>
                     <p><strong>Documenten uit je mailmap (Mail &amp; herken)</strong> leest Speedy rechtstreeks uit je eigen archief in e-Boekhouden. Ze worden niet naar andere opslag gekopieerd: bij een analyse gaat het bestand vanuit het geheugen naar Claude, en na het boeken hernoemt en verplaatst Speedy het binnen e-Boekhouden. Negeer je een document, dan onthoudt Speedy alleen het bestands-id.</p>
-                    <p><strong>Bestanden die je zelf uploadt</strong> bewaart Speedy evenmin. Ze gaan vanuit het geheugen van de server naar Claude en blijven verder in je browser. Bij het boeken stuurt je browser het bestand nog een keer mee, zodat Speedy het in je archief in e-Boekhouden kan zetten. Speedy schrijft geen documenten naar objectopslag; Cloudflare R2 gebruiken we alleen voor profielfoto's.</p>
+                    <p><strong>Bestanden die je zelf uploadt</strong> bewaart Speedy evenmin. Ze gaan vanuit het geheugen van de server naar Claude en blijven verder in je browser. Bij het boeken stuurt je browser het bestand nog een keer mee, zodat Speedy het in je archief in e-Boekhouden kan zetten. Lukt dat niet, dan boekt Speedy niets. Speedy gebruikt geen objectopslag.</p>
                 </div>
             </div>
 
@@ -378,7 +378,7 @@
             <div class="sec-dont-card">
                 <div class="sec-dont-icon">&#10007;</div>
                 <h3>Data verkopen of delen</h3>
-                <p>We verkopen geen data. Documenten en afschriftregels gaan alleen naar Anthropic, voor een analyse of classificatie, met jouw eigen API-sleutel, en die sleutel gaat ook alleen naar Anthropic. Een profielfoto staat bij Cloudflare R2, en voor welkomst- en herstelmails gebruiken we een mailserver.</p>
+                <p>We verkopen geen data. Documenten en afschriftregels gaan alleen naar Anthropic, voor een analyse of classificatie, met jouw eigen API-sleutel, en die sleutel gaat ook alleen naar Anthropic. Voor welkomst- en herstelmails gebruiken we een mailserver.</p>
             </div>
         </div>
     </div>

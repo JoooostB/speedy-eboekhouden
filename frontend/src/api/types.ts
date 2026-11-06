@@ -18,7 +18,6 @@ export interface MeResponse {
   user: User;
   team: Team | null;
   eboekhoudenConnected: boolean;
-  avatarUrl: string;
 }
 
 // e-Boekhouden connection
@@ -211,13 +210,6 @@ export interface ArchiveFolder {
 export interface InvoiceAnalyzeResponse {
   invoice: InvoiceData;
   filename: string;
-  /** Always empty since Step 10: the analyser keeps no copy of the file
-   *  (nothing goes to R2). Kept so the response shape stays stable; a
-   *  booking carries the file inline (pdfBase64) or names a mail-folder
-   *  file (archiveFileId). */
-  uploadKey: string;
-  /** Always empty, see uploadKey; the preview uses localPdfUrl. */
-  pdfUrl: string;
   /** SHA-256 of the uploaded PDF — echoed back to SubmitFull so the
    *  backend can write a duplicate-detection marker post-booking. */
   pdfHash: string;
@@ -366,7 +358,7 @@ export interface ArchiveDocumentsResponse {
 /** InvoiceAnalyzeResponse plus client-side enrichments added by the inbox
  *  after a successful /invoices/analyze call. These fields keep the
  *  original PDF File reachable in-memory so:
- *   - the review dialog can preview it via a blob: URL without R2,
+ *   - the review dialog can preview it via a blob: URL,
  *   - the submit handlers can re-encode it as base64 and ship inline.
  *  None of these fields ever round-trip through JSON; they're purely
  *  client-side state. Keeping them off InvoiceAnalyzeResponse avoids
@@ -438,26 +430,23 @@ export interface InvoiceSubmitFullRequest {
   relatieId: number;
   tegenRekeningId: number;
   rekeningId: number;
-  /** Legacy: the R2 key of an upload analysed before Step 10. The analyser
-   *  no longer stores files, so this is empty. Absent for a mail-folder
-   *  document. */
-  uploadKey?: string;
   /** Accepted by the backend for compatibility; the archive name follows
    *  the naming convention. Absent for a mail-folder document. */
   filename?: string;
   /** The uploaded document inlined as base64: the way an upload reaches the
-   *  archive. The backend prefers it over uploadKey when both are present. */
+   *  archive. */
   pdfBase64?: string;
-  /** Archive folder ID picked by the user. When omitted the backend either
-   *  auto-creates Facturen/year/month (if R2 is configured) or skips
-   *  archiving entirely. */
+  /** Archive folder ID picked by the user. When omitted the backend puts
+   *  the upload in the month folder (Facturen/<jaar>/<maand>, or
+   *  <jaar>/<maand> when the year folders sit at the archive root); when
+   *  that fails nothing is booked. */
   folderId?: number;
   /** A file in the Mail & herken folder to book from instead of an upload.
-   *  Mutually exclusive with pdfBase64/uploadKey. The backend links the
+   *  Mutually exclusive with pdfBase64. The backend links the
    *  file, renames it and moves it to targetFolderId. */
   archiveFileId?: number;
-  /** Where the mail-folder document goes after booking. Omitted means
-   *  Facturen/<jaar>/<maand>. Only with archiveFileId. */
+  /** Where the mail-folder document goes after booking. Omitted means the
+   *  month folder. Only with archiveFileId. */
   targetFolderId?: number;
   /** Only influences the archive name: "creditnota" or (default) "factuur". */
   documentType?: "factuur" | "creditnota";
@@ -493,8 +482,6 @@ export interface InvoiceSubmitReceiptRequest {
   btwBedrag: number;
   btwCode: string;
   tegenRekeningId: number;
-  /** See InvoiceSubmitFullRequest.uploadKey; absent for a mail-folder document. */
-  uploadKey?: string;
   filename?: string;
   /** Base64-encoded PDF; see InvoiceSubmitFullRequest.pdfBase64. */
   pdfBase64?: string;
@@ -776,7 +763,6 @@ export interface InboxBatchResponse {
 
 export interface InvoiceMatchResponse {
   invoice: InvoiceData;
-  uploadKey: string;
   bankLineId: number;
   amountMatch: boolean;
   amountDiff: number;

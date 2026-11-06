@@ -62,7 +62,7 @@ describe("submitOutcome", () => {
   });
 
   it("does not warn when no archive was expected", () => {
-    // A mail-folder document or an upload without a folder: archived false is normal.
+    // A mail-folder document or a booking without a document: archived false is normal.
     expect(submitOutcome({ isReceipt: false, archiveExpected: false, resp: { archived: false } }).status).toBe("ok");
     // An older answer without the field is not a failure either.
     expect(submitOutcome({ isReceipt: true, archiveExpected: true, resp: {} }).status).toBe("ok");

@@ -566,8 +566,8 @@ func withFreshMatches(response json.RawMessage, match *BankLineCandidate, candid
 }
 
 // AnalyzeDocument handles POST /api/v1/documents/:id/analyze. It downloads
-// the file from the mail folder, runs the shared analysis core without R2
-// and caches the result for 30 days. A cached analysis is returned without
+// the file from the mail folder, runs the shared analysis core and caches
+// the result for 30 days. A cached analysis is returned without
 // downloading unless ?force=true, which also bypasses the content cache so
 // Claude really reads the file again. Concurrent analyses of the same file
 // are refused with 409.
@@ -882,7 +882,7 @@ func archiveNameFor(file eboekhouden.ArchiveFile, inv *claude.InvoiceData, now t
 // folder, for "Opruimen" of linked documents and "Verplaatsen naar…".
 //
 // Body {fileIds:[…], targetFolderId?}. Without targetFolderId each file goes
-// to Facturen/<jaar>/<maand> for its date (findOrCreateArchiveFolder). The
+// to the month folder for its date (findOrCreateArchiveFolder). The
 // target must exist outside the mail folder: an explicit target is checked
 // with validateTargetFolder before anything moves (400, the same messages as
 // SubmitFull), and an automatically chosen folder that turns out to be the
@@ -973,8 +973,8 @@ func (h *InvoiceHandler) ArchiveDocuments(c *gin.Context) {
 					if HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err) {
 						return
 					}
-					log.Printf("Documents: archive folder lookup failed for file %d: %s", id, errClass(err))
-					failed = append(failed, failedItem{ID: id, Error: "Speedy kon de maandmap onder Facturen niet vinden of aanmaken. Het document staat nog in de mailmap."})
+					log.Printf("Documents: archive folder lookup failed for file %d at level %s: %s", id, archiveFolderLevel(err), errClass(err))
+					failed = append(failed, failedItem{ID: id, Error: "Speedy kon de maandmap in je archief niet vinden of aanmaken. Het document staat nog in de mailmap."})
 					continue
 				}
 				monthFolders[month] = folderID

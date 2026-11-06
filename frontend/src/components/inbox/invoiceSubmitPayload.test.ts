@@ -9,7 +9,6 @@ import {
 } from "./invoiceSubmitPayload";
 
 const uploadSource: SubmitSource = {
-  uploadKey: "uploads/abc/document.pdf",
   filename: "factuur.pdf",
   pdfHash: "hash-1",
   crediteurenId: 1600,
@@ -17,7 +16,6 @@ const uploadSource: SubmitSource = {
 };
 
 const archiveSource: SubmitSource = {
-  uploadKey: "",
   filename: "Voorbeeld-Bijlage.pdf",
   pdfHash: "hash-2",
   crediteurenId: 1600,
@@ -63,14 +61,13 @@ describe("isArchiveSource", () => {
 });
 
 describe("buildFullSubmitPayload for an upload", () => {
-  it("sends the upload key, file name and hash, nothing optional", () => {
+  it("sends the file name and hash, nothing optional", () => {
     expect(buildFullSubmitPayload(input())).toEqual({
       ...common,
       factuurnummer: "INV-0042",
       inEx: "EX",
       relatieId: 55,
       rekeningId: 1600,
-      uploadKey: "uploads/abc/document.pdf",
       filename: "factuur.pdf",
       pdfHash: "hash-1",
     });
@@ -92,7 +89,7 @@ describe("buildFullSubmitPayload for an upload", () => {
 });
 
 describe("buildFullSubmitPayload for a mail-folder document", () => {
-  it("sends archiveFileId and never the file, the upload key or the file name", () => {
+  it("sends archiveFileId and never the file or the file name", () => {
     const body = buildFullSubmitPayload(input({ source: archiveSource, importId: 42, folderId: 202, pdfBase64: "QUJD" }));
     expect(body).toEqual({
       ...common,
@@ -136,7 +133,6 @@ describe("buildReceiptSubmitPayload", () => {
   it("sends the upload fields and always the bank line", () => {
     expect(buildReceiptSubmitPayload(input({ importId: 42 }))).toEqual({
       ...common,
-      uploadKey: "uploads/abc/document.pdf",
       filename: "factuur.pdf",
       importId: 42,
     });

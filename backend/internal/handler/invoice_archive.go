@@ -25,9 +25,10 @@ import (
 //     upload must be a PDF, JPG or PNG.
 //  2. stageArchiveFile makes sure there is a file id to link: a mail-folder
 //     document already has one, an upload is uploaded now under its archive
-//     name (archiveFileName), made unique in the target folder. When
-//     e-boekhouden then refuses the booking, discardStagedUpload removes
-//     that upload again.
+//     name (archiveFileName), made unique in the target folder. An upload
+//     that cannot be staged fails the request before anything is booked.
+//     When e-boekhouden then refuses the booking, discardStagedUpload
+//     removes that upload again.
 //  3. completeArchive runs after the mutation is linked: a mail-folder
 //     document is renamed and moved out of the mail folder, and any failure
 //     is reported as archiveWarning on an otherwise successful booking.
@@ -51,7 +52,6 @@ type archiveSourceInput struct {
 	archiveFileID  int
 	targetFolderID int
 	pdfBase64      string
-	uploadKey      string
 }
 
 // archiveSource is the document a booking archives: a file that already sits
@@ -59,7 +59,7 @@ type archiveSourceInput struct {
 // there is nothing to archive.
 type archiveSource struct {
 	// Mail-folder document (fileID > 0). targetFolderID is the validated
-	// explicit target, or 0 for Facturen/<jaar>/<maand>; folders is the
+	// explicit target, or 0 for the automatic month folder; folders is the
 	// directory listing used for that validation, kept for the breadcrumb.
 	fileID         int
 	file           eboekhouden.ArchiveFile
@@ -116,7 +116,7 @@ func submitFullDocType(s string) string {
 }
 
 // bookingDate parses the request's datum, falling back to now, for the
-// Facturen/<jaar>/<maand> folder choice.
+// automatic month folder (findOrCreateArchiveFolder).
 func bookingDate(datum string) time.Time {
 	if t, ok := parseISODate(datum); ok {
 		return t
@@ -126,11 +126,11 @@ func bookingDate(datum string) time.Time {
 
 // validateArchiveSource checks that a request names at most one document
 // source and a sane archive file id.
-func validateArchiveSource(archiveFileID int, pdfBase64, uploadKey string) error {
+func validateArchiveSource(archiveFileID int, pdfBase64 string) error {
 	if archiveFileID < 0 {
 		return &badRequestError{"Ongeldig document-id."}
 	}
-	if archiveFileID > 0 && (pdfBase64 != "" || uploadKey != "") {
+	if archiveFileID > 0 && pdfBase64 != "" {
 		return &badRequestError{"Kies één bron voor het document."}
 	}
 	return nil
@@ -207,14 +207,14 @@ func archiveFolderPath(folders []archiveFolder, folderID int) string {
 // anything is booked. Errors are *badRequestError (400),
 // claude.ErrUnsupportedMediaType (415) or an e-boekhouden error, possibly
 // eboekhouden.ErrSessionExpired; writeArchiveSourceError maps them.
-func (h *InvoiceHandler) prepareArchiveSource(ctx context.Context, client *eboekhouden.Client, in archiveSourceInput) (archiveSource, error) {
-	if err := validateArchiveSource(in.archiveFileID, in.pdfBase64, in.uploadKey); err != nil {
+func prepareArchiveSource(client *eboekhouden.Client, in archiveSourceInput) (archiveSource, error) {
+	if err := validateArchiveSource(in.archiveFileID, in.pdfBase64); err != nil {
 		return archiveSource{}, err
 	}
 	if in.archiveFileID > 0 {
 		return prepareMailFolderSource(client, in.archiveFileID, in.targetFolderID)
 	}
-	return h.prepareUploadSource(ctx, in)
+	return prepareUploadSource(in)
 }
 
 // prepareMailFolderSource checks that fileID is a live file in the mail
@@ -242,30 +242,17 @@ func prepareMailFolderSource(client *eboekhouden.Client, fileID, targetFolderID 
 	return src, nil
 }
 
-// prepareUploadSource decodes the inlined document or fetches it from R2 by
-// its upload key. The upload key is legacy: since Step 10 the analyser stores
-// nothing in R2, so only a client that analysed before that deploy can still
-// send one; the path stays until no such session can exist. As before, an
-// undecodable body or a failed R2 download is logged and the booking goes on
-// without an archive file; bytes that are not a PDF, JPG or PNG are refused,
-// as the analyser refuses them.
-func (h *InvoiceHandler) prepareUploadSource(ctx context.Context, in archiveSourceInput) (archiveSource, error) {
-	var data []byte
-	switch {
-	case in.pdfBase64 != "":
-		decoded, err := base64.StdEncoding.DecodeString(in.pdfBase64)
-		if err != nil {
-			log.Printf("Submit: invalid pdfBase64: %v", err)
-			return archiveSource{}, nil
-		}
-		data = decoded
-	case in.uploadKey != "" && h.r2 != nil:
-		downloaded, _, err := h.r2.Download(ctx, in.uploadKey)
-		if err != nil {
-			log.Printf("R2 download error for %s: %v", in.uploadKey, err)
-			return archiveSource{}, nil
-		}
-		data = downloaded
+// prepareUploadSource decodes the inlined document. An undecodable body is
+// refused (errUnreadableUpload) and bytes that are not a PDF, JPG or PNG are
+// refused as the analyser refuses them. No document at all is not an error:
+// the booking goes on without an archive file.
+func prepareUploadSource(in archiveSourceInput) (archiveSource, error) {
+	if in.pdfBase64 == "" {
+		return archiveSource{}, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(in.pdfBase64)
+	if err != nil {
+		return archiveSource{}, &badRequestError{errUnreadableUpload}
 	}
 	if len(data) == 0 {
 		return archiveSource{}, nil
@@ -276,6 +263,9 @@ func (h *InvoiceHandler) prepareUploadSource(ctx context.Context, in archiveSour
 	}
 	return archiveSource{data: data, mediaType: mediaType}, nil
 }
+
+// errUnreadableUpload refuses an inlined document that is not valid base64.
+const errUnreadableUpload = "Speedy kon het bestand niet lezen. Er is nog niets geboekt. Upload het bestand opnieuw."
 
 // writeArchiveSourceError maps a prepareArchiveSource error onto the response.
 func (h *InvoiceHandler) writeArchiveSourceError(c *gin.Context, sess *session.SessionData, err error) {
@@ -348,36 +338,46 @@ func (o archiveOutcome) addTo(resp gin.H) {
 
 // stageArchiveFile makes sure the booking has an archive file to link. A
 // mail-folder document already has its id. An upload goes into the folder the
-// user picked, or into Facturen/<jaar>/<maand> when none was picked and R2 is
-// configured; without either, nothing is archived, which is an explicit
-// opt-out for self-hosted clients. The bytes always arrive inline now (the
-// analyser stores nothing in R2); "R2 configured" merely still marks the
-// hosted deployment that archives by default, as it always did. The upload
-// is best-effort: a failure is logged and leaves fileID 0.
-func (h *InvoiceHandler) stageArchiveFile(client *eboekhouden.Client, src archiveSource, pickedFolderID int, datum time.Time, name string) archiveOutcome {
+// user picked, or into the automatic month folder (findOrCreateArchiveFolder)
+// when none was picked. An upload is never booked without its file: every
+// failure on the way (folder lookup, listing, upload, resolving the new id)
+// is returned, and the caller answers with writeStageError before anything
+// is booked. Without any document there is nothing to stage.
+func (h *InvoiceHandler) stageArchiveFile(client *eboekhouden.Client, src archiveSource, pickedFolderID int, datum time.Time, name string) (archiveOutcome, error) {
 	if src.fromMailFolder() {
-		return archiveOutcome{fileID: src.fileID, name: src.file.Naam}
+		return archiveOutcome{fileID: src.fileID, name: src.file.Naam}, nil
 	}
 	if len(src.data) == 0 {
-		return archiveOutcome{}
+		return archiveOutcome{}, nil
 	}
 	folderID := pickedFolderID
-	if folderID == 0 && h.r2 != nil {
+	if folderID <= 0 {
 		id, err := h.findOrCreateArchiveFolder(client, datum)
 		if err != nil {
-			log.Printf("Archive folder error: %s", errClass(err))
-		} else {
-			folderID = id
+			log.Printf("Submit: archive folder lookup failed at level %s: %s", archiveFolderLevel(err), errClass(err))
+			return archiveOutcome{}, err
 		}
+		folderID = id
 	}
-	if folderID <= 0 {
-		return archiveOutcome{}
+	id, finalName, err := uploadAndResolveArchiveFile(client, src.data, folderID, name)
+	if err != nil {
+		return archiveOutcome{}, err
 	}
-	id, finalName := uploadAndResolveArchiveFile(client, src.data, folderID, name)
-	if id == 0 {
-		return archiveOutcome{}
+	return archiveOutcome{fileID: id, name: finalName, targetFolderID: folderID}, nil
+}
+
+// errStageFailed is the user-facing answer when an upload could not be put
+// in the archive. Nothing has been booked at that point.
+const errStageFailed = "Het bestand kon niet in je digitale archief worden gezet. Er is nog niets geboekt. Probeer het opnieuw of kies zelf een archiefmap."
+
+// writeStageError answers a stageArchiveFile failure: 412 for an expired
+// e-boekhouden session, 502 otherwise. The failure itself was logged where
+// it happened.
+func (h *InvoiceHandler) writeStageError(c *gin.Context, sess *session.SessionData, err error) {
+	if HandleEBoekhoudenSessionExpired(c, sess, h.sessions, h.db, err) {
+		return
 	}
-	return archiveOutcome{fileID: id, name: finalName, targetFolderID: folderID}
+	c.JSON(http.StatusBadGateway, gin.H{"error": errStageFailed})
 }
 
 // bookingRefused reports whether a failed CreateMutatie call means that
@@ -407,21 +407,23 @@ func discardStagedUpload(client *eboekhouden.Client, src archiveSource, arch arc
 	log.Printf("Submit: removed staged file %d after a refused booking", arch.fileID)
 }
 
+// errUploadNotResolved means the upload was accepted but the new file could
+// not be found in the folder afterwards, so there is no id to link.
+var errUploadNotResolved = errors.New("uploaded file not found in the folder after the upload")
+
 // uploadAndResolveArchiveFile uploads data into folderID under name, made
 // unique against the folder's current files first (what overwrite:false does
 // on a duplicate name is unknown, so the collision is avoided instead), and
 // returns the id e-boekhouden assigned together with the final name. The
 // upload endpoint answers with the folder id, not the file id, so the folder
-// is listed again and the file found by its exact name. Any failure is
-// logged and yields 0.
-func uploadAndResolveArchiveFile(client *eboekhouden.Client, data []byte, folderID int, name string) (int, string) {
-	if len(data) == 0 || folderID <= 0 {
-		return 0, ""
-	}
+// is listed again and the file found by its name, ignoring case; failing
+// that, the one file that was not there before the upload is taken. Every
+// failure is logged (ids and error classes only) and returned.
+func uploadAndResolveArchiveFile(client *eboekhouden.Client, data []byte, folderID int, name string) (int, string, error) {
 	existing, err := client.ListArchiveFiles(folderID)
 	if err != nil {
-		log.Printf("Archive file list error before upload: %s", errClass(err))
-		return 0, ""
+		log.Printf("Archive file list error before upload to folder %d: %s", folderID, errClass(err))
+		return 0, "", err
 	}
 	finalName := uniqueName(name, fileNameSet(existing))
 	payload, _ := json.Marshal(map[string]any{
@@ -431,21 +433,47 @@ func uploadAndResolveArchiveFile(client *eboekhouden.Client, data []byte, folder
 		"folderId":  folderID,
 	})
 	if _, err := client.UploadArchiveFile(payload); err != nil {
-		log.Printf("Archive upload error: %s", errClass(err))
-		return 0, ""
+		log.Printf("Archive upload error for folder %d: %s", folderID, errClass(err))
+		return 0, "", err
 	}
 	files, err := client.ListArchiveFiles(folderID)
 	if err != nil {
-		log.Printf("Archive file list error after upload: %s", errClass(err))
-		return 0, ""
+		log.Printf("Archive file list error after upload to folder %d: %s", folderID, errClass(err))
+		return 0, "", err
 	}
-	for _, f := range files {
-		if f.Naam == finalName {
-			return f.ID, finalName
+	if id, ok := resolveUploadedFile(existing, files, finalName); ok {
+		return id, finalName, nil
+	}
+	// The file may sit in the folder unlinked; without its id it cannot be
+	// removed either.
+	log.Printf("Archive upload: new file not found in folder %d after upload", folderID)
+	return 0, "", errUploadNotResolved
+}
+
+// resolveUploadedFile finds the id of the file just uploaded as name: the
+// file of that name, ignoring case, or else the single file id in after
+// that was not in before. Anything else is ambiguous and yields false.
+func resolveUploadedFile(before, after []eboekhouden.ArchiveFile, name string) (int, bool) {
+	for _, f := range after {
+		if strings.EqualFold(f.Naam, name) {
+			return f.ID, true
 		}
 	}
-	log.Printf("Archive upload: file not found in folder %d after upload", folderID)
-	return 0, ""
+	old := make(map[int]bool, len(before))
+	for _, f := range before {
+		old[f.ID] = true
+	}
+	id := 0
+	for _, f := range after {
+		if old[f.ID] {
+			continue
+		}
+		if id != 0 {
+			return 0, false
+		}
+		id = f.ID
+	}
+	return id, id != 0
 }
 
 // errNothingToLink is linkArchiveFile's answer when there is no file or no
@@ -514,13 +542,13 @@ func (h *InvoiceHandler) completeArchive(ctx context.Context, client *eboekhoude
 	if target == 0 {
 		id, err := h.findOrCreateArchiveFolder(client, datum)
 		if err != nil {
-			log.Printf("Submit: archive folder lookup failed for file %d: %s", src.fileID, errClass(err))
+			log.Printf("Submit: archive folder lookup failed for file %d at level %s: %s", src.fileID, archiveFolderLevel(err), errClass(err))
 			if errors.Is(err, eboekhouden.ErrSessionExpired) {
 				arch.sessionExpired = true
 				arch.warning = warnMailMoveSessionExpired
 				return arch
 			}
-			arch.warning = "Het document is geboekt en gekoppeld, maar Speedy kon de maandmap onder Facturen niet vinden of aanmaken. Het staat nog in de mailmap. Ruim het later op met Alles opruimen."
+			arch.warning = "Het document is geboekt en gekoppeld, maar Speedy kon de maandmap in je archief niet vinden of aanmaken. Het staat nog in de mailmap. Ruim het later op met Alles opruimen."
 			return arch
 		}
 		target = id

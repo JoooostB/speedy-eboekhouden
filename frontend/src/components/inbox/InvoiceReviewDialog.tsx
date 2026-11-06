@@ -48,6 +48,7 @@ import {
 import {
   NO_MATCH_ALERT_TEXT,
   archiveFolderHelperText,
+  uploadFolderHelperText,
   archiveResultLine,
   bankLineChoices,
   bankLineOptionLabel,
@@ -56,6 +57,15 @@ import {
   submitButtonLabel,
 } from "./mailDocumentReview";
 import { isBooked, submitOutcome } from "./submitOutcome";
+import {
+  SKIP_BUTTON_LABEL,
+  focusAfterRemoval,
+  removeCard,
+  reviewCardId,
+  skipAnnouncement,
+  skipButtonAriaLabel,
+  updateCard,
+} from "./reviewCards";
 import { initialLedger, ledgerAfterRelationChange, type LedgerSource } from "./invoiceLedger";
 import { AMOUNT_HINT, formatAmountInput, formatFormAmount, fxInvoiceNote, invalidAmountField, parseAmount } from "./reviewAmounts";
 import { formatMoney } from "../../hooks/mailDocumentsModel";
@@ -73,7 +83,11 @@ import type {
 
 /** Mutable state per invoice in the review list */
 interface InvoiceEdit {
-  /** Original analyze response — holds uploadKey (R2 reference) and filename */
+  /** Stable card id (reviewCardId), assigned when the list is built. Every
+   *  update addresses a card by it, never by position: a card can be taken
+   *  out ("Niet boeken"), so positions shift while a lookup is in flight. */
+  id: string;
+  /** Original analyze response — holds the filename and the local file */
   source: AnalyzedInvoice;
   /** Editable fields */
   leverancier: string;
@@ -225,10 +239,10 @@ const NO_FOLDERS: readonly number[] = [];
  * - All interactive elements are keyboard accessible (native MUI)
  *
  * Two document sources share the dialog. An upload (the "Facturen uploaden"
- * button or a bank line's upload zone) is sent inline with the booking when
- * a folder is picked. A Mail & herken document (source.archiveFileId) is
+ * button or a bank line's upload zone) is sent inline with the booking and
+ * archived in the picked folder or the month folder. A Mail & herken document (source.archiveFileId) is
  * already in e-boekhouden: the booking sends its id and the folder to move
- * it to ("Verplaatsen naar"; none means Facturen/<jaar>/<maand>), and the
+ * it to ("Verplaatsen naar"; none means the month folder), and the
  * backend links, renames and moves it. For such a document the card is
  * headed by its title, several candidate bank lines can be chosen from, an
  * invoice without a bank line is booked as an open invoice, and on phones
@@ -245,7 +259,7 @@ export function InvoiceReviewDialog({
 }: Props) {
   // Build editable state from analyzed responses
   const [invoices, setInvoices] = useState<InvoiceEdit[]>(() =>
-    analyzed.map((a) => buildEdit(a, ledgerAccounts, vatCodes)),
+    analyzed.map((a, n) => buildEdit(a, ledgerAccounts, vatCodes, reviewCardId(n))),
   );
   const theme = useTheme();
   const isXs = useMediaQuery(theme.breakpoints.down("sm"));
@@ -294,38 +308,36 @@ export function InvoiceReviewDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveFolders, excludeFolderIds]);
 
-  /** Fetch the default ledger account of the relation on invoice `index`
-   *  when the search hit or a cached analysis did not carry it, and apply
-   *  it unless the user picked the ledger account by hand or another
-   *  relation meanwhile. Best effort: on failure the current account stays. */
+  /** Fetch the default ledger account of the relation on card `id` when
+   *  the search hit or a cached analysis did not carry it, and apply it
+   *  unless the user picked the ledger account by hand or another relation
+   *  meanwhile. A card taken out meanwhile is left alone (updateCard).
+   *  Best effort: on failure the current account stays. */
   const resolveRelationLedger = useCallback(
-    (index: number, relationId: number) => {
+    (id: string, relationId: number) => {
       api.getRelation(relationId).then(
         (rel) => {
-          setInvoices((prev) => {
-            const inv = prev[index];
-            if (!inv || inv.relation?.id !== relationId) return prev;
-            // In split mode the lines keep their own ledgers; only record
-            // the relation's default for after "Niet splitsen".
-            if (inv.regels) {
-              const next = [...prev];
-              next[index] = { ...inv, relation: { ...inv.relation, grootboekrekeningId: rel.grootboekrekeningId ?? 0 } };
-              return next;
-            }
-            const ledger = ledgerAfterRelationChange(
-              { account: inv.ledgerAccount, source: inv.ledgerSource },
-              rel,
-              ledgerAccounts,
-            );
-            const next = [...prev];
-            next[index] = {
-              ...inv,
-              relation: { ...inv.relation, grootboekrekeningId: rel.grootboekrekeningId ?? 0 },
-              ledgerAccount: ledger.account,
-              ledgerSource: ledger.source,
-            };
-            return next;
-          });
+          setInvoices((prev) =>
+            updateCard(prev, id, (inv) => {
+              if (!inv.relation || inv.relation.id !== relationId) return inv;
+              // In split mode the lines keep their own ledgers; only record
+              // the relation's default for after "Niet splitsen".
+              if (inv.regels) {
+                return { ...inv, relation: { ...inv.relation, grootboekrekeningId: rel.grootboekrekeningId ?? 0 } };
+              }
+              const ledger = ledgerAfterRelationChange(
+                { account: inv.ledgerAccount, source: inv.ledgerSource },
+                rel,
+                ledgerAccounts,
+              );
+              return {
+                ...inv,
+                relation: { ...inv.relation, grootboekrekeningId: rel.grootboekrekeningId ?? 0 },
+                ledgerAccount: ledger.account,
+                ledgerSource: ledger.source,
+              };
+            }),
+          );
         },
         () => {
           // Without the lookup the current ledger account stays.
@@ -339,9 +351,9 @@ export function InvoiceReviewDialog({
   // the field existed, or a failed lookup at analysis time) is looked up
   // once when the dialog opens, without a new Claude analysis.
   useEffect(() => {
-    invoices.forEach((inv, index) => {
+    invoices.forEach((inv) => {
       if (inv.relation && inv.source.matchedRelation?.grootboekrekeningId == null) {
-        resolveRelationLedger(index, inv.relation.id);
+        resolveRelationLedger(inv.id, inv.relation.id);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -372,10 +384,9 @@ export function InvoiceReviewDialog({
    *  btwBedrag to 0 and bedragExcl to match bedragIncl, because non-deductible
    *  or shifted taxes are part of the cost and must not be split out. */
   const updateField = useCallback(
-    <K extends keyof InvoiceEdit>(index: number, field: K, value: InvoiceEdit[K]) => {
-      setInvoices((prev) => {
-        const next = [...prev];
-        const updated: InvoiceEdit = { ...next[index], [field]: value };
+    <K extends Exclude<keyof InvoiceEdit, "id">>(id: string, field: K, value: InvoiceEdit[K]) => {
+      setInvoices((prev) => updateCard(prev, id, (current) => {
+        const updated: InvoiceEdit = { ...current, [field]: value };
 
         const rate = vatRate(updated.btwCode);
 
@@ -431,25 +442,21 @@ export function InvoiceReviewDialog({
           }
         }
 
-        next[index] = updated;
-        return next;
-      });
+        return updated;
+      }));
     },
     [vatRate, ledgerAccounts],
   );
 
-  /** Replace the lines of the booking at `index`. null, or fewer than two
+  /** Replace the lines of the booking on card `id`. null, or fewer than two
    *  lines, is a single-line booking again (unsplit keeps line 1). A
    *  tegenrekening picked on line 1 is the booking's, so a later relation
    *  change does not overwrite it. */
   const setRegels = useCallback(
-    (index: number, regels: RegelEdit[] | null) => {
-      setInvoices((prev) => {
-        const next = [...prev];
-        const inv = next[index];
+    (id: string, regels: RegelEdit[] | null) => {
+      setInvoices((prev) => updateCard(prev, id, (inv) => {
         if (regels === null || regels.length < 2) {
-          next[index] = unsplit(inv, regels?.[0], vatRate);
-          return next;
+          return unsplit(inv, regels?.[0], vatRate);
         }
         const updated: InvoiceEdit = { ...inv, regels, proposalEdited: inv.proposalEdited || inv.proposal !== null };
         const first = regels[0].ledgerAccount;
@@ -460,9 +467,8 @@ export function InvoiceReviewDialog({
           updated.ledgerSource = first ? "manual" : null;
         }
         updated.btwCode = regels[0].btwCode;
-        next[index] = updated;
-        return next;
-      });
+        return updated;
+      }));
     },
     [vatRate],
   );
@@ -470,60 +476,44 @@ export function InvoiceReviewDialog({
   // "Ongedaan maken" and "Niet splitsen" unmount themselves with the split
   // block; focus then goes to the restored "Bedrag incl. BTW" field of that
   // card instead of falling back to the dialog.
-  const singleAmountInputs = useRef(new Map<number, HTMLInputElement>());
-  const pendingSingleFocus = useRef<number | null>(null);
-  // Cards are keyed by index: the list is fixed for the life of the dialog
-  // (never reordered or removed). The pending index is cleared on the first
-  // change after it was set, applied or not, so it never fires late.
+  const singleAmountInputs = useRef(new Map<string, HTMLInputElement>());
+  const pendingSingleFocus = useRef<string | null>(null);
+  // Cards are keyed by their stable id. The pending id is cleared on the
+  // first change after it was set, applied or not, so it never fires late.
   useLayoutEffect(() => {
-    const index = pendingSingleFocus.current;
-    if (index === null) return;
+    const id = pendingSingleFocus.current;
+    if (id === null) return;
     pendingSingleFocus.current = null;
-    if (invoices[index]?.regels !== null) return;
-    singleAmountInputs.current.get(index)?.focus();
+    if (invoices.find((inv) => inv.id === id)?.regels !== null) return;
+    singleAmountInputs.current.get(id)?.focus();
   }, [invoices]);
 
   /** "Ongedaan maken" on a proposed split: back to one line with the
    *  values the analysis gave, before any edit to the lines. */
-  const undoSplitProposal = useCallback((index: number) => {
-    setInvoices((prev) => {
-      const inv = prev[index];
-      if (!inv?.original) return prev;
-      pendingSingleFocus.current = index;
-      const next = [...prev];
-      next[index] = undoProposal(inv, inv.original);
-      return next;
-    });
+  const undoSplitProposal = useCallback((id: string) => {
+    setInvoices((prev) =>
+      updateCard(prev, id, (inv) => {
+        if (!inv.original) return inv;
+        pendingSingleFocus.current = id;
+        return undoProposal(inv, inv.original);
+      }),
+    );
   }, []);
 
   /** "Splitsen over meerdere regels": the current values become line 1. */
-  const splitInvoice = useCallback((index: number) => {
-    setInvoices((prev) => {
-      const next = [...prev];
-      const inv = next[index];
-      next[index] = { ...inv, regels: splitFromSingle(inv) };
-      return next;
-    });
+  const splitInvoice = useCallback((id: string) => {
+    setInvoices((prev) => updateCard(prev, id, (inv) => ({ ...inv, regels: splitFromSingle(inv) })));
   }, []);
 
   /** "Splits in fooi": the receipt as line 1, the difference with the bank
    *  line as a tip without BTW. */
-  const splitTip = useCallback((index: number, tipCents: number) => {
-    setInvoices((prev) => {
-      const next = [...prev];
-      const inv = next[index];
-      next[index] = { ...inv, regels: splitWithTip(inv, tipCents) };
-      return next;
-    });
+  const splitTip = useCallback((id: string, tipCents: number) => {
+    setInvoices((prev) => updateCard(prev, id, (inv) => ({ ...inv, regels: splitWithTip(inv, tipCents) })));
   }, []);
 
   /** Show another candidate bank line as the payment and link it. */
-  const selectBankLine = useCallback((index: number, line: MatchedBankLine | null) => {
-    setInvoices((prev) => {
-      const next = [...prev];
-      next[index] = { ...next[index], bankLine: line, importId: line?.id ?? 0 };
-      return next;
-    });
+  const selectBankLine = useCallback((id: string, line: MatchedBankLine | null) => {
+    setInvoices((prev) => updateCard(prev, id, (inv) => ({ ...inv, bankLine: line, importId: line?.id ?? 0 })));
   }, []);
 
   /** Submit all invoices sequentially */
@@ -561,9 +551,9 @@ export function InvoiceReviewDialog({
       }
 
       // Encode the original File as base64 once per invoice: the analyser
-      // keeps no copy of an upload (nothing goes to R2), so the inline bytes
+      // keeps no copy of an upload, so the inline bytes
       // are the only way the backend can archive it. Always sent for an
-      // upload; whether it is archived, and where, follows folderId. A
+      // upload; where it is archived follows folderId (0: the month folder). A
       // mail-folder document is never inlined: the backend already has the
       // file and only needs its id.
       let pdfBase64: string | undefined;
@@ -581,11 +571,11 @@ export function InvoiceReviewDialog({
       }
       const folderId = inv.archiveFolder?.id ?? 0;
 
-      // The user expected the PDF to be archived if and only if both a folder
-      // and a PDF were available. We use this below to detect a silent
-      // archive failure (mutation booked but `archived: false`) and surface
-      // it as a warning instead of letting the user assume everything is OK.
-      const archiveExpected = !!pdfBase64 && !!folderId;
+      // An inlined upload is always archived: in the picked folder or in the
+      // automatic month folder, and the backend refuses the booking when it
+      // cannot. As a safety net, a booked upload that comes back with
+      // `archived: false` is still surfaced as a warning below.
+      const archiveExpected = !!pdfBase64;
 
       // A split booking sends its lines and the totals they add up to (the
       // BTW is the sum of the per-line BTW); invoiceBlocker refused the row
@@ -683,6 +673,44 @@ export function InvoiceReviewDialog({
     }
     onClose();
   }, [results, onComplete, onClose]);
+
+  // "Niet boeken": take a card out of this dialog. Nothing else happens, no
+  // API call: an upload is simply dropped from this session (the file is
+  // still on the user's disk), a mail-folder document stays untouched in
+  // the mail folder (not ignored, not deleted, its analysis kept). Taking
+  // out the last card closes the dialog like "Annuleren". Focus moves to
+  // the heading of the next card (or the previous one), and a polite live
+  // region says what happened.
+  const [skipAnnounced, setSkipAnnounced] = useState("");
+  const cardHeadings = useRef(new Map<string, HTMLElement>());
+  const pendingHeadingFocus = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const id = pendingHeadingFocus.current;
+    if (id === null) return;
+    pendingHeadingFocus.current = null;
+    cardHeadings.current.get(id)?.focus();
+  }, [invoices]);
+
+  const skipInvoice = useCallback(
+    (inv: InvoiceEdit) => {
+      track("Invoice Review Card Skipped", {
+        source: isArchiveSource(inv.source) ? "mailfolder" : "upload",
+        duplicate: !!inv.source.alreadySubmitted,
+        remaining: invoices.length - 1,
+      });
+      if (invoices.length <= 1) {
+        handleClose();
+        return;
+      }
+      pendingHeadingFocus.current = focusAfterRemoval(
+        invoices.map((i) => i.id),
+        inv.id,
+      );
+      setSkipAnnounced(skipAnnouncement(inv.source.documentTitle ?? inv.source.filename));
+      setInvoices((prev) => removeCard(prev, inv.id));
+    },
+    [invoices, handleClose],
+  );
 
   const allDone = results !== null;
   const bookedCount = results?.filter((r) => isBooked(r.status)).length ?? 0;
@@ -809,13 +837,25 @@ export function InvoiceReviewDialog({
           </Alert>
         )}
 
+        {/* Announces "Niet boeken" (skipInvoice); visually hidden. */}
+        <Box
+          role="status"
+          aria-live="polite"
+          sx={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" }}
+        >
+          {skipAnnounced}
+        </Box>
+
         {/* Invoice cards */}
         {!allDone && (
           <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
             {invoices.map((inv, index) => (
               <Box
-                key={index}
+                key={inv.id}
                 component="fieldset"
+                // Named by the title only: the "Niet boeken" button in the
+                // legend would otherwise become part of the group's name.
+                aria-labelledby={`invoice-review-${inv.id}-title`}
                 sx={{
                   border: "1px solid",
                   borderColor: invoiceBlocker(inv) !== null ? "error.main" : "divider",
@@ -826,9 +866,15 @@ export function InvoiceReviewDialog({
               >
                 {/* Legend: the document title (mail folder) or file name,
                     the original file name small and grey next to a title,
-                    a "Creditnota" chip, and the confidence badge */}
+                    a "Creditnota" chip, the confidence badge and "Niet
+                    boeken" (skipInvoice) */}
                 <Typography
                   component="legend"
+                  tabIndex={-1}
+                  ref={(el: HTMLElement | null) => {
+                    if (el) cardHeadings.current.set(inv.id, el);
+                    else cardHeadings.current.delete(inv.id);
+                  }}
                   sx={{
                     px: 1,
                     fontWeight: 600,
@@ -837,9 +883,12 @@ export function InvoiceReviewDialog({
                     alignItems: "center",
                     gap: 1,
                     flexWrap: "wrap",
+                    borderRadius: 1,
+                    // Focus lands here after "Niet boeken" on another card.
+                    "&:focus": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 },
                   }}
                 >
-                  {inv.source.documentTitle ?? inv.source.filename}
+                  <span id={`invoice-review-${inv.id}-title`}>{inv.source.documentTitle ?? inv.source.filename}</span>
                   {inv.source.documentTitle && (
                     <Typography
                       component="span"
@@ -858,6 +907,15 @@ export function InvoiceReviewDialog({
                     />
                   )}
                   <ConfidenceBadge confidence={inv.source.invoice.confidence} />
+                  <Button
+                    size="small"
+                    onClick={() => skipInvoice(inv)}
+                    disabled={submitting}
+                    aria-label={skipButtonAriaLabel(inv.source.documentTitle ?? inv.source.filename)}
+                    sx={{ ml: "auto", textTransform: "none" }}
+                  >
+                    {SKIP_BUTTON_LABEL}
+                  </Button>
                 </Typography>
 
                 {/* Duplicate-upload warning — shown when the same PDF
@@ -868,7 +926,22 @@ export function InvoiceReviewDialog({
                     to (e.g. a credit note follow-up that happens to share
                     a PDF) — we just make sure they made an active choice. */}
                 {inv.source.alreadySubmitted && (
-                  <Alert severity="warning" sx={{ mt: 1.5 }}>
+                  <Alert
+                    severity="warning"
+                    sx={{ mt: 1.5 }}
+                    action={
+                      <Button
+                        color="inherit"
+                        size="small"
+                        onClick={() => skipInvoice(inv)}
+                        disabled={submitting}
+                        aria-label={skipButtonAriaLabel(inv.source.documentTitle ?? inv.source.filename)}
+                        sx={{ textTransform: "none" }}
+                      >
+                        {SKIP_BUTTON_LABEL}
+                      </Button>
+                    }
+                  >
                     <AlertTitle sx={{ fontWeight: 700 }}>
                       Mogelijk dubbele factuur
                     </AlertTitle>
@@ -894,7 +967,7 @@ export function InvoiceReviewDialog({
                     exclusive
                     size="small"
                     onChange={(_, val) => {
-                      if (val !== null) updateField(index, "isReceipt", val === "receipt");
+                      if (val !== null) updateField(inv.id, "isReceipt", val === "receipt");
                     }}
                     disabled={submitting}
                     aria-label="Soort document"
@@ -926,12 +999,11 @@ export function InvoiceReviewDialog({
                     mt: 2,
                   }}
                 >
-                  {/* Preview pane. Prefer the R2 presigned URL when
-                      available, fall back to the client-side blob: URL so the
-                      preview works in self-hosted deployments without R2 and
-                      for mail-folder documents. Images render as <img>. */}
+                  {/* Preview pane: the client-side blob: URL of the upload or
+                      the downloaded mail-folder document. Images render as
+                      <img>. */}
                   <DocumentPreview
-                    url={inv.source.pdfUrl || inv.source.localPdfUrl || ""}
+                    url={inv.source.localPdfUrl || ""}
                     filename={inv.source.filename}
                     mediaType={inv.source.localFile?.type}
                   />
@@ -949,7 +1021,7 @@ export function InvoiceReviewDialog({
                       <TextField
                         label="Leverancier"
                         value={inv.leverancier}
-                        onChange={(e) => updateField(index, "leverancier", e.target.value)}
+                        onChange={(e) => updateField(inv.id, "leverancier", e.target.value)}
                         size="small"
                         fullWidth
                         disabled={submitting}
@@ -959,8 +1031,8 @@ export function InvoiceReviewDialog({
                         <RelationPicker
                           value={inv.relation}
                           onChange={(r) => {
-                            updateField(index, "relation", r);
-                            if (r && r.grootboekrekeningId == null) resolveRelationLedger(index, r.id);
+                            updateField(inv.id, "relation", r);
+                            if (r && r.grootboekrekeningId == null) resolveRelationLedger(inv.id, r.id);
                           }}
                           label="Relatie (crediteur)"
                           disabled={submitting}
@@ -982,7 +1054,7 @@ export function InvoiceReviewDialog({
                         <TextField
                           label="Factuurnummer"
                           value={inv.factuurnummer}
-                          onChange={(e) => updateField(index, "factuurnummer", e.target.value)}
+                          onChange={(e) => updateField(inv.id, "factuurnummer", e.target.value)}
                           size="small"
                           fullWidth
                           disabled={submitting}
@@ -992,7 +1064,7 @@ export function InvoiceReviewDialog({
                         label="Datum"
                         type="date"
                         value={inv.datum}
-                        onChange={(e) => updateField(index, "datum", e.target.value)}
+                        onChange={(e) => updateField(inv.id, "datum", e.target.value)}
                         size="small"
                         fullWidth
                         disabled={submitting}
@@ -1015,7 +1087,7 @@ export function InvoiceReviewDialog({
                         value={inv.bedragExcl}
                         error={invalidAmountField(inv.bedragExcl)}
                         helperText={invalidAmountField(inv.bedragExcl) ? AMOUNT_HINT : undefined}
-                        onChange={(e) => updateField(index, "bedragExcl", e.target.value)}
+                        onChange={(e) => updateField(inv.id, "bedragExcl", e.target.value)}
                         size="small"
                         fullWidth
                         disabled={submitting}
@@ -1035,7 +1107,7 @@ export function InvoiceReviewDialog({
                         value={inv.btwBedrag}
                         error={invalidAmountField(inv.btwBedrag)}
                         helperText={invalidAmountField(inv.btwBedrag) ? AMOUNT_HINT : undefined}
-                        onChange={(e) => updateField(index, "btwBedrag", e.target.value)}
+                        onChange={(e) => updateField(inv.id, "btwBedrag", e.target.value)}
                         size="small"
                         fullWidth
                         disabled={submitting}
@@ -1055,13 +1127,13 @@ export function InvoiceReviewDialog({
                         value={inv.bedragIncl}
                         error={invalidAmountField(inv.bedragIncl, { required: true })}
                         helperText={invalidAmountField(inv.bedragIncl, { required: true }) ? AMOUNT_HINT : undefined}
-                        onChange={(e) => updateField(index, "bedragIncl", e.target.value)}
+                        onChange={(e) => updateField(inv.id, "bedragIncl", e.target.value)}
                         size="small"
                         fullWidth
                         disabled={submitting}
                         inputRef={(el: HTMLInputElement | null) => {
-                          if (el) singleAmountInputs.current.set(index, el);
-                          else singleAmountInputs.current.delete(index);
+                          if (el) singleAmountInputs.current.set(inv.id, el);
+                          else singleAmountInputs.current.delete(inv.id);
                         }}
                         slotProps={{
                           htmlInput: { inputMode: "decimal" },
@@ -1088,13 +1160,13 @@ export function InvoiceReviewDialog({
                       <VATCodePicker
                         codes={purchaseVatCodes}
                         value={inv.btwCode}
-                        onChange={(code) => updateField(index, "btwCode", code)}
+                        onChange={(code) => updateField(inv.id, "btwCode", code)}
                         disabled={submitting}
                       />
                       <LedgerAccountPicker
                         accounts={ledgerAccounts}
                         value={inv.ledgerAccount}
-                        onChange={(acc) => updateField(index, "ledgerAccount", acc)}
+                        onChange={(acc) => updateField(inv.id, "ledgerAccount", acc)}
                         label="Tegenrekening"
                         disabled={submitting}
                       />
@@ -1104,7 +1176,7 @@ export function InvoiceReviewDialog({
                         21/9/0): the lines replace the amount fields. */}
                     {inv.source.invoice.documentType !== "creditnota" && (
                       <Box sx={{ mt: 1 }}>
-                        <Button size="small" onClick={() => splitInvoice(index)} disabled={submitting}>
+                        <Button size="small" onClick={() => splitInvoice(inv.id)} disabled={submitting}>
                           Splitsen over meerdere regels
                         </Button>
                       </Box>
@@ -1122,8 +1194,8 @@ export function InvoiceReviewDialog({
                           <Button
                             size="small"
                             onClick={() => {
-                              pendingSingleFocus.current = index;
-                              setRegels(index, null);
+                              pendingSingleFocus.current = inv.id;
+                              setRegels(inv.id, null);
                             }}
                             disabled={submitting}
                           >
@@ -1143,7 +1215,7 @@ export function InvoiceReviewDialog({
                             <Button
                               color="inherit"
                               size="small"
-                              onClick={() => undoSplitProposal(index)}
+                              onClick={() => undoSplitProposal(inv.id)}
                               disabled={submitting}
                               sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
                               aria-label="Splitsing ongedaan maken"
@@ -1165,7 +1237,7 @@ export function InvoiceReviewDialog({
                           value={inv.bedragIncl}
                           error={invalidAmountField(inv.bedragIncl, { required: true })}
                           helperText={invalidAmountField(inv.bedragIncl, { required: true }) ? AMOUNT_HINT : undefined}
-                          onChange={(e) => updateField(index, "bedragIncl", e.target.value)}
+                          onChange={(e) => updateField(inv.id, "bedragIncl", e.target.value)}
                           size="small"
                           disabled={submitting}
                           sx={{ mb: 1.5, maxWidth: { sm: 240 } }}
@@ -1188,29 +1260,30 @@ export function InvoiceReviewDialog({
                         ledgerAccounts={ledgerAccounts}
                         vatCodes={purchaseVatCodes}
                         vatRate={vatRate}
-                        onChange={(regels) => setRegels(index, regels)}
+                        onChange={(regels) => setRegels(inv.id, regels)}
                         disabled={submitting}
                       />
                     </Box>
                     )}
 
-                    {/* Row 4b: Archive folder picker. For an upload it is
-                        optional — leaving it empty means the PDF is not
-                        uploaded to the digitaal archief (mutation is still
-                        booked). For a mail-folder document the file always
-                        leaves the mail folder: the picker says where it goes,
-                        empty meaning Facturen/<jaar>/<maand>, and the mail
-                        folder's subtree is not on offer. */}
+                    {/* Row 4b: Archive folder picker. An upload always goes
+                        into the digitaal archief: the picked folder, or the
+                        automatic month folder when it is left empty. For a
+                        mail-folder document the file always leaves the mail
+                        folder: the picker says where it goes, empty meaning
+                        the month folder, and the mail folder's subtree is not
+                        on offer. */}
                     <Box sx={{ mt: 2 }}>
                       {isArchiveSource(inv.source) ? (
                         <ArchiveFolderPicker
                           value={inv.archiveFolder}
-                          onChange={(f) => updateField(index, "archiveFolder", f)}
+                          onChange={(f) => updateField(inv.id, "archiveFolder", f)}
                           disabled={submitting}
                           label="Verplaatsen naar"
                           helperText={archiveFolderHelperText({
                             folderPicked: inv.archiveFolder !== null,
                             datum: inv.datum,
+                            folders: archiveFolders,
                             mailFolderName: inv.source.mailFolderName ?? "",
                           })}
                           excludeFolderIds={excludeFolderIds}
@@ -1218,9 +1291,13 @@ export function InvoiceReviewDialog({
                       ) : (
                         <ArchiveFolderPicker
                           value={inv.archiveFolder}
-                          onChange={(f) => updateField(index, "archiveFolder", f)}
+                          onChange={(f) => updateField(inv.id, "archiveFolder", f)}
                           disabled={submitting}
-                          helperText="Optioneel. Kies een map om het bestand in je digitale archief te bewaren."
+                          helperText={uploadFolderHelperText({
+                            folderPicked: inv.archiveFolder !== null,
+                            datum: inv.datum,
+                            folders: archiveFolders,
+                          })}
                         />
                       )}
                     </Box>
@@ -1346,7 +1423,7 @@ export function InvoiceReviewDialog({
                           value={inv.bankLine?.id ?? ""}
                           onChange={(e) => {
                             const id = Number(e.target.value);
-                            selectBankLine(index, choices.find((l) => l.id === id) ?? null);
+                            selectBankLine(inv.id, choices.find((l) => l.id === id) ?? null);
                           }}
                           size="small"
                           fullWidth
@@ -1373,7 +1450,7 @@ export function InvoiceReviewDialog({
                             <Button
                               color="inherit"
                               size="small"
-                              onClick={() => updateField(index, "importId", 0)}
+                              onClick={() => updateField(inv.id, "importId", 0)}
                             >
                               Loskoppelen
                             </Button>
@@ -1381,7 +1458,7 @@ export function InvoiceReviewDialog({
                             <Button
                               color="inherit"
                               size="small"
-                              onClick={() => updateField(index, "importId", inv.bankLine!.id)}
+                              onClick={() => updateField(inv.id, "importId", inv.bankLine!.id)}
                             >
                               Koppelen
                             </Button>
@@ -1443,7 +1520,7 @@ export function InvoiceReviewDialog({
                             <Button
                               color="inherit"
                               size="small"
-                              onClick={() => splitTip(index, deltaCents)}
+                              onClick={() => splitTip(inv.id, deltaCents)}
                               disabled={submitting}
                               sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
                             >
@@ -1467,7 +1544,7 @@ export function InvoiceReviewDialog({
                       <TextField
                         label="Omschrijving"
                         value={inv.omschrijving}
-                        onChange={(e) => updateField(index, "omschrijving", e.target.value)}
+                        onChange={(e) => updateField(inv.id, "omschrijving", e.target.value)}
                         size="small"
                         fullWidth
                         multiline
@@ -1594,6 +1671,7 @@ function buildEdit(
   a: AnalyzedInvoice,
   ledgerAccounts: LedgerAccount[],
   vatCodes: VATCode[],
+  id: string,
 ): InvoiceEdit {
   const inv = a.invoice;
 
@@ -1658,6 +1736,7 @@ function buildEdit(
   const proposal = bookable && !a.matchedBankLine?.currencyConverted ? proposeRegels(inv, ledgerAccounts, ledger.account) : null;
 
   return {
+    id,
     source: a,
     leverancier: inv.leverancier ?? "",
     factuurnummer: inv.factuurnummer ?? "",
