@@ -53,8 +53,6 @@ const candidate = (id: number, overrides: Partial<BankLineCandidate> = {}): Bank
 const analysis = (overrides: Partial<InvoiceAnalyzeResponse> = {}): InvoiceAnalyzeResponse => ({
   invoice: invoice(),
   filename: "Voorbeeld-Bijlage.pdf",
-  uploadKey: "",
-  pdfUrl: "",
   pdfHash: "abc",
   matchedRelation: { id: 55, code: "R1", bedrijf: "Anthropic" },
   crediteurenId: 1600,
@@ -157,17 +155,6 @@ describe("buildAnalyzedInvoiceFromDocument", () => {
     expect(out.mailFolderName).toBe("Inbox");
     expect(out.documentTitle).toBe("Anthropic · 12 okt 2026 · € 21,78");
     expect(out.filename).toBe("Voorbeeld-Bijlage.pdf");
-  });
-
-  it("never uses R2 for a mail-folder document", () => {
-    const out = buildAnalyzedInvoiceFromDocument(
-      document({ analysis: analysis({ uploadKey: "uploads/x/document.pdf", pdfUrl: "https://r2/x" }) }),
-      pdfFile(),
-      "blob:1",
-      opts,
-    )!;
-    expect(out.uploadKey).toBe("");
-    expect(out.pdfUrl).toBe("");
   });
 
   it("takes the match and candidates from the document's fresh data", () => {

@@ -440,27 +440,6 @@ export const api = {
     });
   },
 
-  // Avatar
-  uploadAvatar(file: File) {
-    const formData = new FormData();
-    formData.append("avatar", file);
-    return fetch(`${BASE}/avatar`, {
-      method: "POST",
-      credentials: "include",
-      body: formData,
-    }).then(async (res) => {
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        throw new ApiError(res.status, body.error || res.statusText);
-      }
-      return res.json() as Promise<{ avatarKey: string; avatarUrl: string }>;
-    });
-  },
-
-  deleteAvatar() {
-    return request<{ status: string }>("/avatar", { method: "DELETE" });
-  },
-
   // Settings
   getSettings() {
     return request<SettingsResponse>("/settings");

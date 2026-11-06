@@ -23,7 +23,6 @@ import (
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
 	"github.com/joooostb/speedy-eboekhouden/internal/eboekhouden"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
-	"github.com/joooostb/speedy-eboekhouden/internal/storage"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -142,7 +141,6 @@ type InvoiceHandler struct {
 	claude   *claude.Service
 	db       *database.DB
 	encKey   crypto.AESKey
-	r2       *storage.Client
 	redis    *redis.Client
 	sessions *session.Store
 }
@@ -150,8 +148,8 @@ type InvoiceHandler struct {
 // NewInvoiceHandler creates a new invoice handler. sessions is used to clear
 // a stale e-boekhouden token when an analysis runs into an expired session;
 // it may be nil (see HandleEBoekhoudenSessionExpired).
-func NewInvoiceHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, r2 *storage.Client, redisClient *redis.Client, sessions *session.Store) *InvoiceHandler {
-	return &InvoiceHandler{claude: claudeSvc, db: db, encKey: encKey, r2: r2, redis: redisClient, sessions: sessions}
+func NewInvoiceHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, redisClient *redis.Client, sessions *session.Store) *InvoiceHandler {
+	return &InvoiceHandler{claude: claudeSvc, db: db, encKey: encKey, redis: redisClient, sessions: sessions}
 }
 
 // errNoAPIKey is returned by analyzeBytes and classifyWithClaude when the
@@ -179,7 +177,7 @@ func detectDocumentMediaType(data []byte) (string, bool) {
 }
 
 // documentExtension maps a supported media type to the file extension used
-// for R2 keys and default filenames: pdf, jpg or png. Unsupported types
+// for default filenames: pdf, jpg or png. Unsupported types
 // yield "".
 func documentExtension(mediaType string) string {
 	switch mediaType {
@@ -285,7 +283,7 @@ func (h *InvoiceHandler) writeAnalyzeError(c *gin.Context, sess *session.Session
 //
 // It keeps no copy of the file: an upload stays in the browser, which inlines
 // it as pdfBase64 when booking, and a mail-folder document already lives in
-// e-boekhouden. Nothing is written to R2.
+// e-boekhouden.
 //
 // It writes nothing to the response. The returned gin.H is the
 // InvoiceAnalyzeResponse body; errors are typed so callers can map them with
@@ -436,13 +434,7 @@ func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData,
 	}
 
 	resp := gin.H{
-		"invoice": invoice,
-		// uploadKey and pdfUrl are always empty since Step 10: the analyser
-		// keeps no copy of the file (nothing goes to R2). They stay in the
-		// response so older clients keep parsing it; the booking carries the
-		// bytes inline (pdfBase64) or names a mail-folder file (archiveFileId).
-		"uploadKey":       "",
-		"pdfUrl":          "",
+		"invoice":         invoice,
 		"matchedBankLine": matchedBankLine,
 		// bankLineCandidates is the full ranking (best first, at most three)
 		// so the UI can offer a choice. Always an array, never null.
@@ -451,8 +443,8 @@ func (h *InvoiceHandler) analyzeBytes(c *gin.Context, sess *session.SessionData,
 		"matchedRelation":    matchedRelation,
 		"crediteurenId":      crediteurenId,
 		// pdfHash is echoed back so SubmitFull can write the submission
-		// marker without rehashing the file (which we'd otherwise need to
-		// re-download from R2). The frontend treats it as opaque.
+		// marker without rehashing the file. The frontend treats it as
+		// opaque.
 		"pdfHash": pdfHash,
 		// cachedAnalysis lets the UI surface a small "eerder geanalyseerd"
 		// hint so the user knows why the result feels familiar.
@@ -515,18 +507,14 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 		TegenRekeningId int `json:"tegenRekeningId"` // cost account
 		RekeningId      int `json:"rekeningId"`      // crediteuren account
 
-		// Document source. Three are supported; at most one may be given
-		// together with ArchiveFileId:
-		//   - PdfBase64: document inlined as base64 (self-hosted, no R2 needed);
-		//     wins over UploadKey when both are present
-		//   - UploadKey: R2 object key from a prior /invoices/analyze call
+		// Document source. Two are supported; at most one may be given:
+		//   - PdfBase64: an upload inlined as base64
 		//   - ArchiveFileId: a file that already sits in the Mail & herken
 		//     folder; nothing is uploaded, the file is linked, renamed and
 		//     moved to TargetFolderId (or the automatic month folder,
 		//     findOrCreateArchiveFolder, when 0)
 		// Filename is accepted for compatibility but no longer used: the
 		// archive name follows archiveFileName.
-		UploadKey      string `json:"uploadKey"`
 		PdfBase64      string `json:"pdfBase64,omitempty"`
 		Filename       string `json:"filename"`
 		ArchiveFileId  int    `json:"archiveFileId,omitempty"`
@@ -633,11 +621,10 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	// Step 1: Resolve the document and stage the archive file. Every check
 	// that can fail the request happens here, before anything is booked; an
 	// upload that cannot be put in the archive fails the request too.
-	src, err := h.prepareArchiveSource(ctx, client, archiveSourceInput{
+	src, err := prepareArchiveSource(client, archiveSourceInput{
 		archiveFileID:  req.ArchiveFileId,
 		targetFolderID: req.TargetFolderId,
 		pdfBase64:      req.PdfBase64,
-		uploadKey:      req.UploadKey,
 	})
 	if err != nil {
 		h.writeArchiveSourceError(c, sess, err)
@@ -921,10 +908,9 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		BTWBedrag       float64 `json:"btwBedrag"`
 		BTWCode         string  `json:"btwCode"`
 		TegenRekeningId int     `json:"tegenRekeningId"`
-		// Document source: PdfBase64 (preferred, no R2 needed), UploadKey + R2,
-		// or ArchiveFileId for a file in the mail folder; see SubmitFull.
+		// Document source: PdfBase64 for an upload, or ArchiveFileId for a
+		// file in the mail folder; see SubmitFull.
 		// Filename is accepted for compatibility but no longer used.
-		UploadKey      string `json:"uploadKey"`
 		PdfBase64      string `json:"pdfBase64,omitempty"`
 		Filename       string `json:"filename"`
 		ArchiveFileId  int    `json:"archiveFileId,omitempty"`
@@ -1079,11 +1065,10 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	// Step 1: Resolve the document and stage the archive file — see SubmitFull
 	// and invoice_archive.go. A receipt has no invoice number, so its archive
 	// name ends in "bonnetje".
-	src, err := h.prepareArchiveSource(ctx, client, archiveSourceInput{
+	src, err := prepareArchiveSource(client, archiveSourceInput{
 		archiveFileID:  req.ArchiveFileId,
 		targetFolderID: req.TargetFolderId,
 		pdfBase64:      req.PdfBase64,
-		uploadKey:      req.UploadKey,
 	})
 	if err != nil {
 		h.writeArchiveSourceError(c, sess, err)

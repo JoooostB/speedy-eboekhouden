@@ -14,10 +14,11 @@ import {
  * reference builders below are main's code, copied verbatim apart from the
  * function wrapper and `inv`'s minimal shape. For an upload, the new
  * builders (fed the way the dialog on this branch feeds them) must produce
- * the same JSON, byte for byte, with one intended difference: the dialog
+ * the same JSON, byte for byte, with two intended differences: the dialog
  * now always inlines the file (pdfBase64) for an upload, also when no
- * archive folder was picked, because the analyser no longer keeps a copy in
- * R2 (commit e3d851b).
+ * archive folder was picked, because the analyser no longer keeps a copy
+ * (commit e3d851b); and the legacy uploadKey field is gone together with
+ * object storage, so main's body is compared without it (mainWithoutKey).
  */
 
 /** The part of main's InvoiceEdit the submit read. */
@@ -36,6 +37,13 @@ interface MainInvoiceEdit {
   importId: number;
   extraLines: ExtraLineEdit[];
   archiveFolder: { id: number } | null;
+}
+
+// main's body without the uploadKey field, which this branch no longer sends.
+function mainWithoutKey<T extends { uploadKey: string }>(body: T): Partial<T> {
+  const rest: Partial<T> = { ...body };
+  delete rest.uploadKey;
+  return rest;
 }
 
 // A fixed rate table standing in for the dialog's vatRate(code).
@@ -108,7 +116,7 @@ function mainReceiptBody(inv: MainInvoiceEdit, pdfBase64: string | undefined) {
 // upload with a local file.
 function branchInput(inv: MainInvoiceEdit, pdfBase64: string | undefined, extraLines: ReceiptExtraLine[] = []): SubmitInput {
   return {
-    source: { ...inv.source, invoice: { documentType: "factuur" } },
+    source: { filename: inv.source.filename, pdfHash: inv.source.pdfHash, crediteurenId: inv.source.crediteurenId, invoice: { documentType: "factuur" } },
     datum: inv.datum,
     leverancier: inv.leverancier,
     factuurnummer: inv.factuurnummer,
@@ -129,8 +137,7 @@ function branchInput(inv: MainInvoiceEdit, pdfBase64: string | undefined, extraL
 const FILE_B64 = "JVBERi0xLjQKJUVPRgo="; // "%PDF-1.4\n%EOF\n", a fictitious stub
 
 const edit = (overrides: Partial<MainInvoiceEdit> = {}): MainInvoiceEdit => ({
-  // The analyser answers uploadKey "" since e3d851b; main's R2 deployment
-  // sent a key here, which the payload passes through unchanged either way.
+  // The analyser answered uploadKey "" since e3d851b, so main sent "".
   source: { uploadKey: "", filename: "voorbeeld-factuur.pdf", pdfHash: "0f".repeat(32), crediteurenId: 1600 },
   datum: "2026-10-01",
   leverancier: "Voorbeeld Leverancier",
@@ -153,14 +160,13 @@ describe("submit-full body for an upload", () => {
     { name: "folder picked, bank line linked", inv: edit() },
     { name: "folder picked, no bank line", inv: edit({ importId: 0 }) },
     { name: "folder picked, no crediteuren account", inv: edit({ source: { ...edit().source, crediteurenId: 0 } }) },
-    { name: "legacy uploadKey from an R2 analysis", inv: edit({ source: { ...edit().source, uploadKey: "uploads/00000000-0000-0000-0000-000000000000/document.pdf" } }) },
     { name: "unparseable amounts fall back to 0", inv: edit({ bedragExcl: "", btwBedrag: "abc" }) },
   ];
   for (const c of cases) {
     it(`${c.name}: byte-for-byte main's JSON`, () => {
       const pdf = c.inv.archiveFolder ? FILE_B64 : undefined;
       expect(JSON.stringify(buildFullSubmitPayload(branchInput(c.inv, FILE_B64)))).toBe(
-        JSON.stringify(mainFullBody(c.inv, pdf)),
+        JSON.stringify(mainWithoutKey(mainFullBody(c.inv, pdf))),
       );
     });
   }
@@ -168,14 +174,14 @@ describe("submit-full body for an upload", () => {
   it("no folder picked: main's JSON plus the inlined file, still without folderId (intended, e3d851b)", () => {
     const inv = edit({ archiveFolder: null });
     const now = JSON.parse(JSON.stringify(buildFullSubmitPayload(branchInput(inv, FILE_B64))));
-    const before = JSON.parse(JSON.stringify(mainFullBody(inv, undefined)));
+    const before = JSON.parse(JSON.stringify(mainWithoutKey(mainFullBody(inv, undefined))));
     expect(now).toEqual({ ...before, pdfBase64: FILE_B64 });
     expect(now).not.toHaveProperty("folderId");
   });
 
-  it("no folder and no local file: exactly main's JSON", () => {
+  it("no folder and no local file: main's JSON", () => {
     const inv = edit({ archiveFolder: null });
-    expect(JSON.stringify(buildFullSubmitPayload(branchInput(inv, undefined)))).toBe(JSON.stringify(mainFullBody(inv, undefined)));
+    expect(JSON.stringify(buildFullSubmitPayload(branchInput(inv, undefined)))).toBe(JSON.stringify(mainWithoutKey(mainFullBody(inv, undefined))));
   });
 });
 
@@ -199,7 +205,7 @@ describe("submit-receipt body for an upload", () => {
   for (const c of cases) {
     it(`${c.name}: byte-for-byte main's JSON`, () => {
       const body = buildReceiptSubmitPayload(branchInput(c.inv, FILE_B64, receiptExtraLines(c.inv.extraLines, vatRate)));
-      expect(JSON.stringify(body)).toBe(JSON.stringify(mainReceiptBody(c.inv, FILE_B64)));
+      expect(JSON.stringify(body)).toBe(JSON.stringify(mainWithoutKey(mainReceiptBody(c.inv, FILE_B64))));
     });
   }
 
@@ -208,7 +214,7 @@ describe("submit-receipt body for an upload", () => {
     const now = JSON.parse(
       JSON.stringify(buildReceiptSubmitPayload(branchInput(inv, FILE_B64, receiptExtraLines(inv.extraLines, vatRate)))),
     );
-    const before = JSON.parse(JSON.stringify(mainReceiptBody(inv, undefined)));
+    const before = JSON.parse(JSON.stringify(mainWithoutKey(mainReceiptBody(inv, undefined))));
     expect(now).toEqual({ ...before, pdfBase64: FILE_B64 });
     expect(now).not.toHaveProperty("folderId");
   });

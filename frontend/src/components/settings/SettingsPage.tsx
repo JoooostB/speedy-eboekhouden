@@ -126,7 +126,7 @@ function GlobeIcon(props: { sx?: object }) {
 }
 
 export function SettingsPage() {
-  const { user, team, avatarUrl, setAvatarUrl, eboekhoudenConnected } = useAuth();
+  const { user, team, eboekhoudenConnected } = useAuth();
   const [disconnectOpen, setDisconnectOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [hasSoapCredentials, setHasSoapCredentials] = useState(false);
@@ -134,9 +134,8 @@ export function SettingsPage() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
   // Every card has its own message, shown in that card: a shared one put
-  // "Type onderneming opgeslagen" and avatar errors in the API-key card.
+  // "Type onderneming opgeslagen" in the API-key card.
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [avatarMessage, setAvatarMessage] = useState<string | null>(null);
 
   // SOAP credential fields
   const [soapUsername, setSoapUsername] = useState("");
@@ -502,7 +501,7 @@ export function SettingsPage() {
         </Box>
       </Paper>
 
-      {/* Account Info + Avatar */}
+      {/* Account Info */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
           <FingerprintIcon sx={{ mr: 1, color: "primary.main", flexShrink: 0 }} />
@@ -510,56 +509,10 @@ export function SettingsPage() {
         </Box>
 
         <Box sx={{ display: "flex", alignItems: "center", gap: 3, mb: 2 }}>
-          <Avatar
-            src={avatarUrl || undefined}
-            sx={{ width: 72, height: 72, fontSize: "1.5rem", bgcolor: "primary.main" }}
-          >
+          <Avatar sx={{ width: 72, height: 72, fontSize: "1.5rem", bgcolor: "primary.main" }}>
             {userInitials(user?.name)}
           </Avatar>
-          <Box>
-            <Button variant="outlined" size="small" component="label" sx={{ mr: 1 }}>
-              Foto uploaden
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                hidden
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  setAvatarMessage(null);
-                  try {
-                    const result = await api.uploadAvatar(file);
-                    setAvatarUrl(result.avatarUrl);
-                  } catch (err: any) {
-                    setAvatarMessage(err.message);
-                  }
-                }}
-              />
-            </Button>
-            {avatarUrl && (
-              <Button
-                size="small"
-                color="error"
-                onClick={async () => {
-                  setAvatarMessage(null);
-                  try {
-                    await api.deleteAvatar();
-                    setAvatarUrl("");
-                  } catch (err: any) {
-                    setAvatarMessage(err.message);
-                  }
-                }}
-              >
-                Verwijderen
-              </Button>
-            )}
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-              Maximaal 2 MB, als JPEG, PNG of WebP.
-            </Typography>
-          </Box>
         </Box>
-
-        {avatarMessage && <Alert severity="error" sx={{ mb: 2 }}>{avatarMessage}</Alert>}
 
         <List dense>
           <ListItem>

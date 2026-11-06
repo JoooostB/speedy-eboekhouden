@@ -34,7 +34,7 @@ Browser → landing nginx (:3000)
                                ├── Redis
                                ├── e-boekhouden.nl (HTTPS)
                                ├── api.anthropic.com (HTTPS, the user's key)
-                               └── Cloudflare R2, SMTP (optional)
+                               └── SMTP (optional)
 ```
 
 In Kubernetes the Traefik ingress sends `/api` and `/app` straight to the backend and frontend services.
@@ -73,7 +73,6 @@ You don't need Node.js on your machine; the frontend is built inside its contain
 │       ├── mail/             SMTP mailer (welcome, recovery)
 │       ├── middleware/       CORS, security headers, rate limiting
 │       ├── session/          Redis-backed session store
-│       └── storage/          Cloudflare R2 client (avatars)
 │
 ├── frontend/                 React SPA
 │   └── src/
@@ -109,7 +108,6 @@ You don't need Node.js on your machine; the frontend is built inside its contain
 | AI | Claude Sonnet 4.5 (documents), Claude Haiku 4.5 (bank-line classification) |
 | Auth | WebAuthn passkeys |
 | Encryption | AES-256-GCM (Anthropic key, e-boekhouden token, SOAP and REST credentials) |
-| Storage (optional) | Cloudflare R2 for avatars |
 | TLS | Let's Encrypt via cert-manager |
 
 ## API
@@ -139,7 +137,6 @@ All routes live under `/api/v1`. "Session" means a Speedy passkey session; "EB" 
 | `PUT` | `/settings/entity-type` | Session | B.V., ZZP, eenmanszaak or other; used by the classifier |
 | `GET`/`PATCH`/`DELETE` | `/settings/passkeys[/:id]` | Session | Manage passkeys |
 | `GET`/`DELETE` | `/settings/learned`, `/settings/learned/item` | Session | List learned bookings, delete one or all |
-| `POST`/`DELETE` | `/avatar` | Session | Profile photo (needs R2) |
 
 ### Bookkeeping inbox
 
@@ -184,7 +181,6 @@ The backend reads its configuration from environment variables. `.env.example` l
 | `WEBAUTHN_ORIGIN` | *(FRONTEND_ORIGIN)* | WebAuthn relying party origin |
 | `WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying party ID |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | *(empty)*, `587`, *(empty)*, *(empty)*, `noreply@speedy-eboekhouden.nl` | Welcome and recovery e-mails. Without `SMTP_HOST` no mail is sent and passkey recovery is unavailable. |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_JURISDICTION`, `R2_PUBLIC_URL` | *(empty)*, bucket `speedy-eboekhouden` | Cloudflare R2 for avatars; off without account id and key id. |
 
 ## Security
 
@@ -194,7 +190,7 @@ The Dutch security page at [speedy-eboekhouden.nl/beveiliging](https://speedy-eb
 - Your e-boekhouden password and MFA code are forwarded to e-boekhouden.nl and discarded within the request. The session token that comes back is stored, AES-256-GCM encrypted, in your Redis session (30-minute sliding TTL) and in PostgreSQL, so the connection survives a new Speedy login. "Verbinding verbreken" asks e-boekhouden to log the token out, deletes it from the current session and from PostgreSQL, and purges your cached data. The response says whether e-boekhouden confirmed the logout.
 - PostgreSQL stores accounts (e-mail, name), teams, passkey public keys, encrypted secrets (Anthropic key, e-boekhouden token, optional SOAP and REST credentials), recovery-token hashes and learned bookings. A learned booking is a normalised bank description plus counterparty IBAN, the chosen ledger account and VAT code, and one sample description; you can list and delete them under Instellingen. Speedy does not store mutations, relations, balances or bank statements.
 - Redis stores sessions, rate-limit counters and per-user caches that do contain bookkeeping data: supplier, invoice number, dates, amounts, bank-line descriptions and the suggested codes. The bank-line classification is kept for 1 hour and Claude's answer per bank line (the suggested booking and a shortened description, stored under a hash of the line) for 30 days after the last use, the analysis of a file (upload or mail-folder document) for 7 days, and the full analysis of a mail-folder document for 30 days. The duplicate marker (90 days) holds only mutation numbers and a timestamp, and the ignore list only file ids. "Verbinding verbreken" deletes the caches, the duplicate markers and the ignore list of your account.
-- Object storage (R2, optional) holds avatars only. An uploaded invoice is analysed in memory and the browser sends it again when you book it; mail-folder documents stay in your e-boekhouden archive.
+- Speedy uses no object storage. An uploaded invoice is analysed in memory and the browser sends it again when you book it, so Speedy can put it in your e-boekhouden archive (when that fails, nothing is booked); mail-folder documents stay in your e-boekhouden archive.
 - Claude receives data only with your own API key, over HTTPS to api.anthropic.com. A document goes to Claude only when you start its analysis. Unprocessed bank lines (date, amount, description, counterparty account) are sent for classification automatically when the inbox loads; the result is cached for an hour, and "Vernieuwen" or a booking starts a new run that only sends lines Claude has not seen in the last 30 days. "Alles opnieuw classificeren" (in the Vernieuwen menu) sends every line again. Lines that a learned booking or an open invoice (matched by name) already explain are not sent. The key is decrypted per call and never logged.
 - Logs carry ids, statuses, byte lengths and error classes. They never contain e-boekhouden response bodies, Claude output, names, amounts, descriptions or file names.
 - Analytics run on self-hosted, cookieless Plausible; events carry counts, flags and fixed tokens only.

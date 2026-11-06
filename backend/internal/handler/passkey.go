@@ -14,7 +14,6 @@ import (
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
 	"github.com/joooostb/speedy-eboekhouden/internal/mail"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
-	"github.com/joooostb/speedy-eboekhouden/internal/storage"
 )
 
 // PasskeyHandler handles WebAuthn registration and login.
@@ -25,7 +24,6 @@ type PasskeyHandler struct {
 	db       *database.DB
 	encKey   crypto.AESKey
 	mailer   *mail.Mailer
-	r2       *storage.Client
 	// startRecovery runs the work behind a recovery request (account lookup,
 	// token, mail) after RecoverRequest has answered; by default
 	// sendRecoveryMail in a goroutine. Tests replace it.
@@ -33,8 +31,8 @@ type PasskeyHandler struct {
 }
 
 // NewPasskeyHandler creates a new passkey handler.
-func NewPasskeyHandler(wa *auth.WebAuthnService, sessions *session.Store, cfg *config.Config, db *database.DB, encKey crypto.AESKey, mailer *mail.Mailer, r2 *storage.Client) *PasskeyHandler {
-	h := &PasskeyHandler{webauthn: wa, sessions: sessions, config: cfg, db: db, encKey: encKey, mailer: mailer, r2: r2}
+func NewPasskeyHandler(wa *auth.WebAuthnService, sessions *session.Store, cfg *config.Config, db *database.DB, encKey crypto.AESKey, mailer *mail.Mailer) *PasskeyHandler {
+	h := &PasskeyHandler{webauthn: wa, sessions: sessions, config: cfg, db: db, encKey: encKey, mailer: mailer}
 	h.startRecovery = func(email string) { go h.sendRecoveryMail(email) }
 	return h
 }
@@ -215,16 +213,10 @@ func (h *PasskeyHandler) Me(c *gin.Context) {
 		}
 	}
 
-	var avatarURL string
-	if user.AvatarKey != "" && h.r2 != nil {
-		avatarURL = h.r2.PublicObjectURL(user.AvatarKey)
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"user":                 user,
 		"team":                 team,
 		"eboekhoudenConnected": sess.EBoekhoudenToken != "",
-		"avatarUrl":            avatarURL,
 	})
 }
 

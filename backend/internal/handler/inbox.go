@@ -16,7 +16,6 @@ import (
 	"github.com/joooostb/speedy-eboekhouden/internal/database"
 	"github.com/joooostb/speedy-eboekhouden/internal/eboekhouden"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
-	"github.com/joooostb/speedy-eboekhouden/internal/storage"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -84,7 +83,6 @@ type InboxHandler struct {
 	db       *database.DB
 	encKey   crypto.AESKey
 	redis    *redis.Client
-	r2       *storage.Client
 	sessions *session.Store
 	// lineCache is the per-line classification cache (inbox_linecache.go):
 	// the Redis client in production, nil without one, a fake in tests.
@@ -92,8 +90,8 @@ type InboxHandler struct {
 }
 
 // NewInboxHandler creates a new inbox handler.
-func NewInboxHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, redisClient *redis.Client, r2 *storage.Client, sessions *session.Store) *InboxHandler {
-	h := &InboxHandler{claude: claudeSvc, db: db, encKey: encKey, redis: redisClient, r2: r2, sessions: sessions}
+func NewInboxHandler(claudeSvc *claude.Service, db *database.DB, encKey crypto.AESKey, redisClient *redis.Client, sessions *session.Store) *InboxHandler {
+	h := &InboxHandler{claude: claudeSvc, db: db, encKey: encKey, redis: redisClient, sessions: sessions}
 	if redisClient != nil {
 		h.lineCache = redisClient
 	}
@@ -552,10 +550,7 @@ func (h *InboxHandler) MatchInvoice(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"invoice": invoice,
-		// No copy of the file is kept (see analyzeBytes); the field stays
-		// for the response shape.
-		"uploadKey":   "",
+		"invoice":     invoice,
 		"bankLineId":  bankLineID,
 		"amountMatch": amountMatch,
 		"amountDiff":  amountDiff,

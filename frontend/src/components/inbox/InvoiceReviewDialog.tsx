@@ -74,7 +74,7 @@ import type {
 
 /** Mutable state per invoice in the review list */
 interface InvoiceEdit {
-  /** Original analyze response — holds uploadKey (R2 reference) and filename */
+  /** Original analyze response — holds the filename and the local file */
   source: AnalyzedInvoice;
   /** Editable fields */
   leverancier: string;
@@ -562,7 +562,7 @@ export function InvoiceReviewDialog({
       }
 
       // Encode the original File as base64 once per invoice: the analyser
-      // keeps no copy of an upload (nothing goes to R2), so the inline bytes
+      // keeps no copy of an upload, so the inline bytes
       // are the only way the backend can archive it. Always sent for an
       // upload; where it is archived follows folderId (0: the month folder). A
       // mail-folder document is never inlined: the backend already has the
@@ -927,12 +927,11 @@ export function InvoiceReviewDialog({
                     mt: 2,
                   }}
                 >
-                  {/* Preview pane. Prefer the R2 presigned URL when
-                      available, fall back to the client-side blob: URL so the
-                      preview works in self-hosted deployments without R2 and
-                      for mail-folder documents. Images render as <img>. */}
+                  {/* Preview pane: the client-side blob: URL of the upload or
+                      the downloaded mail-folder document. Images render as
+                      <img>. */}
                   <DocumentPreview
-                    url={inv.source.pdfUrl || inv.source.localPdfUrl || ""}
+                    url={inv.source.localPdfUrl || ""}
                     filename={inv.source.filename}
                     mediaType={inv.source.localFile?.type}
                   />

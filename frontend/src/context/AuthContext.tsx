@@ -8,7 +8,6 @@ interface AuthState {
   user: User | null;
   team: Team | null;
   eboekhoudenConnected: boolean;
-  avatarUrl: string;
   checking: boolean;
 }
 
@@ -16,7 +15,6 @@ interface AuthContextType extends AuthState {
   logout: () => Promise<void>;
   refreshMe: () => Promise<void>;
   setEBConnected: (connected: boolean) => void;
-  setAvatarUrl: (url: string) => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -26,7 +24,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user: null,
     team: null,
     eboekhoudenConnected: false,
-    avatarUrl: "",
     checking: true,
   });
 
@@ -39,11 +36,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user: data.user,
         team: data.team,
         eboekhoudenConnected: data.eboekhoudenConnected,
-        avatarUrl: data.avatarUrl || "",
         checking: false,
       });
     } catch {
-      setState({ user: null, team: null, eboekhoudenConnected: false, avatarUrl: "", checking: false });
+      setState({ user: null, team: null, eboekhoudenConnected: false, checking: false });
     }
   }, []);
 
@@ -53,15 +49,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // ignore
     }
-    setState({ user: null, team: null, eboekhoudenConnected: false, avatarUrl: "", checking: false });
+    setState({ user: null, team: null, eboekhoudenConnected: false, checking: false });
   }, []);
 
   const setEBConnected = useCallback((connected: boolean) => {
     setState((prev) => ({ ...prev, eboekhoudenConnected: connected }));
-  }, []);
-
-  const setAvatarUrl = useCallback((url: string) => {
-    setState((prev) => ({ ...prev, avatarUrl: url }));
   }, []);
 
   useEffect(() => {
@@ -70,7 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handler = () => {
-      setState({ user: null, team: null, eboekhoudenConnected: false, avatarUrl: "", checking: false });
+      setState({ user: null, team: null, eboekhoudenConnected: false, checking: false });
     };
     window.addEventListener("auth:expired", handler);
     return () => window.removeEventListener("auth:expired", handler);
@@ -125,7 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [state.eboekhoudenConnected, state.user]);
 
   return (
-    <AuthContext.Provider value={{ ...state, logout, refreshMe, setEBConnected, setAvatarUrl }}>
+    <AuthContext.Provider value={{ ...state, logout, refreshMe, setEBConnected }}>
       {children}
     </AuthContext.Provider>
   );

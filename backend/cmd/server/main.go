@@ -16,7 +16,6 @@ import (
 	"github.com/joooostb/speedy-eboekhouden/internal/mail"
 	"github.com/joooostb/speedy-eboekhouden/internal/middleware"
 	"github.com/joooostb/speedy-eboekhouden/internal/session"
-	"github.com/joooostb/speedy-eboekhouden/internal/storage"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -68,25 +67,16 @@ func main() {
 		Password: cfg.SMTPPassword,
 		From:     cfg.SMTPFrom,
 	})
-	r2Client := storage.New(storage.Config{
-		AccountID:       cfg.R2AccountID,
-		AccessKeyID:     cfg.R2AccessKeyID,
-		SecretAccessKey: cfg.R2SecretAccessKey,
-		BucketName:      cfg.R2BucketName,
-		Jurisdiction:    cfg.R2Jurisdiction,
-		PublicURL:       cfg.R2PublicURL,
-	})
 
 	// Handlers
-	passkeyHandler := handler.NewPasskeyHandler(webauthnSvc, store, cfg, db, encKey, mailer, r2Client)
+	passkeyHandler := handler.NewPasskeyHandler(webauthnSvc, store, cfg, db, encKey, mailer)
 	ebAuthHandler := handler.NewEBoekhoudenAuthHandler(store, db, encKey, redisClient)
 	settingsHandler := handler.NewSettingsHandler(db, encKey, redisClient)
 	passkeySettingsHandler := handler.NewPasskeySettingsHandler(db)
 	learnedSettingsHandler := handler.NewLearnedSettingsHandler(db)
-	invoiceHandler := handler.NewInvoiceHandler(claudeSvc, db, encKey, r2Client, redisClient, store)
-	avatarHandler := handler.NewAvatarHandler(r2Client, db)
+	invoiceHandler := handler.NewInvoiceHandler(claudeSvc, db, encKey, redisClient, store)
 	classifyHandler := handler.NewClassifyHandler(claudeSvc, db, encKey)
-	inboxHandler := handler.NewInboxHandler(claudeSvc, db, encKey, redisClient, r2Client, store)
+	inboxHandler := handler.NewInboxHandler(claudeSvc, db, encKey, redisClient, store)
 	bankStatementsHandler := handler.NewBankStatementsHandler(store, db)
 	archiveHandler := handler.NewArchiveHandler(store, db)
 	soapHandler := handler.NewSoapAPIHandler(db, encKey)
@@ -180,10 +170,6 @@ func main() {
 			authed.POST("/inbox/classify", inboxHandler.ClassifyBatch)
 			authed.POST("/inbox/process-batch", inboxHandler.BatchProcess)
 			authed.POST("/inbox/:id/match-invoice", inboxHandler.MatchInvoice)
-
-			// Avatar
-			authed.POST("/avatar", avatarHandler.Upload)
-			authed.DELETE("/avatar", avatarHandler.Delete)
 
 			// e-Boekhouden data routes (require e-boekhouden connection)
 			eb := authed.Group("")

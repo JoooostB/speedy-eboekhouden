@@ -304,7 +304,6 @@ End-to-end with a real administration. The Go and vitest suites cover the status
 
 - [ ] After the run, grep the backend log for the supplier name, the file name and an amount: `docker compose logs backend | grep -i -e "<leverancier>" -e "<bestandsnaam>" -e "<bedrag>"` gives no hits
 - [ ] Rename and move failures log only ids and error classes
-- [ ] With R2 configured: no objects other than avatars appear in the bucket
 
 ## Test result summary
 

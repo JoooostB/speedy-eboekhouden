@@ -566,8 +566,8 @@ func withFreshMatches(response json.RawMessage, match *BankLineCandidate, candid
 }
 
 // AnalyzeDocument handles POST /api/v1/documents/:id/analyze. It downloads
-// the file from the mail folder, runs the shared analysis core without R2
-// and caches the result for 30 days. A cached analysis is returned without
+// the file from the mail folder, runs the shared analysis core and caches
+// the result for 30 days. A cached analysis is returned without
 // downloading unless ?force=true, which also bypasses the content cache so
 // Claude really reads the file again. Concurrent analyses of the same file
 // are refused with 409.

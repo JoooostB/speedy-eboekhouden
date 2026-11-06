@@ -52,7 +52,6 @@ type archiveSourceInput struct {
 	archiveFileID  int
 	targetFolderID int
 	pdfBase64      string
-	uploadKey      string
 }
 
 // archiveSource is the document a booking archives: a file that already sits
@@ -127,11 +126,11 @@ func bookingDate(datum string) time.Time {
 
 // validateArchiveSource checks that a request names at most one document
 // source and a sane archive file id.
-func validateArchiveSource(archiveFileID int, pdfBase64, uploadKey string) error {
+func validateArchiveSource(archiveFileID int, pdfBase64 string) error {
 	if archiveFileID < 0 {
 		return &badRequestError{"Ongeldig document-id."}
 	}
-	if archiveFileID > 0 && (pdfBase64 != "" || uploadKey != "") {
+	if archiveFileID > 0 && pdfBase64 != "" {
 		return &badRequestError{"Kies één bron voor het document."}
 	}
 	return nil
@@ -208,14 +207,14 @@ func archiveFolderPath(folders []archiveFolder, folderID int) string {
 // anything is booked. Errors are *badRequestError (400),
 // claude.ErrUnsupportedMediaType (415) or an e-boekhouden error, possibly
 // eboekhouden.ErrSessionExpired; writeArchiveSourceError maps them.
-func (h *InvoiceHandler) prepareArchiveSource(ctx context.Context, client *eboekhouden.Client, in archiveSourceInput) (archiveSource, error) {
-	if err := validateArchiveSource(in.archiveFileID, in.pdfBase64, in.uploadKey); err != nil {
+func prepareArchiveSource(client *eboekhouden.Client, in archiveSourceInput) (archiveSource, error) {
+	if err := validateArchiveSource(in.archiveFileID, in.pdfBase64); err != nil {
 		return archiveSource{}, err
 	}
 	if in.archiveFileID > 0 {
 		return prepareMailFolderSource(client, in.archiveFileID, in.targetFolderID)
 	}
-	return h.prepareUploadSource(ctx, in)
+	return prepareUploadSource(in)
 }
 
 // prepareMailFolderSource checks that fileID is a live file in the mail
@@ -243,29 +242,17 @@ func prepareMailFolderSource(client *eboekhouden.Client, fileID, targetFolderID 
 	return src, nil
 }
 
-// prepareUploadSource decodes the inlined document or fetches it from R2 by
-// its upload key. The upload key is legacy: since Step 10 the analyser stores
-// nothing in R2, so only a client that analysed before that deploy can still
-// send one; the path stays until no such session can exist. An undecodable
-// body is refused (errUnreadableUpload); a failed R2 download is logged and
-// the booking goes on without an archive file; bytes that are not a PDF, JPG
-// or PNG are refused, as the analyser refuses them.
-func (h *InvoiceHandler) prepareUploadSource(ctx context.Context, in archiveSourceInput) (archiveSource, error) {
-	var data []byte
-	switch {
-	case in.pdfBase64 != "":
-		decoded, err := base64.StdEncoding.DecodeString(in.pdfBase64)
-		if err != nil {
-			return archiveSource{}, &badRequestError{errUnreadableUpload}
-		}
-		data = decoded
-	case in.uploadKey != "" && h.r2 != nil:
-		downloaded, _, err := h.r2.Download(ctx, in.uploadKey)
-		if err != nil {
-			log.Printf("R2 download error for %s: %v", in.uploadKey, err)
-			return archiveSource{}, nil
-		}
-		data = downloaded
+// prepareUploadSource decodes the inlined document. An undecodable body is
+// refused (errUnreadableUpload) and bytes that are not a PDF, JPG or PNG are
+// refused as the analyser refuses them. No document at all is not an error:
+// the booking goes on without an archive file.
+func prepareUploadSource(in archiveSourceInput) (archiveSource, error) {
+	if in.pdfBase64 == "" {
+		return archiveSource{}, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(in.pdfBase64)
+	if err != nil {
+		return archiveSource{}, &badRequestError{errUnreadableUpload}
 	}
 	if len(data) == 0 {
 		return archiveSource{}, nil

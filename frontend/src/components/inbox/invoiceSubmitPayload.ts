@@ -12,8 +12,7 @@ import { parseAmount } from "./reviewAmounts";
  * from what the review dialog has at submit time. Two document sources exist:
  *
  *  - an upload: the file was analysed through /invoices/analyze and is sent
- *    again inline as pdfBase64 (folderId says where it is archived); uploadKey
- *    is a legacy field, empty since the analyser stores nothing;
+ *    again inline as pdfBase64 (folderId says where it is archived);
  *  - a Mail & herken document (archiveFileId): nothing is sent but the id,
  *    the backend links, renames and moves the file; targetFolderId says
  *    where, omitted means the automatic month folder.
@@ -33,7 +32,7 @@ export interface ExtraLineEdit {
 }
 
 /** The part of the analyse response the payloads read. */
-export type SubmitSource = Pick<AnalyzedInvoice, "uploadKey" | "filename" | "pdfHash" | "crediteurenId" | "archiveFileId"> & {
+export type SubmitSource = Pick<AnalyzedInvoice, "filename" | "pdfHash" | "crediteurenId" | "archiveFileId"> & {
   invoice: Pick<AnalyzedInvoice["invoice"], "documentType">;
 };
 
@@ -127,7 +126,6 @@ export function buildFullSubmitPayload(i: SubmitInput): InvoiceSubmitFullRequest
   }
   return {
     ...base,
-    uploadKey: i.source.uploadKey,
     filename: i.source.filename,
     pdfHash: i.source.pdfHash,
     ...(i.importId ? { importId: i.importId } : {}),
@@ -164,7 +162,6 @@ export function buildReceiptSubmitPayload(i: SubmitInput): InvoiceSubmitReceiptR
   }
   return {
     ...base,
-    uploadKey: i.source.uploadKey,
     filename: i.source.filename,
     importId: i.importId,
     ...extra,

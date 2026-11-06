@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -47,25 +46,21 @@ var testFolders = []archiveFolder{
 
 func TestValidateArchiveSource(t *testing.T) {
 	tests := []struct {
-		name                 string
-		fileID               int
-		pdfBase64, uploadKey string
-		wantErr              string
+		name      string
+		fileID    int
+		pdfBase64 string
+		wantErr   string
 	}{
-		{"nothing", 0, "", "", ""},
-		{"base64 only", 0, "b64", "", ""},
-		{"upload key only", 0, "", "key", ""},
-		{"base64 and upload key", 0, "b64", "key", ""},
-		{"archive file only", 5, "", "", ""},
-		{"archive file and base64", 5, "b64", "", "Kies één bron voor het document."},
-		{"archive file and upload key", 5, "", "key", "Kies één bron voor het document."},
-		{"archive file and both", 5, "b64", "key", "Kies één bron voor het document."},
-		{"negative id", -1, "", "", "Ongeldig document-id."},
-		{"negative id beats double source", -1, "b64", "", "Ongeldig document-id."},
+		{"nothing", 0, "", ""},
+		{"base64 only", 0, "b64", ""},
+		{"archive file only", 5, "", ""},
+		{"archive file and base64", 5, "b64", "Kies één bron voor het document."},
+		{"negative id", -1, "", "Ongeldig document-id."},
+		{"negative id beats double source", -1, "b64", "Ongeldig document-id."},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateArchiveSource(tc.fileID, tc.pdfBase64, tc.uploadKey)
+			err := validateArchiveSource(tc.fileID, tc.pdfBase64)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
@@ -250,11 +245,8 @@ func TestArchiveSourceName(t *testing.T) {
 var jpegBytes = append([]byte{0xff, 0xd8, 0xff, 0xe0}, make([]byte, 32)...)
 
 func TestUploadArchiveName(t *testing.T) {
-	h := &InvoiceHandler{}
-	ctx := context.Background()
-
 	t.Run("jpg body is archived as .jpg and dodges a conflict", func(t *testing.T) {
-		src, err := h.prepareUploadSource(ctx, archiveSourceInput{pdfBase64: base64.StdEncoding.EncodeToString(jpegBytes)})
+		src, err := prepareUploadSource(archiveSourceInput{pdfBase64: base64.StdEncoding.EncodeToString(jpegBytes)})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -271,20 +263,20 @@ func TestUploadArchiveName(t *testing.T) {
 		}
 	})
 	t.Run("unsupported bytes are refused", func(t *testing.T) {
-		_, err := h.prepareUploadSource(ctx, archiveSourceInput{pdfBase64: base64.StdEncoding.EncodeToString([]byte("hello world"))})
+		_, err := prepareUploadSource(archiveSourceInput{pdfBase64: base64.StdEncoding.EncodeToString([]byte("hello world"))})
 		if !errors.Is(err, claude.ErrUnsupportedMediaType) {
 			t.Errorf("err = %v, want ErrUnsupportedMediaType", err)
 		}
 	})
 	t.Run("undecodable base64 is refused", func(t *testing.T) {
-		_, err := h.prepareUploadSource(ctx, archiveSourceInput{pdfBase64: "%%%"})
+		_, err := prepareUploadSource(archiveSourceInput{pdfBase64: "%%%"})
 		var bad *badRequestError
 		if !errors.As(err, &bad) || bad.msg != errUnreadableUpload {
 			t.Errorf("err = %v, want errUnreadableUpload", err)
 		}
 	})
-	t.Run("upload key without R2 means no archive", func(t *testing.T) {
-		src, err := h.prepareUploadSource(ctx, archiveSourceInput{uploadKey: "uploads/x/document.pdf"})
+	t.Run("no document means no archive", func(t *testing.T) {
+		src, err := prepareUploadSource(archiveSourceInput{})
 		if err != nil || len(src.data) != 0 {
 			t.Errorf("got (%+v, %v)", src, err)
 		}
@@ -643,7 +635,7 @@ func (f *fakeEBoekhouden) call(method, path string) (fakeCall, bool) {
 }
 
 // submitTestEnv starts the fake, builds a client pointed at it and a handler
-// without Redis, R2 or a database.
+// without Redis or a database.
 func submitTestEnv(t *testing.T) (*fakeEBoekhouden, *InvoiceHandler, *eboekhouden.Client) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -1182,7 +1174,7 @@ func TestSubmitReceiptMailDocument(t *testing.T) {
 func TestSubmitReceiptRefusesTwoSources(t *testing.T) {
 	fake, h, client := submitTestEnv(t)
 
-	status, resp := callSubmit(t, h.SubmitReceipt, client, receiptRequest(map[string]any{"archiveFileId": 502, "uploadKey": "uploads/x/document.jpg"}))
+	status, resp := callSubmit(t, h.SubmitReceipt, client, receiptRequest(map[string]any{"archiveFileId": 502, "pdfBase64": base64.StdEncoding.EncodeToString(jpegBytes)}))
 	if status != http.StatusBadRequest || resp["error"] != "Kies één bron voor het document." {
 		t.Errorf("status %d, response %v", status, resp)
 	}

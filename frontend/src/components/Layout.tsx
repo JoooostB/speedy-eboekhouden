@@ -54,7 +54,7 @@ interface Props {
 }
 
 export function Layout({ children }: Props) {
-  const { user, avatarUrl, eboekhoudenConnected, logout } = useAuth();
+  const { user, eboekhoudenConnected, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [connectOpen, setConnectOpen] = useState(false);
@@ -224,10 +224,8 @@ export function Layout({ children }: Props) {
                 "&:hover": { bgcolor: "rgba(255,255,255,0.18)" },
               }}
             >
-              {/* The profile photo from Instellingen; initials without one
-                  or when it fails to load. The button carries the name. */}
+              {/* The user's initials. The button carries the name. */}
               <Avatar
-                src={avatarUrl || undefined}
                 alt=""
                 sx={{
                   width: 36,

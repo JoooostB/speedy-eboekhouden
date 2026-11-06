@@ -55,7 +55,7 @@ export function InvoiceProcessor() {
       const result = await api.analyzeInvoice(selectedFile);
       const inv = result.invoice;
       setInvoice(inv);
-      setPdfBase64(""); // PDF stored in R2, referenced by uploadKey
+      setPdfBase64(""); // this unrouted legacy form sends no file
 
       track("Invoice Analyzed", { confidence: String(Math.round(inv.confidence * 100)) });
 

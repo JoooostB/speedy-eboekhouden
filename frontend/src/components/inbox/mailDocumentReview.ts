@@ -77,9 +77,8 @@ export interface BuildFromDocumentOptions {
  * document; the match and the candidates are the document's fresh ones (the
  * list carries the global assignment, so a document that lists candidates
  * but no match really has none), falling back to the analysis for a document
- * without candidate fields, unless a bank line is forced. There is no R2
- * upload for a mail-folder document, so uploadKey and pdfUrl are empty and
- * the preview uses the object URL. Returns null for a document that has not
+ * without candidate fields, unless a bank line is forced. The preview uses
+ * the object URL. Returns null for a document that has not
  * been analysed: there is nothing to review then.
  */
 export function buildAnalyzedInvoiceFromDocument(
@@ -104,8 +103,6 @@ export function buildAnalyzedInvoiceFromDocument(
   return {
     ...analysis,
     filename: doc.naam,
-    uploadKey: "",
-    pdfUrl: "",
     matchedBankLine: matched,
     bankLineCandidates: candidates,
     alreadySubmitted: doc.alreadySubmitted ?? analysis.alreadySubmitted,

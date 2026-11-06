@@ -223,8 +223,8 @@ export function BookkeepingInbox() {
   // Shared handler for analyzing invoice files (used by both upload button and InboxRow).
   //
   // Each analyzed response is enriched with the original File object and a
-  // blob: URL so the review dialog can (a) preview the PDF locally even when
-  // R2 isn't configured and (b) re-ship the PDF inline as base64 on submit
+  // blob: URL so the review dialog can (a) preview the PDF locally and
+  // (b) re-ship the PDF inline as base64 on submit
   // without a second upload round-trip. The blob URLs are revoked when the
   // dialog closes — see handleReviewClose below.
   const handleInvoiceFiles = useCallback(async (files: File[]) => {
