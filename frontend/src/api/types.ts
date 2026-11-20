@@ -255,6 +255,9 @@ export interface MatchedBankLine {
   currencyConverted?: boolean;
   invoiceCurrency?: string;
   invoiceAmount?: number;
+  /** Ledger id of the user's own bank account the line is on. Only ranked
+   *  candidates carry it; the legacy match object does not. */
+  grootboekId?: number;
 }
 
 /** A ranked bank-line match; score orders the candidates (higher is better). */

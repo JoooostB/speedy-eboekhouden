@@ -214,6 +214,16 @@ describe("bankLineChoices", () => {
     expect(bankLineChoices({ matchedBankLine: candidate(4) }).map((c) => c.id)).toEqual([4]);
     expect(bankLineChoices({ matchedBankLine: null })).toEqual([]);
   });
+
+  it("gives the match as its candidate, so score and grootboekId survive", () => {
+    const legacy = { id: 2, datum: "2026-10-13T00:00:00", bedrag: -21.78, omschrijving: "x" };
+    const choices = bankLineChoices({
+      matchedBankLine: legacy,
+      bankLineCandidates: [candidate(1), candidate(2, { grootboekId: 1010 })],
+    });
+    expect(choices[0]).toEqual(candidate(2, { grootboekId: 1010 }));
+    expect(choices.map((c) => c.id)).toEqual([2, 1]);
+  });
 });
 
 describe("bankLineOptionLabel", () => {
