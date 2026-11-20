@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { invoiceBlocker } from "./invoiceValidation";
+import { SHARED_BANK_LINE_BLOCKER, invoiceBlocker } from "./invoiceValidation";
 
 describe("invoiceBlocker — factuur mode", () => {
   const factuur = (overrides: Partial<Parameters<typeof invoiceBlocker>[0]> = {}) =>
@@ -103,5 +103,43 @@ describe("invoiceBlocker — toggling between modes", () => {
       "Geen afschriftregel gekoppeld",
     );
     expect(invoiceBlocker({ ...base, isReceipt: false })).toBeNull();
+  });
+});
+
+describe("invoiceBlocker — datum", () => {
+  const complete = { hasLedgerAccount: true, hasRelation: true, hasImportId: true };
+
+  it("blocks a row without a valid date, in either mode", () => {
+    expect(invoiceBlocker({ ...complete, isReceipt: false, hasDatum: false })).toBe("Geen datum");
+    expect(invoiceBlocker({ ...complete, isReceipt: true, hasDatum: false })).toBe("Geen datum");
+  });
+
+  it("does not block a row with a date, or when the date is not checked", () => {
+    expect(invoiceBlocker({ ...complete, isReceipt: false, hasDatum: true })).toBeNull();
+    expect(invoiceBlocker({ ...complete, isReceipt: false })).toBeNull();
+  });
+
+  it("reports the other blockers first", () => {
+    expect(invoiceBlocker({ ...complete, hasRelation: false, isReceipt: false, hasDatum: false })).toBe("Geen relatie");
+    expect(invoiceBlocker({ ...complete, isReceipt: false, amountsValid: false, hasDatum: false })).toBe(
+      "Bedrag ontbreekt of klopt niet",
+    );
+  });
+});
+
+describe("invoiceBlocker — a bank line shared with another row", () => {
+  const complete = { hasLedgerAccount: true, hasRelation: true, hasImportId: true };
+
+  it("blocks a factuur and a bonnetje alike", () => {
+    expect(invoiceBlocker({ ...complete, isReceipt: false, sharesBankLine: true })).toBe(SHARED_BANK_LINE_BLOCKER);
+    expect(invoiceBlocker({ ...complete, isReceipt: true, sharesBankLine: true })).toBe(
+      "Afschriftregel is ook aan een ander document gekoppeld",
+    );
+    expect(invoiceBlocker({ ...complete, isReceipt: false, sharesBankLine: false })).toBeNull();
+  });
+
+  it("comes after the ledger check and before the relation check", () => {
+    expect(invoiceBlocker({ ...complete, hasLedgerAccount: false, isReceipt: false, sharesBankLine: true })).toBe("Geen tegenrekening");
+    expect(invoiceBlocker({ ...complete, hasRelation: false, isReceipt: false, sharesBankLine: true })).toBe(SHARED_BANK_LINE_BLOCKER);
   });
 });

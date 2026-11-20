@@ -280,6 +280,29 @@ func TestRankBankLineMatchesCandidateFields(t *testing.T) {
 	}
 }
 
+// The candidate names the user's own bank account the line is on, so the UI
+// can tell two equal lines on different accounts apart. The legacy
+// matchedBankLine shape stays without it (TestBankLineCandidateLegacyJSON).
+func TestRankBankLineMatchesOwnAccount(t *testing.T) {
+	onAccount := bankRow(1, "2026-10-12T00:00:00", -149.00, "VOORBEELD LUCHTVAART")
+	onAccount["grootboekId"] = float64(1010)
+	withoutAccount := bankRow(2, "2026-10-12T00:00:00", -149.00, "VOORBEELD LUCHTVAART")
+
+	got := rankBankLineMatches(testInvoice("factuur", 149, "EUR", "2026-10-12", ""), []map[string]any{onAccount, withoutAccount}, nil)
+	if len(got) != 2 {
+		t.Fatalf("got %d candidates, want 2", len(got))
+	}
+	if got[0].ID != 1 || got[0].GrootboekID != 1010 {
+		t.Errorf("candidate 1 = %+v, want grootboekId 1010", got[0])
+	}
+	if got[1].ID != 2 || got[1].GrootboekID != 0 {
+		t.Errorf("candidate 2 = %+v, want no grootboekId", got[1])
+	}
+	if _, ok := got[0].legacyJSON()["grootboekId"]; ok {
+		t.Error("legacy matchedBankLine must not carry grootboekId")
+	}
+}
+
 // An exact EUR match must beat the best possible FX match (amount equal to
 // the estimate, same day, supplier named) because the document inbox assigns
 // bank lines to documents by score.

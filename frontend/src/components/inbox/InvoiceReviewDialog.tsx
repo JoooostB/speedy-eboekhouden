@@ -26,6 +26,8 @@ import { RelationPicker } from "../shared/RelationPicker";
 import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
 import { ArchiveFolderPicker } from "../shared/ArchiveFolderPicker";
+import { DateField } from "../shared/DateField";
+import { isValidIso, todayIso } from "../shared/dutchDate";
 import {
   findArchiveFolderForSupplier,
   useArchiveFolders,
@@ -51,7 +53,6 @@ import {
   uploadFolderHelperText,
   archiveResultLine,
   bankLineChoices,
-  bankLineOptionLabel,
   isOpenBooking,
   previewKind,
   submitButtonLabel,
@@ -67,6 +68,21 @@ import {
   updateCard,
 } from "./reviewCards";
 import { initialLedger, ledgerAfterRelationChange, type LedgerSource } from "./invoiceLedger";
+import {
+  AMBIGUOUS_BANK_LINE_HINT,
+  BANK_LINE_CHOICE_HINT,
+  DISPLACED_BANK_LINE_NOTE,
+  assignDistinctBankLines,
+  bankLineChoiceLabel,
+  heldByCaption,
+  holdsSharedBankLine,
+  isAmbiguousBankLine,
+  pickAnnouncement,
+  pickBankLine,
+  pickNote,
+  sharedBankLineIds,
+  sharedBankLineSummary,
+} from "./bankLineAssignment";
 import { AMOUNT_HINT, formatAmountInput, formatFormAmount, fxInvoiceNote, invalidAmountField, parseAmount } from "./reviewAmounts";
 import { formatMoney } from "../../hooks/mailDocumentsModel";
 import type {
@@ -108,11 +124,15 @@ interface InvoiceEdit {
   ledgerSource: LedgerSource;
   /** Linked bank statement line ID (marks it as processed on submit) */
   importId: number;
-  /** The bank line shown as the payment: the analysis' match, or the
-   *  candidate the user picked when several fit (mail-folder documents).
-   *  importId follows it; a user who unlinks keeps it on screen behind a
-   *  "Koppelen" button. */
+  /** The bank line shown as the payment: the line assigned when the dialog
+   *  opened (assignDistinctBankLines: no two cards share one), or the
+   *  candidate the user picked when several fit. importId follows it; a
+   *  user who unlinks keeps it on screen behind a "Koppelen" button. */
   bankLine: MatchedBankLine | null;
+  /** Why this card's bank line changed without the user touching this card:
+   *  it lost its line to another card at open, or a pick on another card
+   *  swapped or took it. Cleared when the user picks a line here. */
+  bankLineNote: string | null;
   /** Bonnetje mode: book as "Geld uitgegeven" without a relation. */
   isReceipt: boolean;
   /** The lines of a split booking ("Splitsen over meerdere regels"), or
@@ -176,8 +196,10 @@ interface SubmitResult {
 /** Adapter — convert the dialog's editable shape into the validation
  *  helper's input. The helper itself lives in invoiceValidation.ts so it
  *  can be unit-tested without dragging the whole InvoiceEdit / Relation /
- *  LedgerAccount type web into a test file. */
-function invoiceBlocker(inv: InvoiceEdit): string | null {
+ *  LedgerAccount type web into a test file. `shared` holds the bank line ids
+ *  linked by more than one card (sharedBankLineIds), the last defence
+ *  against booking one bank line twice. */
+function invoiceBlocker(inv: InvoiceEdit, shared: ReadonlySet<number>): string | null {
   return evaluateInvoiceBlocker({
     // A split booking carries its tegenrekeningen per line (splitBlocker).
     hasLedgerAccount: inv.regels !== null || inv.ledgerAccount !== null,
@@ -187,7 +209,15 @@ function invoiceBlocker(inv: InvoiceEdit): string | null {
     isCreditnota: inv.source.invoice.documentType === "creditnota",
     amountsValid: amountsValid(inv),
     splitBlocker: splitBlocker(inv),
+    hasDatum: isValidIso(inv.datum),
+    sharesBankLine: inv.importId !== 0 && shared.has(inv.importId),
   });
+}
+
+/** The name of a card in notes and announcements: the document title of a
+ *  mail-folder document, else the file name. */
+function cardTitle(inv: InvoiceEdit): string {
+  return inv.source.documentTitle ?? inv.source.filename;
 }
 
 /** Why the lines of a split booking cannot be booked yet; null for a
@@ -257,10 +287,19 @@ export function InvoiceReviewDialog({
   onComplete,
   excludeFolderIds = NO_FOLDERS,
 }: Props) {
-  // Build editable state from analyzed responses
-  const [invoices, setInvoices] = useState<InvoiceEdit[]>(() =>
-    analyzed.map((a, n) => buildEdit(a, ledgerAccounts, vatCodes, reviewCardId(n))),
-  );
+  // Build editable state from analyzed responses. Every analysis ranked its
+  // bank lines on its own, so two documents with the same amount can come
+  // back with the same match: the cards divide them first, and buildEdit
+  // sees the assigned line as the match (it decides the FX amounts and the
+  // split proposal). The candidates stay as they are.
+  const [invoices, setInvoices] = useState<InvoiceEdit[]>(() => {
+    const assigned = assignDistinctBankLines(analyzed);
+    return analyzed.map((a, n) => {
+      const { line, displaced } = assigned[n];
+      const edit = buildEdit({ ...a, matchedBankLine: line }, ledgerAccounts, vatCodes, reviewCardId(n));
+      return displaced ? { ...edit, bankLineNote: DISPLACED_BANK_LINE_NOTE } : edit;
+    });
+  });
   const theme = useTheme();
   const isXs = useMediaQuery(theme.breakpoints.down("sm"));
   const hasMailDocuments = invoices.some((inv) => isArchiveSource(inv.source));
@@ -280,6 +319,9 @@ export function InvoiceReviewDialog({
     [vatCodes],
   );
   const [submitting, setSubmitting] = useState(false);
+  // The one polite live region of the dialog: "Niet boeken" (skipInvoice)
+  // and a bank line taken from another card (selectBankLine).
+  const [announced, setAnnounced] = useState("");
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<SubmitResult[] | null>(null);
 
@@ -511,10 +553,33 @@ export function InvoiceReviewDialog({
     setInvoices((prev) => updateCard(prev, id, (inv) => ({ ...inv, regels: splitWithTip(inv, tipCents) })));
   }, []);
 
-  /** Show another candidate bank line as the payment and link it. */
-  const selectBankLine = useCallback((id: string, line: MatchedBankLine | null) => {
-    setInvoices((prev) => updateCard(prev, id, (inv) => ({ ...inv, bankLine: line, importId: line?.id ?? 0 })));
-  }, []);
+  /** Show a bank line as the payment of card `id` and link it (the select
+   *  and "Koppelen"). When another card holds that line, it gets this
+   *  card's old line (swap) or none (release), with a note on that card and
+   *  a polite announcement (pickBankLine). The cards are updated from the
+   *  latest state (a relation lookup may land meanwhile); the announcement
+   *  comes from the cards as rendered, outside the updater, so it is set
+   *  once. */
+  const selectBankLine = useCallback(
+    (id: string, line: MatchedBankLine | null) => {
+      const choicesOf = (c: InvoiceEdit) => bankLineChoices(c.source);
+      setInvoices((prev) => {
+        const { cards, effect } = pickBankLine(prev, id, line, choicesOf);
+        const picker = prev.find((c) => c.id === id);
+        const pickerTitle = picker ? cardTitle(picker) : "";
+        return cards.map((c) => {
+          if (c.id === id) return c.bankLineNote === null ? c : { ...c, bankLineNote: null };
+          if (effect && c.id === effect.otherId) return { ...c, bankLineNote: pickNote(effect.kind, pickerTitle) };
+          return c;
+        });
+      });
+      const { effect } = pickBankLine(invoices, id, line, choicesOf);
+      const picker = invoices.find((c) => c.id === id);
+      const other = effect ? invoices.find((c) => c.id === effect.otherId) : undefined;
+      if (effect && picker && other) setAnnounced(pickAnnouncement(effect.kind, cardTitle(picker), cardTitle(other)));
+    },
+    [invoices],
+  );
 
   /** Submit all invoices sequentially */
   const handleSubmitAll = useCallback(async () => {
@@ -523,6 +588,7 @@ export function InvoiceReviewDialog({
     setResults(null);
 
     const submitResults: SubmitResult[] = [];
+    const shared = sharedBankLineIds(invoices);
 
     for (let i = 0; i < invoices.length; i++) {
       const inv = invoices[i];
@@ -540,7 +606,7 @@ export function InvoiceReviewDialog({
       // Skip incomplete rows instead of failing the whole batch. The user
       // gets a "skipped" result entry so they know which ones still need
       // attention; the dialog stays open so they can fix and retry.
-      const blocker = invoiceBlocker(inv);
+      const blocker = invoiceBlocker(inv, shared);
       if (blocker) {
         submitResults.push({
           filename: label,
@@ -681,7 +747,6 @@ export function InvoiceReviewDialog({
   // out the last card closes the dialog like "Annuleren". Focus moves to
   // the heading of the next card (or the previous one), and a polite live
   // region says what happened.
-  const [skipAnnounced, setSkipAnnounced] = useState("");
   const cardHeadings = useRef(new Map<string, HTMLElement>());
   const pendingHeadingFocus = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -706,7 +771,7 @@ export function InvoiceReviewDialog({
         invoices.map((i) => i.id),
         inv.id,
       );
-      setSkipAnnounced(skipAnnouncement(inv.source.documentTitle ?? inv.source.filename));
+      setAnnounced(skipAnnouncement(inv.source.documentTitle ?? inv.source.filename));
       setInvoices((prev) => removeCard(prev, inv.id));
     },
     [invoices, handleClose],
@@ -720,7 +785,9 @@ export function InvoiceReviewDialog({
 
   // Pre-flight blocker counts for the action bar — drives the button label
   // ("Boek N van M" when partial) and the inline hint underneath.
-  const blockedCount = invoices.filter((inv) => invoiceBlocker(inv) !== null).length;
+  // Derived on every render, never stored: which cards link the same line.
+  const sharedIds = sharedBankLineIds(invoices);
+  const blockedCount = invoices.filter((inv) => invoiceBlocker(inv, sharedIds) !== null).length;
   const submittableCount = invoices.length - blockedCount;
 
   return (
@@ -837,13 +904,14 @@ export function InvoiceReviewDialog({
           </Alert>
         )}
 
-        {/* Announces "Niet boeken" (skipInvoice); visually hidden. */}
+        {/* Announces "Niet boeken" (skipInvoice) and a bank line taken from
+            another card (selectBankLine); visually hidden. */}
         <Box
           role="status"
           aria-live="polite"
           sx={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" }}
         >
-          {skipAnnounced}
+          {announced}
         </Box>
 
         {/* Invoice cards */}
@@ -858,7 +926,7 @@ export function InvoiceReviewDialog({
                 aria-labelledby={`invoice-review-${inv.id}-title`}
                 sx={{
                   border: "1px solid",
-                  borderColor: invoiceBlocker(inv) !== null ? "error.main" : "divider",
+                  borderColor: invoiceBlocker(inv, sharedIds) !== null ? "error.main" : "divider",
                   borderRadius: 2,
                   p: { xs: 2, sm: 3 },
                   m: 0,
@@ -1060,15 +1128,13 @@ export function InvoiceReviewDialog({
                           disabled={submitting}
                         />
                       )}
-                      <TextField
+                      <DateField
                         label="Datum"
-                        type="date"
                         value={inv.datum}
-                        onChange={(e) => updateField(inv.id, "datum", e.target.value)}
+                        onChange={(iso) => updateField(inv.id, "datum", iso)}
                         size="small"
                         fullWidth
                         disabled={submitting}
-                        slotProps={{ inputLabel: { shrink: true } }}
                       />
                     </Box>
 
@@ -1410,15 +1476,31 @@ export function InvoiceReviewDialog({
                       );
                     })()}
 
-                    {/* Bank line choice — a mail-folder document with several
-                        candidate lines gets a select; the chosen line is shown
-                        and linked below. */}
-                    {isArchiveSource(inv.source) && (() => {
+                    {/* Bank line choice — a select when several lines fit, or
+                        when the card lost its line to another card and one
+                        could still fit; uploads and mail-folder
+                        documents alike. The chosen line is shown and linked
+                        below. A line another card links says so under the
+                        option; picking it swaps or releases (selectBankLine).
+                        "Nu gekoppeld aan" is derived from the current cards,
+                        so a card taken out frees its line here at once. */}
+                    {(() => {
                       const choices = bankLineChoices(inv.source);
-                      if (choices.length < 2) return null;
+                      // A single choice is only offered to a card that lost its
+                      // line inside this dialog (the note says why). A
+                      // mail-folder document without a match and one candidate
+                      // lost it to a document outside the dialog; as before,
+                      // it gets no select.
+                      const lostLine = inv.bankLine === null && inv.bankLineNote !== null;
+                      if (choices.length < 2 && !(lostLine && choices.length === 1)) return null;
+                      const selectId = `invoice-review-${inv.id}-bankline`;
+                      const labelOf = (line: MatchedBankLine) => bankLineChoiceLabel(line, choices, ledgerAccounts);
+                      const linked = inv.importId !== 0 ? inv.bankLine : null;
+                      const ambiguous = linked !== null && isAmbiguousBankLine(linked, choices);
                       return (
                         <TextField
                           select
+                          id={selectId}
                           label="Afschriftregel"
                           value={inv.bankLine?.id ?? ""}
                           onChange={(e) => {
@@ -1428,17 +1510,52 @@ export function InvoiceReviewDialog({
                           size="small"
                           fullWidth
                           disabled={submitting}
-                          helperText="Meerdere afschriftregels kunnen de betaling zijn. Kies de juiste."
+                          helperText={
+                            ambiguous ? AMBIGUOUS_BANK_LINE_HINT : choices.length >= 2 ? BANK_LINE_CHOICE_HINT : undefined
+                          }
+                          slotProps={{
+                            select: {
+                              // The closed select shows the plain label on one
+                              // line, cut with an ellipsis by MUI's own styles.
+                              renderValue: (value: unknown) => {
+                                const line = choices.find((l) => l.id === value);
+                                return line ? labelOf(line) : "";
+                              },
+                            },
+                          }}
                           sx={{ mt: 2 }}
                         >
-                          {choices.map((line) => (
-                            <MenuItem key={line.id} value={line.id}>
-                              {bankLineOptionLabel(line)}
-                            </MenuItem>
-                          ))}
+                          {choices.map((line) => {
+                            const holder = invoices.find((c) => c.id !== inv.id && c.importId !== 0 && c.importId === line.id);
+                            return (
+                              <MenuItem key={line.id} value={line.id} sx={{ whiteSpace: "normal", display: "block" }}>
+                                <Typography variant="body2" component="span" sx={{ display: "block", overflowWrap: "anywhere" }}>
+                                  {labelOf(line)}
+                                </Typography>
+                                {holder && (
+                                  <Typography
+                                    variant="caption"
+                                    component="span"
+                                    color="text.secondary"
+                                    sx={{ display: "block", overflowWrap: "anywhere" }}
+                                  >
+                                    {heldByCaption(cardTitle(holder))}
+                                  </Typography>
+                                )}
+                              </MenuItem>
+                            );
+                          })}
                         </TextField>
                       );
                     })()}
+
+                    {/* Why this card's bank line changed without the user
+                        touching it (lost at open, swapped or taken). */}
+                    {inv.bankLineNote && (
+                      <Alert severity="info" sx={{ mt: 2 }}>
+                        <Typography variant="body2">{inv.bankLineNote}</Typography>
+                      </Alert>
+                    )}
 
                     {/* Matched bank line */}
                     {inv.bankLine && (
@@ -1458,7 +1575,7 @@ export function InvoiceReviewDialog({
                             <Button
                               color="inherit"
                               size="small"
-                              onClick={() => updateField(inv.id, "importId", inv.bankLine!.id)}
+                              onClick={() => selectBankLine(inv.id, inv.bankLine)}
                             >
                               Koppelen
                             </Button>
@@ -1582,12 +1699,16 @@ export function InvoiceReviewDialog({
                   const missingLedger = invoices.filter((inv) => inv.regels === null && !inv.ledgerAccount).length;
                   const missingBank = invoices.filter((inv) => inv.isReceipt && !inv.importId).length;
                   const splitOpen = invoices.filter((inv) => splitBlocker(inv) !== null).length;
+                  const missingDate = invoices.filter((inv) => !isValidIso(inv.datum)).length;
+                  const sharedLine = invoices.filter((inv) => holdsSharedBankLine(inv, invoices)).length;
                   const parts = [];
                   if (creditnotas) parts.push(`${creditnotas} ${creditnotas === 1 ? "creditnota" : "creditnota's"}`);
                   if (missingRel) parts.push(`${missingRel} zonder relatie`);
                   if (missingLedger) parts.push(`${missingLedger} zonder tegenrekening`);
                   if (missingBank) parts.push(`${missingBank} bonnetje${missingBank > 1 ? "s" : ""} zonder afschriftregel`);
                   if (splitOpen) parts.push(`${splitOpen} met regels die nog niet kloppen`);
+                  if (missingDate) parts.push(`${missingDate} zonder datum`);
+                  if (sharedLine) parts.push(sharedBankLineSummary(sharedLine));
                   return `${blockedCount} ${blockedCount === 1 ? "wordt" : "worden"} overgeslagen (${parts.join(", ")})`;
                 })()}
               </Typography>
@@ -1740,7 +1861,8 @@ function buildEdit(
     source: a,
     leverancier: inv.leverancier ?? "",
     factuurnummer: inv.factuurnummer ?? "",
-    datum: inv.datum ?? new Date().toISOString().slice(0, 10),
+    // Local today: toISOString() is UTC and gives yesterday after midnight.
+    datum: inv.datum ?? todayIso(),
     bedragExcl: formatAmountInput(bedragExcl),
     bedragIncl: formatAmountInput(bedragIncl),
     btwBedrag: formatAmountInput(btwBedrag),
@@ -1753,6 +1875,7 @@ function buildEdit(
     ledgerSource: proposal ? "ai" : ledger.source,
     importId: a.matchedBankLine?.id ?? 0,
     bankLine: a.matchedBankLine ?? null,
+    bankLineNote: null,
     isReceipt: inv.isReceipt ?? false,
     regels: proposal?.regels ?? null,
     proposal,

@@ -115,20 +115,24 @@ export function buildAnalyzedInvoiceFromDocument(
 }
 
 /** The bank lines a card can be linked to: the match first, then the other
- *  candidates, without duplicates. */
+ *  candidates, without duplicates. The match is given as the candidate with
+ *  the same id when there is one: the backend's match object keeps its
+ *  historical shape, the candidate also carries score and grootboekId. */
 export function bankLineChoices(
   source: Pick<AnalyzedInvoice, "matchedBankLine" | "bankLineCandidates">,
-): MatchedBankLine[] {
-  const out: MatchedBankLine[] = [];
+): Array<MatchedBankLine | BankLineCandidate> {
+  const candidates = source.bankLineCandidates ?? [];
+  const out: Array<MatchedBankLine | BankLineCandidate> = [];
   const seen = new Set<number>();
-  const add = (line: MatchedBankLine | null | undefined) => {
+  const add = (line: MatchedBankLine | BankLineCandidate | null | undefined) => {
     if (line && !seen.has(line.id)) {
       seen.add(line.id);
       out.push(line);
     }
   };
-  add(source.matchedBankLine);
-  for (const c of source.bankLineCandidates ?? []) add(c);
+  const match = source.matchedBankLine;
+  add(match ? candidates.find((c) => c.id === match.id) ?? match : null);
+  for (const c of candidates) add(c);
   return out;
 }
 

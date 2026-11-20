@@ -33,6 +33,10 @@ type BankLineCandidate struct {
 	InvoiceAmount     float64 `json:"invoiceAmount"`
 	// Score orders candidates; see rankBankLineMatches for the formula.
 	Score float64 `json:"score"`
+	// GrootboekID is the ledger id of the user's own bank account the line
+	// is on (the import grid's grootboekId), so the UI can tell equal lines
+	// on different accounts apart. Not part of legacyJSON.
+	GrootboekID int `json:"grootboekId,omitempty"`
 }
 
 // Score weights for rankBankLineMatches.
@@ -152,6 +156,7 @@ func rankBankLineMatches(inv *claude.InvoiceData, rows []map[string]any, exclude
 			score += nameScore
 		}
 
+		grootboekID, _ := toInt(row["grootboekId"])
 		out = append(out, BankLineCandidate{
 			ID:                id,
 			Datum:             datum,
@@ -161,6 +166,7 @@ func rankBankLineMatches(inv *claude.InvoiceData, rows []map[string]any, exclude
 			InvoiceCurrency:   currency,
 			InvoiceAmount:     amount,
 			Score:             score,
+			GrootboekID:       grootboekID,
 		})
 	}
 
