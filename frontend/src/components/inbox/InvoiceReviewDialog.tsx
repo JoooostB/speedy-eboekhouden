@@ -27,6 +27,7 @@ import { LedgerAccountPicker } from "../shared/LedgerAccountPicker";
 import { VATCodePicker } from "../shared/VATCodePicker";
 import { ArchiveFolderPicker } from "../shared/ArchiveFolderPicker";
 import { DateField } from "../shared/DateField";
+import { visuallyHidden } from "../shared/visuallyHidden";
 import { isValidIso, todayIso } from "../shared/dutchDate";
 import {
   findArchiveFolderForSupplier,
@@ -909,7 +910,7 @@ export function InvoiceReviewDialog({
         <Box
           role="status"
           aria-live="polite"
-          sx={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" }}
+          sx={visuallyHidden}
         >
           {announced}
         </Box>

@@ -229,6 +229,7 @@ Rules: only `[A-Za-z0-9._-]`; `_` is **exclusively** the field separator, so `sp
 14. **Log ids and error classes, not content.** The policy lives in `handler/logging.go`: log e-boekhouden and Claude errors through `errClass(err)` (session-expired sentinel, or `APIError` path/status/code/length), never with `%v`; never log response bodies, Claude output, file names, supplier names, amounts, descriptions or e-mail addresses. `eboekhouden.APIError` never embeds a body, and the error of a request whose path carries user input (relation search, KvK) is not logged at all.
 15. **Every new per-user Redis key needs a purge pattern.** Add it to `userCachePatterns` next to the key builder, or `TestUserCachePatternsCoverKeyBuilders` fails. `Disconnect` must keep clearing the token even when the logout or the purge fails.
 16. **Analytics props are enum-like tokens, counts and flags.** `track()` drops anything else at runtime and `analytics.test.ts` scans the call sites; use `errorClass(err)`, never `err.message`.
+17. **A bare number in `sx` sizing is a fraction.** `width: 1` is 100 %, not 1 px. A hidden live region uses `visuallyHidden` from `components/shared/visuallyHidden.ts` (`"1px"`); a hand-written `{ position: "absolute", width: 1, height: 1, clip }` is an invisible box as large as the dialog paper and gives it scrollbars and an empty strip under the actions. `visuallyHidden.test.ts` fails on any other clip rect in `src/`.
 
 ## Running Locally
 

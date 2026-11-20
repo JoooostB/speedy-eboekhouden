@@ -36,6 +36,7 @@ import {
   toIso,
   todayIso,
 } from "./dutchDate";
+import { visuallyHidden } from "./visuallyHidden";
 
 /**
  * Dutch date field: a text field that takes typed dates (15-11-2026,
@@ -69,17 +70,6 @@ interface Props {
 
 const INVALID_TEXT = "Vul een datum in als dd-mm-jjjj.";
 const DIALOG_LABEL = "Kies datum";
-
-/** Visually hidden but read by screen readers (same recipe as the live
- *  regions elsewhere in the app). */
-const visuallyHidden = {
-  position: "absolute",
-  width: 1,
-  height: 1,
-  overflow: "hidden",
-  clip: "rect(0 0 0 0)",
-  whiteSpace: "nowrap",
-} as const;
 
 export function DateField({ label, value, onChange, disabled, size = "small", fullWidth, helperText }: Props) {
   const [text, setText] = useState(() => formatDutchDate(value));
