@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAmountInput, formatFormAmount, fxInvoiceNote, invalidAmountField, parseAmount } from "./reviewAmounts";
+import { amountsAddUp, exclFromIncl, formatAmountInput, formatFormAmount, fxInvoiceNote, invalidAmountField, parseAmount } from "./reviewAmounts";
 
 describe("parseAmount", () => {
   // The bug: the amount fields were read with parseFloat, so "12,50" was
@@ -108,5 +108,24 @@ describe("fxInvoiceNote", () => {
 
   it("names only the currency without an amount", () => {
     expect(fxInvoiceNote(undefined, "GBP")).toMatch(/^Factuur: GBP, omgerekend/);
+  });
+});
+
+describe("exclFromIncl", () => {
+  // The bug: 113,28 + 23,79 booked as 137,07 against a payment of 137,08.
+  it("derives the net amount from the total and the BTW, in cents", () => {
+    expect(exclFromIncl(137.08, 23.79)).toBe(113.29);
+    expect(exclFromIncl(121, 21)).toBe(100);
+    expect(exclFromIncl(0.3, 0.1)).toBe(0.2);
+    expect(exclFromIncl(30.24, 0)).toBe(30.24);
+  });
+});
+
+describe("amountsAddUp", () => {
+  it("accepts no difference, not even a cent", () => {
+    expect(amountsAddUp(113.29, 23.79, 137.08)).toBe(true);
+    expect(amountsAddUp(0.2, 0.1, 0.3)).toBe(true);
+    expect(amountsAddUp(113.28, 23.79, 137.08)).toBe(false);
+    expect(amountsAddUp(113.3, 23.79, 137.08)).toBe(false);
   });
 });

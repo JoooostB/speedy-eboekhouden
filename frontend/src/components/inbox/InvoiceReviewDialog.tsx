@@ -84,7 +84,7 @@ import {
   sharedBankLineIds,
   sharedBankLineSummary,
 } from "./bankLineAssignment";
-import { AMOUNT_HINT, formatAmountInput, formatFormAmount, fxInvoiceNote, invalidAmountField, parseAmount } from "./reviewAmounts";
+import { AMOUNT_HINT, amountsAddUp, exclFromIncl, formatAmountInput, formatFormAmount, fxInvoiceNote, invalidAmountField, parseAmount } from "./reviewAmounts";
 import { formatMoney } from "../../hooks/mailDocumentsModel";
 import type {
   AnalyzedInvoice,
@@ -182,7 +182,7 @@ function unsplit(inv: InvoiceEdit, first: RegelEdit | undefined, vatRate: (code:
   if (incl !== null) {
     const btw = rate === 0 ? 0 : +((incl * rate) / (100 + rate)).toFixed(2);
     updated.btwBedrag = formatAmountInput(btw);
-    updated.bedragExcl = formatAmountInput(incl - btw);
+    updated.bedragExcl = formatAmountInput(exclFromIncl(incl, btw));
   }
   return updated;
 }
@@ -464,14 +464,22 @@ export function InvoiceReviewDialog({
             if (incl !== null) {
               const btw = +(incl * rate / (100 + rate)).toFixed(2);
               updated.btwBedrag = formatAmountInput(btw);
-              updated.bedragExcl = formatAmountInput(incl - btw);
+              updated.bedragExcl = formatAmountInput(exclFromIncl(incl, btw));
             }
           }
         } else if (field === "btwBedrag") {
           const incl = parseAmount(updated.bedragIncl);
           const btw = parseAmount(updated.btwBedrag);
           if (incl !== null && btw !== null) {
-            updated.bedragExcl = formatAmountInput(incl - btw);
+            updated.bedragExcl = formatAmountInput(exclFromIncl(incl, btw));
+          }
+        } else if (field === "bedragExcl") {
+          // The total stands (it is what gets paid), so the BTW follows a
+          // net amount typed by hand. A zero-rate code has no BTW to move.
+          const incl = parseAmount(updated.bedragIncl);
+          const excl = parseAmount(updated.bedragExcl);
+          if (rate !== 0 && incl !== null && excl !== null) {
+            updated.btwBedrag = formatAmountInput(exclFromIncl(incl, excl));
           }
         } else if (field === "bedragIncl") {
           const incl = parseAmount(updated.bedragIncl);
@@ -481,7 +489,7 @@ export function InvoiceReviewDialog({
           } else if (incl !== null) {
             const btw = +(incl * rate / (100 + rate)).toFixed(2);
             updated.btwBedrag = formatAmountInput(btw);
-            updated.bedragExcl = formatAmountInput(incl - btw);
+            updated.bedragExcl = formatAmountInput(exclFromIncl(incl, btw));
           }
         }
 
@@ -650,7 +658,7 @@ export function InvoiceReviewDialog({
       const totals = inv.regels
         ? regelsTotals(inv.regels, splitTotalCents(inv), vatRate)
         : {
-            bedragExcl: parseAmount(inv.bedragExcl) ?? 0,
+            bedragExcl: exclFromIncl(parseAmount(inv.bedragIncl) ?? 0, parseAmount(inv.btwBedrag) ?? 0),
             bedragIncl: parseAmount(inv.bedragIncl) ?? 0,
             btwBedrag: parseAmount(inv.btwBedrag) ?? 0,
           };
@@ -1837,9 +1845,10 @@ function buildEdit(
   } else if (rate === 0) {
     bedragExcl = bedragIncl;
     btwBedrag = 0;
-  } else if (Math.abs(bedragExcl + btwBedrag - bedragIncl) > 0.01) {
-    // Numbers don't add up — trust incl + btw, derive excl.
-    bedragExcl = bedragIncl - btwBedrag;
+  } else if (!amountsAddUp(bedragExcl, btwBedrag, bedragIncl)) {
+    // The numbers do not add up, not even by a cent: the total is what gets
+    // paid and the BTW what gets reclaimed, so the net amount gives way.
+    bedragExcl = exclFromIncl(bedragIncl, btwBedrag);
   }
 
   // Claude's split proposal opens the card split, with the single-line

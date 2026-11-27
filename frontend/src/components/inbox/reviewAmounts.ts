@@ -79,6 +79,20 @@ export function formatAmountInput(amount: number): string {
   return amount.toFixed(2).replace(".", ",");
 }
 
+/** The net amount of a single-line booking: the total minus the BTW, in
+ *  whole cents. e-Boekhouden books net + BTW and ignores the total it is
+ *  sent, so a net amount a cent beside it (an invoice that rounds per line)
+ *  leaves € 0,01 open after the payment. The backend's exclFromIncl applies
+ *  the same rule. */
+export function exclFromIncl(incl: number, btw: number): number {
+  return (Math.round(incl * 100) - Math.round(btw * 100)) / 100;
+}
+
+/** Whether net + BTW is the total, to the cent. */
+export function amountsAddUp(excl: number, btw: number, incl: number): boolean {
+  return Math.round(excl * 100) + Math.round(btw * 100) === Math.round(incl * 100);
+}
+
 /** A form amount as money: "12,5" → "€ 12,50". Text that is not an amount
  *  is returned as it is. */
 export function formatFormAmount(amount: string): string {
