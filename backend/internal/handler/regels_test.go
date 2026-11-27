@@ -385,3 +385,81 @@ func TestBatchPayloadSoort5SendsInWithNetBedrag(t *testing.T) {
 		t.Errorf("payload =\n %s\nwant\n %s", b, want)
 	}
 }
+
+func TestExclFromIncl(t *testing.T) {
+	cases := []struct {
+		incl, btw, want float64
+		ok              bool
+	}{
+		{137.08, 23.79, 113.29, true}, // the invoice that left € 0,01 open
+		{121, 21, 100, true},
+		{12.5, 1.03, 11.47, true},
+		{30.24, 0, 30.24, true},
+		{0.3, 0.1, 0.2, true}, // 0.3 - 0.1 is 0.19999… in floats
+		{10, 10, 0, false},
+		{10, 12, 0, false},
+		{10, -1, 0, false},
+	}
+	for _, c := range cases {
+		got, ok := exclFromIncl(c.incl, c.btw)
+		if got != c.want || ok != c.ok {
+			t.Errorf("exclFromIncl(%v, %v) = %v, %v; want %v, %v", c.incl, c.btw, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// firstRegel returns the first mutatieRegel of a POST /v1/api/mutatie body.
+func firstRegel(t *testing.T, body string) map[string]any {
+	t.Helper()
+	var m struct {
+		MutatieRegels []map[string]any `json:"mutatieRegels"`
+	}
+	if err := json.Unmarshal([]byte(body), &m); err != nil || len(m.MutatieRegels) == 0 {
+		t.Fatalf("no mutatieRegels in %s", body)
+	}
+	return m.MutatieRegels[0]
+}
+
+// An invoice whose net amount and BTW do not add up to its total (113,28 +
+// 23,79 against 137,08) is booked for its total: e-boekhouden adds bedrag and
+// btw itself, and the payment books the total.
+func TestSubmitFullBooksTheInvoiceTotal(t *testing.T) {
+	fake, h, client := submitTestEnv(t)
+	status, resp := callSubmit(t, h.SubmitFull, client, fullRequest(map[string]any{
+		"archiveFileId": 501, "bedragExcl": 113.28, "btwBedrag": 23.79, "bedragIncl": 137.08,
+	}))
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %v", status, resp)
+	}
+	r := firstRegel(t, fake.mutatieBodies()[0])
+	if r["bedrag"] != 113.29 || r["bedragExclusief"] != 113.29 || r["btw"] != 23.79 || r["bedragInclusief"] != 137.08 {
+		t.Errorf("regel = %v, want bedrag 113.29 + btw 23.79 = 137.08", r)
+	}
+}
+
+func TestSubmitFullRefusesBTWAboveTotal(t *testing.T) {
+	fake, h, client := submitTestEnv(t)
+	status, resp := callSubmit(t, h.SubmitFull, client, fullRequest(map[string]any{
+		"archiveFileId": 501, "btwBedrag": 121.0,
+	}))
+	if status != http.StatusBadRequest || resp["error"] != errBTWExceedsTotal {
+		t.Errorf("status %d, resp %v", status, resp)
+	}
+	if n := len(fake.mutatieBodies()); n != 0 {
+		t.Errorf("%d mutations booked, want none", n)
+	}
+}
+
+func TestSubmitReceiptBooksTheReceiptTotal(t *testing.T) {
+	fake, h, client := submitTestEnv(t)
+	status, resp := callSubmit(t, h.SubmitReceipt, client, receiptRequest(map[string]any{
+		"archiveFileId": 502, "bedragExcl": 11.46,
+	}))
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %v", status, resp)
+	}
+	r := firstRegel(t, fake.mutatieBodies()[0])
+	if r["bedrag"] != 11.47 || r["btw"] != 1.03 || r["bedragInclusief"] != 12.5 {
+		t.Errorf("regel = %v, want bedrag 11.47 + btw 1.03 = 12.50", r)
+	}
+}

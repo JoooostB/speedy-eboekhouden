@@ -617,6 +617,17 @@ func (h *InvoiceHandler) SubmitFull(c *gin.Context) {
 	if req.BTWCode == "" {
 		req.BTWCode = "HOOG_INK_21"
 	}
+	// The open post must equal the invoice total, which is also what the
+	// payment books. e-boekhouden adds bedrag + btw itself in "EX" mode and
+	// ignores bedragInclusief, so the net amount is derived here.
+	if len(regels) == 0 {
+		excl, ok := exclFromIncl(req.BedragIncl, req.BTWBedrag)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": errBTWExceedsTotal})
+			return
+		}
+		req.BedragExcl = excl
+	}
 
 	// Step 1: Resolve the document and stage the archive file. Every check
 	// that can fail the request happens here, before anything is booked; an
@@ -960,9 +971,16 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 	if req.BTWCode == "" {
 		req.BTWCode = "HOOG_INK_21"
 	}
-	// If excl is missing but incl + btw are present, derive it.
-	if req.BedragExcl == 0 && req.BedragIncl > 0 {
-		req.BedragExcl = req.BedragIncl - req.BTWBedrag
+	// The net amount always follows from the total and the BTW (exclFromIncl):
+	// e-boekhouden books bedrag + btw, so a net amount a cent off would book
+	// another total than the receipt's.
+	if len(req.Regels) == 0 {
+		excl, ok := exclFromIncl(req.BedragIncl, req.BTWBedrag)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": errBTWExceedsTotal})
+			return
+		}
+		req.BedragExcl = excl
 	}
 
 	// Validate every extra line: positive bedragIncl, finite values, valid
@@ -992,9 +1010,12 @@ func (h *InvoiceHandler) SubmitReceipt(c *gin.Context) {
 		if el.BTWCode == "" {
 			el.BTWCode = "GEEN"
 		}
-		if el.BedragExcl == 0 {
-			el.BedragExcl = el.BedragIncl - el.BTWBedrag
+		excl, ok := exclFromIncl(el.BedragIncl, el.BTWBedrag)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Extra regel %d: %s", i+1, errBTWExceedsTotal)})
+			return
 		}
+		el.BedragExcl = excl
 	}
 
 	// Resolve the bank account: prefer the matched bank line's grootboekId

@@ -166,3 +166,23 @@ func mutatieRegelMaps(regels []regel, withOmschrijving bool) []map[string]any {
 	}
 	return out
 }
+
+// errBTWExceedsTotal refuses a single-line booking whose BTW is negative or
+// leaves no net amount.
+const errBTWExceedsTotal = "Het btw-bedrag moet lager zijn dan het totaalbedrag."
+
+// exclFromIncl is the net amount of a single-line booking: the total minus
+// the BTW, in whole cents. e-boekhouden computes a mutation's total as
+// bedrag + btw in "EX" mode and ignores bedragInclusief, so a net amount
+// that is a cent off (an invoice that rounds per line, a misread digit)
+// books an open post a cent beside the invoice, and the payment of the real
+// total then leaves € 0,01 open forever. The total and the BTW are the
+// amounts paid and reclaimed; the net amount is the one that gives way.
+// ok is false when the BTW is negative or leaves nothing.
+func exclFromIncl(incl, btw float64) (excl float64, ok bool) {
+	inclCents, btwCents := cents(incl), cents(btw)
+	if btwCents < 0 || btwCents >= inclCents {
+		return 0, false
+	}
+	return float64(inclCents-btwCents) / 100, true
+}
