@@ -7,7 +7,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/jackc/pgx/v5 v5.13.0
-	github.com/redis/go-redis/v9 v9.24.0
+	github.com/redis/go-redis/v9 v9.24.1
 	golang.org/x/text v0.44.0
 )
 
